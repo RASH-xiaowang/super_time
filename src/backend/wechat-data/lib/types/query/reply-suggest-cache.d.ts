@@ -3,7 +3,7 @@ import type { ReplyTrace } from '../types-analysis.ts';
  * 提示词版本：改了 `buildReplyPrompt` 的措辞或输出格式时**必须**递增，
  * 否则旧候选会以新界面呈现，表现为「明明改了却看不到差别」。
  */
-export declare const REPLY_SUGGEST_PROMPT_VERSION = 1;
+export declare const REPLY_SUGGEST_PROMPT_VERSION = 3;
 /** 缓存库路径：`decrypted` 的兄弟文件。 */
 export declare function replySuggestCachePath(decryptedDir: string): string;
 /**

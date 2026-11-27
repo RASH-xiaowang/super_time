@@ -689,7 +689,7 @@ export async function syncContactDb(
 /**
  * Sync any plain "dbName" under rawRoot/<sub> -> decryptedDir/<sub> with the
  * shared full/WAL + 0-frame-upgrade policy (realtime coverage for general /
- * sns / favorite / bizchat / chatbot).
+ * sns / favorite / bizchat / chatbot / hardlink).
  * @returns descriptions of what was synced (empty when nothing changed).
  */
 export async function syncPlainDatabase(
@@ -858,13 +858,17 @@ export function startRealtimeSync(
         ['favorite', 'favorite.db', 'favorite.db'],
         ['bizchat', 'bizchat.db', 'bizchat.db'],
         ['chatbot', 'chatbot_message.db', 'chatbot_message.db'],
+        // 文件列表读 hardlink.db。这库的新文件先写进 -wal，主文件可以好几周不变；
+        // 不进实时同步时，界面会停在上一次整库解密的日期。
+        ['hardlink', 'hardlink.db', 'hardlink.db'],
+        ['message', 'message_resource.db', 'message_resource.db'],
       ] as const) {
         synced.push(...await syncPlainDatabase(raw, dec, sub, dbName, label, fallbackKey, keyFormat, lastState))
       }
       /** 把「本轮真正解成功」的目标签名记进跨进程账本，然后一次落盘。
        * 只取**成功子集**而不是直接写 `lastState`：后者是乐观记录的（动手前就 `set`、失败那条路还
        * 保留签名）⇒ 会把没解成功的目标也标成「已解密」，下次启动跳过它 ⇒ 永久旧数据。成功集合从
-       * `noteSyncSuccess` 那个唯一收口点取（见 `sync-pacing.ts`），不靠 8 个调用点自觉。 */
+       * `noteSyncSuccess` 那个唯一收口点取（见 `sync-pacing.ts`），不靠各个调用点自觉。 */
       for (const key of takeSyncSuccesses()) {
         const sig = lastState.get(key)
         if (sig !== undefined) noteSyncSourceState(key, sig)

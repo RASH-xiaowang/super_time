@@ -71,6 +71,29 @@ describe('cachedGet：陈旧可读 + 后台复验', () => {
     expect(again, '后台复验成功后没写回缓存').toEqual({ sum: 99 })
   })
 
+  it('冷启动同键并发只回源一次，失败后下一次还能重试', async () => {
+    let calls = 0
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    const slow = async (): Promise<{ n: number }> => {
+      calls += 1
+      await gate
+      return { n: 1 }
+    }
+    const pending = Promise.all([
+      cachedGet('cold:share', slow), cachedGet('cold:share', slow), cachedGet('cold:share', slow),
+    ])
+    await flush()
+    expect(calls, '冷启动并发把同一次图谱查询打成了多次').toBe(1)
+    release()
+    const three = await pending
+    for (const v of three) expect(v).toEqual({ n: 1 })
+
+    await expect(cachedGet('cold:retry', async () => { throw new Error('后端炸了') })).rejects.toThrow('后端炸了')
+    const again = await cachedGet('cold:retry', async () => ({ n: 2 }))
+    expect(again, '失败的在途请求把这个键永久卡住了').toEqual({ n: 2 })
+  })
+
   it('同一次事件里多个面板读同一个陈旧键 ⇒ 只回源一次', async () => {
     await cachedGet('moments:bg', async () => ({ items: ['a'], total: 1 }))
     invalidateSnapshotCache()

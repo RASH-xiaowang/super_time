@@ -37,29 +37,30 @@
   line-height: inherit;
 }
 .citeMark {
-  display: inline;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 0;
-  height: auto;
-  padding: 0;
-  margin: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: inherit;
-  font-size: inherit;
-  font-weight: 600;
-  line-height: inherit;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  margin: 0 2px;
+  border: 1px solid color-mix(in srgb, var(--nm-text-3) 35%, var(--nm-border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--nm-text-1) 6%, var(--nm-bg-card));
+  color: var(--nm-text-2);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1;
   text-align: center;
-  vertical-align: baseline;
+  vertical-align: 1px;
   cursor: pointer;
   font-family: inherit;
   font-variant-numeric: tabular-nums;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .citeMark:hover {
-  background: transparent;
+  border-color: color-mix(in srgb, var(--nm-cyan) 45%, var(--nm-border));
+  background: var(--nm-cyan-10);
   color: var(--nm-cyan-text);
 }
 .citeMark[data-pending] {

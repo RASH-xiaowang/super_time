@@ -436,6 +436,11 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
                 <div className={css.question}>{it.question.trim() !== '' ? it.question : '（未记录问题）'}</div>
                 {expanded && metaText && <div className={css.metaLine} data-ask-history-meta="">{metaText}</div>}
                 {expanded && <AskHistoryRuntimeTraceView trace={it.runtimeTrace} />}
+                {it.answer.trim() !== ''
+                  ? (expanded
+                    ? <div className={css.answerFull} data-ask-history-answer="">{it.answer}</div>
+                    : <div className={css.answer} data-ask-history-answer="">{it.answer}</div>)
+                  : <div className={css.answer} data-ask-history-answer="">（这次没有产生回答）</div>}
                 {expanded && it.basis && (
                   <div className={css.basis} data-ask-history-evidence="">{it.basis}</div>
                 )}
@@ -448,11 +453,6 @@ export function AskHistoryDialog({ open, onClose, onOpenCitation, onOpenKbFile, 
                     onError={(text) => { hold({ text, error: true }) }}
                   />
                 )}
-                {it.answer.trim() !== ''
-                  ? (expanded
-                    ? <div className={css.answerFull} data-ask-history-answer="">{it.answer}</div>
-                    : <div className={css.answer} data-ask-history-answer="">{it.answer}</div>)
-                  : <div className={css.answer} data-ask-history-answer="">（这次没有产生回答）</div>}
               </div>
             )
           })}

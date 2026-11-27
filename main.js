@@ -109,6 +109,12 @@ const { createRemoteAccessControl } = require('./src/backend/http-control');
 const { createHandoffNative } = require('./src/backend/handoff-native');
 const { registerUpdateIpc } = require('./src/backend/ipc-update');
 const { createIpcTrust } = require('./src/backend/ipc-trust');
+const { createAppRegistry } = require('./src/backend/app-registry');
+const { createAppBroker, ticketGrants } = require('./src/backend/app-broker');
+const { issueTicket, TICKET_TTL_MS } = require('./src/backend/app-lease');
+const { createAppHost } = require('./src/backend/app-host');
+const { registerAppsIpc } = require('./src/backend/ipc-apps');
+const { DEFAULT_APP_CAPABILITIES, DEFAULT_APP_MAX_JOBS_PER_HOUR } = require('./src/license/features');
 const { installSessionHardening } = require('./src/backend/session-hardening');
 const { isPackagedTestHooksEnabled } = require('./src/backend/test-hooks');
 // 局域网远程访问（手机端）：HTTP 服务 + 与 IPC 共用的那道闸门。
@@ -247,6 +253,14 @@ let remoteAccess = null;
 let handoffNativeCall = null;
 /** 浏览器交接（「打开网页」）：把主窗口换成右下角卡片；未创建时为 null。 */
 let browserHandoff = null;
+/**
+ * 被托管应用（SuperLanguage）的三个组件：
+ *   注册表（席位/密钥）→ 管道代理（票据）→ 托管器（部署/启停/代理）。
+ * 只有在 `whenReady` 里才创建；退出时按「托管器 → 代理」顺序收尾。
+ */
+let appRegistry = null;
+let appBroker = null;
+let appHost = null;
 
 // ── 调用超时 ─────────────────────────────────────────────────────────
 // 实际逻辑在 src/backend/backend-rpc.js（那里可被单测覆盖）；这里只决定窗口大小。
@@ -507,6 +521,93 @@ app.whenReady().then(async () => {
     updateService.isSupported(), APP_VERSION);
   registerUpdateIpc({ ipcMain, ipcTrust, updateService });
 
+  // ── 被托管应用（SuperLanguage）────────────────────────────────────────────
+  // 授权主机：注册表（席位/密钥）→ 管道代理（票据）→ 托管器（部署/启停/代理）。
+  // 三者都在主进程，渲染层只能通过 `apps:*` 看到摘要与状态。
+  appRegistry = createAppRegistry({
+    stateDir: STATE_DIR,
+    defaultCaps: DEFAULT_APP_CAPABILITIES,
+    defaultMaxJobsPerHour: DEFAULT_APP_MAX_JOBS_PER_HOUR,
+  });
+  const appEntitlement = () => {
+    const status = licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
+    const entitlement = licenseService.getAppEntitlement(status);
+    if (!entitlement.ok) return entitlement;
+    return {
+      ...entitlement,
+      licenseId: status && status.payload ? String(status.payload.licenseId || '') : '',
+    };
+  };
+  appBroker = createAppBroker({
+    stateDir: STATE_DIR,
+    registry: appRegistry,
+    entitlement: appEntitlement,
+    onEvent: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('apps:event', payload);
+      }
+    },
+  });
+  appBroker.start();
+  appHost = createAppHost({
+    stateDir: STATE_DIR,
+    registry: appRegistry,
+    brokerPipe: appBroker.pipePath,
+    isPackaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    repoRoot: __dirname,
+    /**
+     * 跨机托管：局域网实例拿不到本机命名管道，票据由这里签好后 POST 过去。
+     * 签发口径与管道模式共用 `ticketGrants`，避免两条路权限各漂各的。
+     * @param {object} instance - 注册表里的实例。
+     * @returns {{ ok: boolean, claimHex?: string, mac?: string, error?: string, code?: string }}
+     */
+    issueTicket: (instance) => {
+      try {
+        const status = licenseService.getLicenseStatus(app.getPath('userData'), APP_VERSION);
+        const entitlement = licenseService.getAppEntitlement(status);
+        if (!entitlement.ok) {
+          return { ok: false, error: entitlement.message, code: entitlement.code };
+        }
+        const key = appRegistry.instanceKey(instance.id);
+        if (key === '') return { ok: false, error: '实例密钥缺失，请重新部署' };
+        const ticket = issueTicket({
+          secret: key,
+          app: 'superlanguage',
+          instanceId: instance.id,
+          seat: instance.seat,
+          licenseId: status && status.payload ? String(status.payload.licenseId || '') : '',
+          ...ticketGrants(entitlement, instance),
+          exeSha256: instance.exeSha256,
+          ttlMs: TICKET_TTL_MS,
+        });
+        return { ok: true, claimHex: ticket.claimHex, mac: ticket.mac };
+      } catch (e) {
+        return { ok: false, error: '签发票据失败：' + (e && e.message ? e.message : String(e)) };
+      }
+    },
+    onEvent: (payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('apps:event', payload);
+      }
+    },
+  });
+  registerAppsIpc({
+    ipcMain,
+    ipcTrust,
+    app,
+    shell,
+    licenseService,
+    APP_VERSION,
+    registry: appRegistry,
+    broker: appBroker,
+    host: appHost,
+    // 「下游地址选托管应用」要代写消息列表规则 / AI 默认 Webhook：
+    // 走与界面同一条受闸门保护的后端调用，不另开写路径。
+    callBackend: (method, args) => gatedWechatCall(gateCtx, method, args),
+  });
+  console.log('[apps] 应用托管已就绪 · 管道 %s', appBroker.pipePath);
+
   createWindow();
 
   // 安全守卫的端到端探针（仅 SUPERTIME_SECURITY_PROBE=1）：
@@ -578,9 +679,9 @@ app.whenReady().then(async () => {
   if (bootResult.ok) {
     console.log('[wechat] 状态目录:', STATE_DIR);
     console.log('[wechat] 路径配置:', configPath());
-    // 入站监听有两种显式入口（2026-10-19 v22）：标题栏「打开网页」交接，和设置里的「局域网访问（手机）」扫码。
-    // 启动时**不再**按 config.json 里的旧 api_enabled 自动监听；旧配置留着也无害。
-    // 只有点「打开网页」时由 browser-handoff 临时启动，点卡片返回即停。
+    // 图片直链挂在这个监听面上。配置里局域网访问已打开且令牌非空时，启动后就要听着，
+    // 否则发出去的 http://本机IP:端口/api/rpa-media/… 没有进程接。没打开则 sync 不会监听。
+    if (remoteAccess) void remoteAccess.syncWithConfig();
   }
 
   // 自动更新（延迟 30s，见 update.js）：刻意放在后端 try/catch **之外** —— 更新能不能
@@ -616,6 +717,11 @@ app.on('before-quit', (event) => {
   // 先置停止标记：kill 会触发 exit 回调，不置标记就会安排一次无意义的重启。
   // 浏览器交接态的卡片窗口先关掉；HTTP 服务由下面那行统一停。
   if (browserHandoff) { browserHandoff.dispose(); browserHandoff = null; }
+  // 被托管应用：先停子进程（会走 /api/stop），再关授权管道。
+  // 不 await：退出路径不能挂住；子进程的 exit 回调会自己清理登记。
+  if (appHost) { void appHost.dispose(); appHost = null; }
+  if (appBroker) { appBroker.stop(); appBroker = null; }
+  appRegistry = null;
   // 远程访问先停：它是唯一**对外**的入口，退出时应当立刻不再接受连接（而不是等进程销毁
   // socket）。stop() 是异步的，这里不 await —— 退出路径上不能挂住，端口随进程一起释放。
   if (remoteAccess) { void remoteAccess.stop(); remoteAccess = null; }

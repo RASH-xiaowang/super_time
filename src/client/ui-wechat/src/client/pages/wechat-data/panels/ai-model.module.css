@@ -5,7 +5,9 @@
   flex-direction: column;
   gap: 12px;
   min-width: 0;
-  container-type: inline-size;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
   font-family: var(--nm-font-sans, system-ui, sans-serif);
 }
 
@@ -36,9 +38,9 @@
 /* ── 当前连接 ───────────────────────────────────────────── */
 .overviewCard {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(210px, 248px);
-  gap: 16px;
-  align-items: start;
+  grid-template-columns: minmax(0, 1fr) minmax(168px, 220px);
+  gap: 12px 16px;
+  align-items: center;
   padding: 12px;
   border: 1px solid var(--nm-border);
   border-radius: var(--nm-r-lg);
@@ -223,7 +225,7 @@
 
 .profileList {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 8px;
   margin-top: 12px;
 }
@@ -416,24 +418,8 @@
   line-height: 1.6;
 }
 
-@container (min-width: 768px) {
-  .configWorkspace {
-    grid-template-columns: minmax(200px, 232px) minmax(0, 1fr);
-  }
-
-  .configWorkspace .profileHead {
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  .configWorkspace .profileList {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .configWorkspace .profileCount {
-    align-self: flex-start;
-  }
-}
+/* 设置页里按阅读顺序单列排：当前连接、已保存配置、编辑表单、高级能力。
+   不把配置列表和编辑器并成两列，否则编辑器会被拉成一条很高的侧栏。 */
 
 /* ── 对话模型编辑区 ─────────────────────────────────────── */
 .editorCard,
@@ -547,8 +533,8 @@
 .formGrid,
 .modelGrid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
   margin-top: 12px;
 }
 

@@ -19,6 +19,7 @@
 
 #include "api_server.h"
 #include "automation.h"
+#include "license_gate.h"
 #include "version.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -160,6 +161,39 @@ int hex_value(wchar_t value) {
 }
 
 // ---------------------------------------------------------------------------
+/**
+ * 从**扁平** JSON 里取一个字符串字段。
+ *
+ * 只用于 `/api/license/lease` 的 `claim` / `mac`：这两个值只可能是十六进制，
+ * 因此刻意不接受转义、嵌套或非十六进制字符 —— 不为了两个定长字段引入通用 JSON 解析。
+ */
+bool json_string_field(const char* body, const char* key, char* out, size_t capacity) {
+    if (body == nullptr || key == nullptr || out == nullptr || capacity == 0) return false;
+    out[0] = 0;
+    const std::string needle = std::string("\"") + key + "\"";
+    const char* at = strstr(body, needle.c_str());
+    if (at == nullptr) return false;
+    at += needle.size();
+    while (*at == ' ' || *at == '\t' || *at == '\r' || *at == '\n') ++at;
+    if (*at != ':') return false;
+    ++at;
+    while (*at == ' ' || *at == '\t' || *at == '\r' || *at == '\n') ++at;
+    if (*at != '"') return false;
+    ++at;
+    size_t written = 0;
+    while (*at != 0 && *at != '"') {
+        const unsigned char c = static_cast<unsigned char>(*at);
+        const bool is_hex = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+            || (c >= 'A' && c <= 'F');
+        if (!is_hex || written + 1 >= capacity) return false;
+        out[written++] = static_cast<char>(c);
+        ++at;
+    }
+    if (*at != '"') return false;
+    out[written] = 0;
+    return written > 0;
+}
+
 // Request JSON reader shared by /api/* and the inbound webhook.
 //
 // Walks one top-level object of the 8192-byte request body, maps known keys
@@ -1690,7 +1724,27 @@ void respond_job_write(SOCKET client, bool webhook, const JobWrite& write) {
     respond(client, 202, body);
 }
 
+/**
+ * 入队前的授权闸门。
+ *
+ * 这是「Super Time 没有可用授权就不发送」的最后一道服务端拦截：即使有人绕过
+ * 界面直接调 HTTP / Webhook，只要票据失效（且宽限期结束），任务就进不了队列。
+ * 读接口（health/status/jobs）不挡，方便宿主诊断。
+ */
+bool license_allows_enqueue(SOCKET client, bool webhook) {
+    if (feather::license::available()) return true;
+    if (webhook) {
+        respond_webhook_error(client, 403, "license_required");
+    } else {
+        respond_error(client, 403, "license_required");
+    }
+    return false;
+}
+
 void enqueue_job(SOCKET client, bool webhook, const feather::queue::Job& job) {
+    if (!license_allows_enqueue(client, webhook)) {
+        return;
+    }
     respond_job_write(client, webhook, write_job(job));
 }
 
@@ -1700,6 +1754,9 @@ void enqueue_attachment_job(SOCKET client, bool webhook,
                             feather::queue::Job job,
                             const wchar_t* local_paths,
                             const wchar_t* resource_ids) {
+    if (!license_allows_enqueue(client, webhook)) {
+        return;
+    }
     const bool allow_local_paths = client_allows_local_attachment_paths(client);
     AttachmentPlan plan{};
     JobWrite write{};
@@ -2213,13 +2270,13 @@ void handle_client(SOCKET client) {
 
     if (is_get) {
         if (strcmp(path, "/api/health") == 0) {
-            char body_text[160]{};
+            char body_text[320]{};
             snprintf(body_text, sizeof(body_text),
                      "{\"ok\":true,\"service\":\"supertime\",\"port\":%u,"
                      "\"version\":\"%s\",\"api\":%d,"
-                     "\"webhook\":true}",
+                     "\"webhook\":true,\"license\":%s}",
                      static_cast<unsigned>(g_port), FEATHER_VERSION_STRING,
-                     FEATHER_API_REVISION);
+                     FEATHER_API_REVISION, feather::license::status_json().c_str());
             respond(client, 200, body_text);
             return;
         }
@@ -2235,7 +2292,7 @@ void handle_client(SOCKET client) {
             const bool logged_in =
                 wechat.login_state
                 == feather::automation::WeChatLoginState::LoggedIn;
-            char body_text[512]{};
+            char body_text[768]{};
             snprintf(body_text, sizeof(body_text),
                      "{\"service\":\"supertime\",\"version\":\"%s\",\"api\":%d,"
                      "\"queue\":{\"queued\":%d,\"running\":%d,"
@@ -2243,7 +2300,7 @@ void handle_client(SOCKET client) {
                      "\"mouse_guard\":{\"active\":%s,\"aborted\":%s,"
                      "\"timeout_ms\":%u},"
                      "\"wechat\":{\"running\":%s,\"logged_in\":%s,"
-                     "\"window_visible\":%s}}",
+                     "\"window_visible\":%s},\"license\":%s}",
                      FEATHER_VERSION_STRING, FEATHER_API_REVISION,
                      stats.queued, stats.running, stats.succeeded, stats.failed,
                      feather::automation::input_guard_active() ? "true"
@@ -2253,7 +2310,8 @@ void handle_client(SOCKET client) {
                      feather::automation::input_guard_timeout_ms(),
                      wechat.running ? "true" : "false",
                      logged_in ? "true" : "false",
-                     window_visible ? "true" : "false");
+                     window_visible ? "true" : "false",
+                     feather::license::status_json().c_str());
             respond(client, 200, body_text);
             return;
         }
@@ -2298,6 +2356,23 @@ void handle_client(SOCKET client) {
         return;
     }
     wide_body[wide_length] = 0;
+
+    // 跨机托管：托管主机在这里推送运行票据（本机模式走命名管道，不经过这里）。
+    if (strcmp(path, "/api/license/lease") == 0) {
+        char claim[4096]{};
+        char mac[128]{};
+        if (!json_string_field(body, "claim", claim, ARRAYSIZE(claim))
+            || !json_string_field(body, "mac", mac, ARRAYSIZE(mac))) {
+            respond_error(client, 400, "claim and mac are required");
+            return;
+        }
+        if (!feather::license::acceptTicket(claim, mac)) {
+            respond(client, 403, feather::license::status_json().c_str());
+            return;
+        }
+        respond(client, 200, feather::license::status_json().c_str());
+        return;
+    }
 
     const bool send_message = strcmp(path, "/api/send-message") == 0;
     if (!send_message && strcmp(path, "/api/send-attachments") != 0) {

@@ -68,6 +68,8 @@ async function render(input: {
       initialKbEnabled: input.initialKbEnabled ?? false,
       initialKbId: input.initialKbId ?? 0,
       initialContextWindowHours: input.initialContextWindowHours ?? 0,
+      initialHandoff: '抱歉我不太清楚，建议为您转接人工',
+      initialBlocked: '',
       ...(input.initialWebhook === undefined ? {} : { initialWebhook: input.initialWebhook }),
       ...(input.onLoadWebhook === undefined ? {} : { onLoadWebhook: input.onLoadWebhook }),
       ...(input.onSaveWebhook === undefined ? {} : { onSaveWebhook: input.onSaveWebhook }),
@@ -115,6 +117,8 @@ describe('AI 回复人格设置弹窗', () => {
       kbEnabled: false,
       kbId: 0,
       contextWindowHours: 0,
+      safetyHandoff: '抱歉我不太清楚，建议为您转接人工',
+      safetyBlocked: '',
     })
     expect(onClose).toHaveBeenCalledTimes(1)
   })
@@ -137,6 +141,8 @@ describe('AI 回复人格设置弹窗', () => {
       kbEnabled: false,
       kbId: 0,
       contextWindowHours: 0,
+      safetyHandoff: '抱歉我不太清楚，建议为您转接人工',
+      safetyBlocked: '',
     })
   })
 
@@ -157,6 +163,8 @@ describe('AI 回复人格设置弹窗', () => {
       kbEnabled: false,
       kbId: 0,
       contextWindowHours: 0,
+      safetyHandoff: '抱歉我不太清楚，建议为您转接人工',
+      safetyBlocked: '',
     })
   })
 
@@ -185,6 +193,8 @@ describe('AI 回复人格设置弹窗', () => {
       kbEnabled: true,
       kbId: 1,
       contextWindowHours: 0,
+      safetyHandoff: '抱歉我不太清楚，建议为您转接人工',
+      safetyBlocked: '',
     })
   })
 
@@ -229,7 +239,7 @@ describe('AI 回复人格设置弹窗', () => {
       chatUsername: 'wxid_peer',
       chatName: '小王',
     })
-    expect((document.querySelector('input[aria-label="默认大肥鱼 Webhook 地址"]') as HTMLInputElement).value)
+    expect((document.querySelector('input[aria-label="默认 Webhook 地址"]') as HTMLInputElement).value)
       .toBe('http://192.168.1.4:17890/webhook/***')
     expect(document.body.textContent).toContain('已配置')
   })
@@ -248,7 +258,7 @@ describe('AI 回复人格设置弹窗', () => {
       },
       onSaveWebhook,
     })
-    const input = document.querySelector('input[aria-label="默认大肥鱼 Webhook 地址"]') as HTMLInputElement
+    const input = document.querySelector('input[aria-label="默认 Webhook 地址"]') as HTMLInputElement
     await act(async () => {
       setInputValue(input, 'http://192.168.1.4:17890/webhook/new-token')
     })
@@ -278,7 +288,7 @@ describe('AI 回复人格设置弹窗', () => {
       },
       onSaveWebhook,
     })
-    const input = document.querySelector('input[aria-label="默认大肥鱼 Webhook 地址"]') as HTMLInputElement
+    const input = document.querySelector('input[aria-label="默认 Webhook 地址"]') as HTMLInputElement
     await act(async () => {
       setInputValue(input, '')
     })
@@ -296,7 +306,7 @@ describe('AI 回复人格设置弹窗', () => {
       endpoint: 'http://192.168.1.4:17890/webhook/***',
     }))
     await render({ onSave: async () => true, onSaveWebhook })
-    const input = document.querySelector('input[aria-label="默认大肥鱼 Webhook 地址"]') as HTMLInputElement
+    const input = document.querySelector('input[aria-label="默认 Webhook 地址"]') as HTMLInputElement
     await act(async () => {
       setInputValue(input, 'http://192.168.1.4:17890/hooks/super-secret')
     })
@@ -315,7 +325,7 @@ describe('AI 回复人格设置弹窗', () => {
       error: '默认 Webhook 已保存，但规则绑定失败',
     }))
     await render({ onSave: async () => true, onSaveWebhook })
-    const input = document.querySelector('input[aria-label="默认大肥鱼 Webhook 地址"]') as HTMLInputElement
+    const input = document.querySelector('input[aria-label="默认 Webhook 地址"]') as HTMLInputElement
     await act(async () => {
       setInputValue(input, 'http://192.168.1.4:17890/webhook/new-token')
     })
@@ -336,7 +346,7 @@ describe('AI 回复人格设置弹窗', () => {
       endpoint: string
     }>((resolve) => { resolveSave = resolve }))
     await render({ onSave: async () => true, onSaveWebhook })
-    const input = document.querySelector('input[aria-label="默认大肥鱼 Webhook 地址"]') as HTMLInputElement
+    const input = document.querySelector('input[aria-label="默认 Webhook 地址"]') as HTMLInputElement
     await act(async () => {
       setInputValue(input, 'http://192.168.1.4:17890/webhook/another-token')
     })

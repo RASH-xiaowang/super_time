@@ -154,10 +154,9 @@ function NoteSource({ note, onOpenChat, onGoFiles }: {
  * @param props - 筛选态、库名与三个出口。
  * @returns 空态元素。
  */
-function KbEmptyState({ filtering, filterDesc, kbLabel, onClearFilter, onCreate, onGoFiles }: {
+function KbEmptyState({ filtering, filterDesc, onClearFilter, onCreate, onGoFiles }: {
   filtering: boolean
   filterDesc: string
-  kbLabel: string
   onClearFilter: () => void
   onCreate: () => void
   onGoFiles?: () => void
@@ -174,7 +173,6 @@ function KbEmptyState({ filtering, filterDesc, kbLabel, onClearFilter, onCreate,
   return (
     <EmptyState
       title="知识库还是空的"
-      desc={`${kbLabel || '这个库'}里还没有条目。手写笔记与「微信问答」的沉淀都进这个库，正文里可以用 [[目标]] 互相链接。`}
       action={(
         <div className={css.emptyActions}>
           <Button variant="pill" onClick={onCreate}>＋ 新建第一条</Button>
@@ -350,7 +348,6 @@ export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (us
       <div className={css.head}>
         <PanelHeader
           title="笔记"
-          desc="本地笔记：新建 / 编辑 / 标签 / 关键词搜索"
           actions={(
             <>
               <Button variant="primary" onClick={() => { openCreate() }}>＋ 新建条目</Button>
@@ -420,7 +417,6 @@ export function KnowledgeBasePanel({ onOpenChat, onGoFiles }: { onOpenChat?: (us
               <KbEmptyState
                 filtering={filtering}
                 filterDesc={filterDesc}
-                kbLabel={kbLabel}
                 onClearFilter={() => { setQuery(''); setTag(null) }}
                 onCreate={() => { openCreate() }}
                 onGoFiles={onGoFiles}

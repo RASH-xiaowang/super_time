@@ -16,6 +16,8 @@ import type { ReplySuggestResult } from './types.ts'
 import type { AnnualNarrativeResult } from './remotes/annual-narr.ts'
 import type { KnowledgeSnapshotRead } from './query/notes.ts'
 import { GatewayRead } from './gateway-read.ts'
+import { analyzePortraitPersonality } from './remotes/portrait-personality.ts'
+import type { PortraitPersonalityResult } from './types.ts'
 
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
 export abstract class GatewayAskOps extends GatewayRead {
@@ -510,10 +512,23 @@ export abstract class GatewayAskOps extends GatewayRead {
   }
 
   /**
-   * Generate a daily chat summary for one date via DSH LLM.
-   * @param options - date (YYYY-MM-DD) to summarize.
-   * @returns DailySummaryResult: summary text with session/message counts.
+   * 根据一位好友的图片、聊天和朋友圈，推测人物性格。
+   * 本机已有存档时直接返回；`refresh` 为 true 时重新分析并覆盖存档。
+   * @param options - `username` 为好友的微信 id。
+   * @returns 四段阅读；材料不足或没配模型时 `ok` 为 false，并在 `text` 里说明原因。
    */
+  @Remote('analyzePortraitPersonality')
+  async analyzePortraitPersonality(options: { username: string; refresh?: boolean; cacheOnly?: boolean }): Promise<PortraitPersonalityResult> {
+    return analyzePortraitPersonality({
+      decryptedDir: this._dirs.decrypted,
+      decodedDir: this._dirs.decoded,
+      selfUsername: this.selfUsername(),
+      ctx: this._ctx,
+      privacyGate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
+      op: (category, action, status, target, detail) => { this.op(category, action, status, target, detail) },
+    }, options?.username ?? '', options?.refresh === true, options?.cacheOnly === true)
+  }
+
   @Remote('generateDailySummary')
   async generateDailySummary(options: { date: string; provider?: string; model?: string; format?: string }): Promise<DailySummaryResult> {
     return this.summaryRecordRemotes().generateDailySummary(options)

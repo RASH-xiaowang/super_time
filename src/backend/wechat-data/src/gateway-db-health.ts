@@ -14,10 +14,10 @@
 
 import { Remote } from '@deepseek-ai/dsh-typert-protocol'
 import type { DbIntegrityResult, DbRepairResult } from './types.ts'
-import { GatewayTaskCenter } from './gateway-taskcenter.ts'
+import { GatewayTools } from './gateway-tools.ts'
 
 /** 方法面的一层：继承链上的一环，不单独实例化。 */
-export abstract class GatewayDbHealth extends GatewayTaskCenter {
+export abstract class GatewayDbHealth extends GatewayTools {
   /**
    * 逐库完整性体检（`PRAGMA integrity_check`）—— 「库文件已损坏」那条处方
    * （`wechat-host.js` 的 READABLE_ERRORS）指向的检查。与 `getDbHealth` 的

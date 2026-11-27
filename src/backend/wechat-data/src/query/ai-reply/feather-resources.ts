@@ -91,7 +91,7 @@ function tokenizedResourceUrl(webhookUrl: string): string {
   try {
     url = new URL(webhookUrl)
   } catch {
-    throw new Error('大肥鱼 Webhook 地址无效')
+    throw new Error(' Webhook 地址无效')
   }
   if (!/^\/webhook\/[^/]+\/?$/i.test(url.pathname)) {
     throw new Error('资源上传只支持 /webhook/<token> 地址')
@@ -170,7 +170,7 @@ function resourceFromBody(bodyText: string): FeatherResource {
   try {
     body = JSON.parse(bodyText) as Record<string, unknown>
   } catch {
-    throw new Error('大肥鱼资源上传返回非 JSON')
+    throw new Error('资源上传返回非 JSON')
   }
   const id = typeof body['id'] === 'string' ? body['id'].trim() : ''
   const name = typeof body['name'] === 'string' ? body['name'].trim() : ''
@@ -179,7 +179,7 @@ function resourceFromBody(bodyText: string): FeatherResource {
   if (body['ok'] !== true || !/^[0-9a-f]{40}$/.test(id)
     || !Number.isSafeInteger(size) || size <= 0
     || !/^[0-9a-f]{64}$/.test(sha256)) {
-    throw new Error('大肥鱼资源上传响应无效')
+    throw new Error('资源上传响应无效')
   }
   return { id, name: safeName(name, 'resource'), size, sha256 }
 }
@@ -213,12 +213,12 @@ export async function uploadFeatherResource(
     maxResponseBytes: RESOURCE_RESPONSE_MAX_BYTES,
   }, deps.fetchImpl === undefined ? {} : { fetchImpl: deps.fetchImpl }, retrySpec())
   if (response.status !== 200 && response.status !== 201) {
-    throw new Error('大肥鱼资源上传失败：HTTP ' + String(response.status))
+    throw new Error('资源上传失败：HTTP ' + String(response.status))
   }
   const text = new TextDecoder().decode(response.bodyBytes ?? new Uint8Array())
   const resource = resourceFromBody(text)
   if (resource.sha256 !== sha256 || resource.size !== input.bytes.byteLength) {
-    throw new Error('大肥鱼资源上传校验失败')
+    throw new Error('资源上传校验失败')
   }
   return resource
 }
@@ -235,7 +235,7 @@ export async function uploadMessageListImages(
 ): Promise<string[]> {
   const limits = limitsOf(deps)
   if (images.length > limits.maxCount) {
-    throw new Error('大肥鱼单次最多发送 ' + String(limits.maxCount) + ' 个附件')
+    throw new Error('单次最多发送 ' + String(limits.maxCount) + ' 个附件')
   }
   const resources: ResourceBytes[] = []
   let totalBytes = 0

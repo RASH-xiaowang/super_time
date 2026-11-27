@@ -827,6 +827,9 @@ function resolveParamSourceValue(entry: Record<string, unknown>, ctx: RpaInvocat
   if (source === 'imagesJson') return imagesJsonOf(ctx.imageLinks)
   if (source === 'imageCount') return String(ctx.record.images.length)
   if (source === 'firstImageUrl') return firstImageUrlOf(ctx.imageLinks)
+  // 文本类来源：正文已经过隐私闸，直接序列化即可（不含图片、不含身份信息）。
+  if (source === 'textsJson') return JSON.stringify(ctx.record.texts ?? [])
+  if (source === 'textCount') return String((ctx.record.texts ?? []).length)
   if (source === 'fixed') return typeof entry['fixedValue'] === 'string' ? entry['fixedValue'] : ''
   if (source === 'template') {
     const rendered = renderTemplate(entry['template'] ?? '', {

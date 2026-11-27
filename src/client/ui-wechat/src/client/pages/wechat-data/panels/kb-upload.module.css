@@ -1,0 +1,9 @@
+.zone { position: relative; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; min-width: 0; }
+.overlay { position: absolute; inset: 0; z-index: 10; display: grid; place-items: center; padding: 20px; border: 2px dashed var(--nm-brand); border-radius: var(--nm-r-xl); background: var(--nm-bg-card); opacity: .94; color: var(--nm-text-1); font-size: 14px; text-align: center; pointer-events: none; }
+.receipt { margin: 8px 12px; padding: 10px 12px; border: 1px solid var(--nm-border); border-radius: var(--nm-r-lg); color: var(--wx-text, #243247); font-size: 12px; }
+.receipt p { margin: 8px 0 0; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.actions > span { flex: 1 1 200px; }
+.items { list-style: none; padding: 0; margin: 8px 0 0; max-height: 160px; overflow: auto; }
+.items li { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 3px 0; overflow-wrap: anywhere; }
+.name { flex: 0 1 200px; min-width: 0; font-weight: 600; overflow-wrap: anywhere; }

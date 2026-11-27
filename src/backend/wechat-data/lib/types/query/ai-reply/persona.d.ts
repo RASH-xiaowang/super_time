@@ -1,9 +1,3 @@
-/**
- * 会话级 AI 回复的人格边界。
- *
- * 固定安全提示词永远在前；用户配置只能追加写作偏好，不能覆盖身份、防注入
- * 或输出格式等硬约束。
- */
 export declare const CHAT_AI_REPLY_PERSONA_NAME_MAX = 80;
 export declare const CHAT_AI_REPLY_PERSONA_PROMPT_MAX = 4000;
 /** 知识库材料进入 system 提示词的字符预算；超出时按检索顺序截断。 */
@@ -29,4 +23,8 @@ export declare function buildChatAiReplySystemPrompt(persona?: Partial<ChatAiRep
     kbSnippets?: readonly string[];
     /** 用户是否勾选了知识库参与回复（空命中时也要如实告诉模型）。 */
     kbRequested?: boolean;
+    /** 查无资料时必须原样使用的转人工话术。 */
+    handoff?: string;
+    /** 额外禁说词。 */
+    blocked?: string;
 }): string;

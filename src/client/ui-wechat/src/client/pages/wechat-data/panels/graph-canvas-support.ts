@@ -7,7 +7,7 @@
  * @module graph-canvas-support
  */
 
-import { SELF_ID, communityColor, groupCommunities, neighboursOf, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
+import { SELF_ID, communityColor, groupCommunities, neighboursOf, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
 import {
   avatarBudget,
   avatarCandidates,
@@ -139,6 +139,8 @@ export interface GraphCanvasProps {
   dark?: boolean
   selectedId: string | null
   onSelect: (id: string | null) => void
+  /** 点中一条线时回调。节点命中优先于线。 */
+  onSelectEdge?: ((edge: GEdge) => void) | undefined
   settings: GraphSettings
   selfUsername?: string | undefined
   pinnedIds?: ReadonlySet<string>

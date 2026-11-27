@@ -90,7 +90,7 @@ const BAZHUAYU: RpaVendorDescriptor = makeDescriptor({
       type: 'paramList',
       required: false,
       maxItems: 20,
-      paramSources: ['room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType', 'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template'],
+      paramSources: ['room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType', 'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'textsJson', 'textCount', 'fixed', 'template'],
     },
   ],
   auth: {
@@ -143,7 +143,10 @@ function makeTask(overrides: Partial<TaskInfo> = {}): TaskInfo {
     targetName: '目标用户',
     keywords: ['报价'],
     photoLimit: 0,
+    textLimit: 0,
     mentionMeOnly: false,
+    greetingEnabled: false,
+    greetingText: '',
     triggerMethod: 'webhook',
     triggerConfig: {},
     triggerSecretSet: {},
@@ -165,7 +168,10 @@ function makeDraft(overrides: Partial<TaskEditDraft> = {}): TaskEditDraft {
     name: '任务',
     keywords: ['x'],
     photoLimit: 0,
+    textLimit: 0,
     mentionMeOnly: false,
+    greetingEnabled: false,
+    greetingText: '',
     triggerMethod: 'webhook',
     config: {},
     secretInputs: {},
@@ -176,13 +182,14 @@ function makeDraft(overrides: Partial<TaskEditDraft> = {}): TaskEditDraft {
 describe('附加参数（paramList）：值来源 / 默认 / 归一化 / 校验', () => {
   const extrasField = BAZHUAYU.fields.find((field) => field.key === 'extraParams')!
 
-  it('值来源中文名与下拉选项：缺省全量 14 种，paramSources 可收窄', () => {
-    expect(ALL_PARAM_SOURCES).toHaveLength(14)
+  it('值来源中文名与下拉选项：缺省全量 16 种，paramSources 可收窄', () => {
+    expect(ALL_PARAM_SOURCES).toHaveLength(16)
     expect(PARAM_SOURCE_LABELS).toMatchObject({
       room: '会话名', content: '触发文本', at: '触发对象', taskName: '任务名',
       keyword: '触发关键词', triggeredAt: '触发时间', chatType: '会话类型',
       taskId: '任务 id', recordId: '触发记录 id',
       imagesJson: '触发图片（JSON 链接清单）', imageCount: '触发图片数量', firstImageUrl: '首张图片链接',
+      textsJson: '触发人最近文本（JSON 清单）', textCount: '触发人文本条数',
       fixed: '固定值', template: '自定义模板',
     })
     expect(paramSourceOptions(extrasField).map((option) => option.value)).toEqual([...ALL_PARAM_SOURCES])

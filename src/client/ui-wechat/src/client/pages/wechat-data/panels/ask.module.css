@@ -246,14 +246,14 @@
 .chatUser { display: flex; justify-content: flex-end; }
 /* 用户气泡与「AI 问答」保持一致：右对齐、无硬描边、右下角收紧。 */
 .chatUserBubble {
-  max-width: min(66%, 420px);
-  padding: var(--nm-s-2) 11px;
-  border-radius: 14px 14px 4px 14px;
-  background: color-mix(in srgb, var(--nm-text-1) 6%, var(--nm-bg-card));
-  border: 0;
+  max-width: min(72%, 480px);
+  padding: 10px 14px;
+  border-radius: 16px 16px 6px 16px;
+  background: color-mix(in srgb, var(--nm-text-1) 8%, var(--nm-bg-card));
+  border: 1px solid var(--nm-border);
   color: var(--nm-text-1);
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-size: 14px;
+  line-height: 1.65;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
@@ -743,22 +743,57 @@ textarea.composerInput:focus-visible { outline: none; }
 }
 .optBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 .actionHint { margin-left: auto; font-size: 10px; color: var(--nm-text-3); white-space: nowrap; }
-/* 当前检索范围：不是控件，只是让用户确认「上一轮选的 @ 范围仍生效」。 */
+/* 当前检索范围。会话名和时间各是一段，悬浮后各自露出小叉，只取消这一段。 */
 .scopeActive {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   min-width: 0;
-  overflow: hidden;
   color: var(--nm-cyan-text);
   font-size: 10.5px;
   line-height: 1.5;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+.scopeToken {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
 }
 .scopeActiveIdentity {
   flex: 0 1 auto;
   min-width: 0;
+}
+.scopeClear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 0;
+  height: 14px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.scopeToken:hover .scopeClear,
+.scopeToken:focus-within .scopeClear {
+  width: 14px;
+  opacity: 1;
+}
+.scopeClear:hover,
+.scopeClear:focus-visible {
+  background: color-mix(in srgb, currentColor 18%, transparent);
+}
+@media (hover: none) {
+  .scopeClear { width: 14px; opacity: 1; }
 }
 
 /* 隐私说明：输入面下方次级小字（常驻底部，与上方内容同一条左边线） */

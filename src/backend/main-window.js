@@ -18,6 +18,40 @@ function uiEntryHtml(ctx) {
 }
 
 /** 渲染进程崩溃后的自动恢复策略：只处理可恢复原因，并限制单个窗口的重载次数。 */
+/** 启动窗口宽高比 16:10。基准 1440×900，下限 960×600，都是这个比例的整数尺寸。 */
+const WINDOW_RATIO_W = 16;
+const WINDOW_RATIO_H = 10;
+const WINDOW_BASE_W = 1440;
+
+/**
+ * 在工作区里取出不超过 1440×900、且严格为 16:10 的窗口尺寸。
+ *
+ * 宽、高各自贴边会把矮屏收成 1440×768 这类非 16:10。这里先把宽收成 16 的倍数，
+ * 高度超出工作区时再把高收成 10 的倍数，宽按 16:10 反推，结果始终落在工作区里。
+ * @param {number} workWidth - 工作区宽度。
+ * @param {number} workHeight - 工作区高度。
+ * @returns {{ width: number, height: number }} 整数宽高，比值为 16:10。
+ */
+function fitWindow16x10(workWidth, workHeight) {
+  const capW = Math.max(WINDOW_RATIO_W, Math.floor(Number(workWidth) || WINDOW_BASE_W));
+  const capH = Math.max(WINDOW_RATIO_H, Math.floor(Number(workHeight) || (WINDOW_BASE_W / WINDOW_RATIO_W) * WINDOW_RATIO_H));
+  let width = Math.min(WINDOW_BASE_W, capW);
+  width -= width % WINDOW_RATIO_W;
+  if (width < WINDOW_RATIO_W) width = Math.min(capW, WINDOW_RATIO_W);
+  let height = (width / WINDOW_RATIO_W) * WINDOW_RATIO_H;
+  if (height > capH) {
+    height = capH - (capH % WINDOW_RATIO_H);
+    if (height < WINDOW_RATIO_H) height = Math.min(capH, WINDOW_RATIO_H);
+    width = (height / WINDOW_RATIO_H) * WINDOW_RATIO_W;
+    if (width > capW) {
+      width = capW - (capW % WINDOW_RATIO_W);
+      if (width < WINDOW_RATIO_W) width = Math.min(capW, WINDOW_RATIO_W);
+      height = (width / WINDOW_RATIO_W) * WINDOW_RATIO_H;
+    }
+  }
+  return { width, height };
+}
+
 const RECOVERABLE_RENDER_GONE_REASONS = new Set(['oom', 'crashed']);
 const RENDER_RECOVERY_DELAY_MS = 1500;
 const MAX_RENDER_RECOVERIES = 2;
@@ -189,22 +223,21 @@ function createMainWindow(ctx) {
    * 相关取证见 docs/RELEASE-PLAN.md 的 M19。
    */
   const appIcon = path.join(rootDir, 'build', 'icon.ico');
-  // 启动尺寸取固定基准 1440×900，再按主屏工作区收敛：写死一个较大的尺寸时
-  // （历史上是 1664×1066），1366×768 或 1080p@125% 的机器上窗口会比屏幕还大
-  // （审计 P0-2）。窗口本身始终可缩放，下限取实测能容下
-  // 「会话列表 + 消息区 + 群聊信息抽屉」三列的值。
-  const MIN_W = 960;
-  const MIN_H = 640;
-  const BASE_W = 1440;
-  const BASE_H = 900;
-  const work = screen.getPrimaryDisplay().workAreaSize;
-  const initialWidth = Math.max(MIN_W, Math.min(BASE_W, work.width));
-  const initialHeight = Math.max(MIN_H, Math.min(BASE_H, work.height));
+  // 启动尺寸基准 1440×900（正好 16:10）。宽高分开贴工作区时，矮屏会把高度单独压矮，
+  // 比例就不再是 16:10。这里按工作区同时收缩两边，结果始终是 16 的倍数 × 10 的倍数。
+  // 下限 960×600 同样是 16:10，并且宽得下「会话列表 + 消息区 + 群聊信息抽屉」三列。
+  const display = screen.getPrimaryDisplay();
+  const area = display.workArea || display.workAreaSize || { width: 1440, height: 900 };
+  const initial = fitWindow16x10(area.width, area.height);
   const win = new BrowserWindow({
-    width: initialWidth,
-    height: initialHeight,
-    minWidth: MIN_W,
-    minHeight: MIN_H,
+    width: initial.width,
+    height: initial.height,
+    ...(Number.isFinite(area.x) ? {
+      x: area.x + Math.max(0, Math.round((area.width - initial.width) / 2)),
+      y: area.y + Math.max(0, Math.round((area.height - initial.height) / 2)),
+    } : {}),
+    minWidth: 960,
+    minHeight: 600,
     useContentSize: true,
     resizable: true,
     // 标题栏是自绘的（frame:false），铺满屏幕由自绘「全屏」按钮显式
@@ -241,6 +274,9 @@ function createMainWindow(ctx) {
       backgroundThrottling: true
     }
   });
+
+  // 显示之后仍保持 16:10。铺满工作区前会先放开（见 ipc-misc.js），退出后再锁回来。
+  if (typeof win.setAspectRatio === 'function') win.setAspectRatio(16 / 10);
 
   // 全屏状态也要回传：标题栏那个按钮的图标要跟着切换（进入/退出全屏图标不同）。
   // 2026-10-18：按钮改走「铺满工作区」，状态由 ipc-misc.js 主动发 window:fullscreen-changed；
@@ -351,4 +387,10 @@ function installWebContentsGuards(contents, ctx) {
   });
 }
 
-module.exports = { uiEntryHtml, broadcastToWindows, createMainWindow, installWebContentsGuards };
+module.exports = {
+  uiEntryHtml,
+  broadcastToWindows,
+  createMainWindow,
+  installWebContentsGuards,
+  fitWindow16x10,
+};

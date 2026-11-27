@@ -119,7 +119,6 @@ export function PersonaPresetPicker(props: {
     <section className={css.presetSection} aria-label="预设人格">
       <div className={css.presetHead}>
         <span className={css.presetTitle}>预设人格</span>
-        <span className={css.presetHint}>点一下填入名称与风格，之后仍可修改</span>
       </div>
       <div className={css.presetGrid} role="group" aria-label="可选预设人格">
         {CHAT_AI_REPLY_PERSONA_PRESETS.map((preset) => {

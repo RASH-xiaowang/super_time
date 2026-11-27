@@ -136,6 +136,32 @@ describe('单聊「聊天信息」的实时刷新', () => {
     expect(text(), 'A 的旧响应盖到了 B 的抽屉上').not.toContain('66')
   })
 
+  it('底部动作位在滚动区**外面**：共同的群再多也不会把按钮压在列表里', async () => {
+    mocks.apiGetContact360.mockResolvedValue({
+      ...snap('wxid_a', 91),
+      commonGroups: Array.from({ length: 12 }, (_, i) => ({
+        username: `grp_${String(i)}@chatroom`,
+        name: `群 ${String(i)}`,
+        memberCount: 3,
+      })),
+    })
+    render()
+    await flush()
+    const body = host.querySelector('[data-st-info-body]')
+    expect(body, '滚动区找不到（data-st-info-body 被删了？）').not.toBeNull()
+    const actions = [...host.querySelectorAll('button')].filter((b) => {
+      const t = b.textContent ?? ''
+      return t.includes('新建任务') || t.includes('导出聊天记录')
+    })
+    expect(actions, '两个底部动作少了一个').toHaveLength(2)
+    for (const button of actions) {
+      expect(body?.contains(button), '动作按钮又回到滚动区里了（会被共同的群列表盖住）').toBe(false)
+    }
+    // 顺序仍在：新建任务（主）在前、导出在后。
+    expect(actions[0]?.textContent).toContain('新建任务')
+    expect(actions[1]?.textContent).toContain('导出聊天记录')
+  })
+
   it('静默刷新失败保留旧值、不把错误端给用户', async () => {
     mocks.apiGetContact360.mockResolvedValueOnce(snap('wxid_a', 91))
     render()

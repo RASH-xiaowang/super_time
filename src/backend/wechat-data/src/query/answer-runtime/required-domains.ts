@@ -21,6 +21,7 @@ export type AnswerDataDomain =
   | 'moments'
   | 'records'
   | 'contacts'
+  | 'social'
   | 'funds'
   | 'calls'
   | 'groups'
@@ -39,6 +40,7 @@ export const DOMAIN_TOOL: Readonly<Record<AnswerDataDomain, ToolName>> = {
   moments: 'search_moments',
   records: 'search_records',
   contacts: 'search_contacts',
+  social: 'get_social_summary',
   kb: 'search_kb',
   messages: 'search_messages',
 }
@@ -54,6 +56,7 @@ const DOMAIN_PRIORITY: readonly AnswerDataDomain[] = [
   'favorites',
   'moments',
   'records',
+  'social',
   'contacts',
   'kb',
   'messages',
@@ -69,6 +72,7 @@ const QUESTION_DOMAIN_RULES: ReadonlyArray<readonly [AnswerDataDomain, RegExp]> 
   ['favorites', /收藏|书签/i],
   ['moments', /朋友圈|动态|说说|sns/i],
   ['records', /转账|红包|收款|付款|账单|交易记录|消费|支出|收入/i],
+  ['social', /圈子|社交圈|最熟|最常联系|同班|同学/i],
   ['contacts', /联系人|好友|通讯录|微信号|电话号码|手机号|是谁/i],
   ['kb', /知识库|文档库|资料库|产品手册|规范|faq|sop/i],
 ]
@@ -87,6 +91,7 @@ const TOOL_DOMAIN: Readonly<Record<string, AnswerDataDomain>> = {
   search_records: 'records',
   search_contacts: 'contacts',
   get_contact_detail: 'contacts',
+  get_social_summary: 'social',
   get_funds_summary: 'funds',
   get_call_history: 'calls',
   get_group_detail: 'groups',

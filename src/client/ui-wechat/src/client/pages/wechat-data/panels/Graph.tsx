@@ -9,9 +9,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiGetAvatar, apiGetGraph, apiGetKnowledgeGraph } from '../api.ts'
 import { useFreshData } from './use-fresh-data.ts'
-import type { GraphEdgeType, GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import type { GraphSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import type { KnowledgeSnapshot } from '../types.ts'
-import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, DEFAULT_GRAPH_SETTINGS, defaultNodeLimit, eligibleCandidateCount, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
+import { buildGraph, buildKnowledgeNetwork, communityColor, connectedEdgesOf, coreNodeLimit, DEFAULT_GRAPH_SETTINGS, groupCommunities, localGraph, sharedGroupNames, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import { KnowledgeNoteEditor } from './KnowledgeNoteEditor.tsx'
 import { GraphRail } from './GraphRail.tsx'
@@ -71,29 +71,6 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
  */
 const KNOWLEDGE_KINDS = new Set<GNode['kind']>(['note', 'stub', 'file', 'section', 'entity'])
 
-const GRAPH_EDGE_TYPE_LABELS: Partial<Record<GraphEdgeType, string>> = {
-  common_group: '共同群',
-  common_member: '共同成员',
-  reply: '回复',
-  mention_user: '@提及',
-  moment_comment: '朋友圈评论',
-  transfer: '转账',
-  redpacket: '红包',
-}
-
-function droppedEdgeTypesText(
-  dropped: Partial<Record<GraphEdgeType, number>> | undefined,
-): string {
-  const entries = Object.entries(dropped ?? {})
-    .filter((entry): entry is [GraphEdgeType, number] => Number(entry[1]) > 0)
-    .sort((a, b) => b[1] - a[1])
-  if (entries.length === 0) return ''
-  const shown = entries.slice(0, 4)
-    .map(([type, count]) => `${GRAPH_EDGE_TYPE_LABELS[type] ?? type} ${count}`)
-    .join('、')
-  return `（${shown}${entries.length > 4 ? ' 等' : ''}）`
-}
-
 /** Search results are identity rows, except for knowledge entries which are not contacts. */
 function GraphSearchBox({ search, onLocate, selfUsername = '' }: {
   search: GraphNodeSearch
@@ -149,15 +126,82 @@ function GraphLoading(): React.JSX.Element {
   )
 }
 
+/** 选中的边用 source/target 作键。图谱重建后对不上就当没选。 */
+function useSelectedGraphEdge(
+  edges: readonly GEdge[],
+  setSelectedId: (id: string | null) => void,
+  openRail: () => void,
+): {
+  selectedEdge: GEdge | null
+  onSelect: (id: string | null) => void
+  onSelectEdge: (edge: GEdge) => void
+  selectEdge: (edge: GEdge) => void
+} {
+  const [selectedEdgeKey, setSelectedEdgeKey] = useState<string | null>(null)
+  const selectedEdge = useMemo(
+    () => edges.find((edge) => `${edge.source}\0${edge.target}` === selectedEdgeKey) ?? null,
+    [edges, selectedEdgeKey],
+  )
+  const onSelect = (id: string | null): void => {
+    setSelectedId(id)
+    setSelectedEdgeKey(null)
+  }
+  const onSelectEdge = (edge: GEdge): void => {
+    setSelectedEdgeKey(`${edge.source}\0${edge.target}`)
+    setSelectedId(edge.source === 'self' ? edge.target : edge.source)
+    openRail()
+  }
+  const selectEdge = (edge: GEdge): void => {
+    setSelectedEdgeKey(`${edge.source}\0${edge.target}`)
+    openRail()
+  }
+  return { selectedEdge, onSelect, onSelectEdge, selectEdge }
+}
+
+function GraphLegend({
+  knowledge,
+  shape,
+  onShape,
+}: {
+  knowledge: boolean
+  shape: 'pyramid' | 'circle'
+  onShape: (shape: 'pyramid' | 'circle') => void
+}): React.JSX.Element {
+  return (
+    <>
+      {!knowledge && (
+        <div className={css.shapeSwitch} role="group" aria-label="图谱形状">
+          <button type="button" className={css.chip} data-on={shape === 'pyramid' || undefined} onClick={() => { onShape('pyramid') }}>金字塔</button>
+          <button type="button" className={css.chip} data-on={shape === 'circle' || undefined} onClick={() => { onShape('circle') }}>圆圈</button>
+        </div>
+      )}
+      {knowledge && (
+      <div className={css.legend}>
+          <span><i className={css.legendDotNote} />紫圆 = 笔记</span>
+          <span><i className={css.legendLine} />灰线 = [[链接]]</span>
+          <span><i className={css.legendLine} />虚线圆 = 尚未创建的笔记</span>
+          <span><i className={css.legendDotFile} />绿圆 = 文件</span>
+          <span><i className={css.legendDotSection} />灰圆 = 章节</span>
+          <span><i className={css.legendDotEntity} />琥珀圆 = 模型抽出的实体</span>
+          <span><i className={css.legendLineAmberDash} />虚线 = 推断的关系（文档里没写着）</span>
+          <span><i className={css.legendBar} />半径 = 连接度</span>
+      </div>
+      )}
+    </>
+  )
+}
+
 /**
  * Render the social graph panel.
  * @param props - optional cross-panel chat opener (查看聊天).
  * @returns the graph element tree.
  */
-export function GraphPanel({ variant = 'social', onOpenChat }: {
+export function GraphPanel({ variant = 'social', onOpenChat, onOpenPortrait }: {
   /** 'social' = 我的人脉（好友/群组）；'knowledge' = 我的笔记（节点只来自知识库）。 */
   variant?: 'social' | 'knowledge'
   onOpenChat?: (username: string) => void
+  /** 打开这位好友的客户画像。只用于通讯录好友。 */
+  onOpenPortrait?: (username: string) => void
 }): React.JSX.Element {
   // 当前知识库：切换器挂在合并外壳的分段条上，不是本组件的父级 —— 走订阅而不是 props。
   const { kbId, kbs } = useKbScope()
@@ -170,7 +214,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
      知识侧失败只静默保持旧值，不能把社交面板带进错误态（源码原有设计）。
      打开（或换库）即查最新，查询失败才回退缓存并由 hook 标注「以下为本地缓存（可能不是最新）」。 */
   const fetchGraph = useCallback(() => apiGetGraph(), [])
-  const { data, loading: graphLoading, error: graphError, reload: reloadGraph } = useFreshData<GraphSnapshot>('graph', fetchGraph)
+  const { data, loading: graphLoading, error: graphError, reload: reloadGraph } = useFreshData<GraphSnapshot>('graph', fetchGraph, { enabled: variant !== 'knowledge' })
   /** 知识图谱快照（笔记 / stub / wiki 边）。与社交图谱分开加载：它是叠加维度，
    *  取不到时社交侧必须照常可用，所以单独 try/catch、不共用 error 状态。 */
   const fetchKnowledge = useCallback(() => apiGetKnowledgeGraph(kbId), [kbId])
@@ -194,7 +238,8 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   const dark = themeMode === 'dark'
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedId, setSelectedId] = useState<string | null>(null); const { notice: actionNotice, flash: flashActionNotice } = useActionNotice()
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const { notice: actionNotice, flash: flashActionNotice } = useActionNotice()
   /**
    * 参数面板是否展开。
    *
@@ -242,12 +287,12 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
   const patch = (p: Partial<GraphSettings>): void => { setSettings(prev => ({ ...prev, ...p })) }
   /** 切换全局主题（不再是图谱私有轴）。颜色过渡的触发条件 / 时长 / 缓动 / 范围见 theme.ts 文件头。 */
   const toggleTheme = (): void => { toggleThemeMode() }
-  // nodeLimit 是「自动 30%」：比较默认状态时把两者都归一为哨兵 250，否则一进页面就显示「非默认」。
+  // nodeLimit 哨兵 250 表示「还没按数据算过」。载入后改成核心圈人数。
   const isDefaultSettings = JSON.stringify({ ...settings, nodeLimit: DEFAULT_GRAPH_SETTINGS.nodeLimit }) === JSON.stringify(DEFAULT_GRAPH_SETTINGS)
   const restoreDefaults = (): void => {
     setSettings({
       ...DEFAULT_GRAPH_SETTINGS,
-      nodeLimit: defaultNodeLimit(eligibleCandidateCount(data, settings)),
+      nodeLimit: coreNodeLimit(data, settings),
       ...(variant === 'knowledge' ? { mode: 'knowledge' as const } : {}),
     })
     setPinned(new Set())
@@ -262,11 +307,11 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     if (!graphLoading) setLoading(false)
     if (graphError !== null) setError(graphError)
   }, [graphLoading, graphError])
-  /** 载入后默认显示「候选总人数 × 30%」；必须等 data 落地（首屏 null 会先算成 1 耗掉哨兵）。 */
+  /** 载入后默认画出有来往的核心圈；必须等 data 落地（首屏 null 会先算成 1 耗掉哨兵）。 */
   useEffect(() => {
     if (!data) return
     setSettings(prev => prev.nodeLimit === DEFAULT_GRAPH_SETTINGS.nodeLimit
-      ? { ...prev, nodeLimit: defaultNodeLimit(eligibleCandidateCount(data, prev)) }
+      ? { ...prev, nodeLimit: coreNodeLimit(data, prev) }
       : prev)
   }, [data])
   /** 既有调用点（重查）原样可用。 */
@@ -279,7 +324,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
 
   // 两个加载器分成两个 effect：`load`（通讯录图谱）与库无关，并在一起的话每次切库
   // 都会白拉一次社交图谱（那是几百毫秒级的大快照）。
-  useEffect(() => { void load() }, [load])
+  useEffect(() => { if (variant !== 'knowledge') void load() }, [load, variant])
   useEffect(() => { void loadKnowledge() }, [loadKnowledge])
 
   // 切库：选中 / 固定 / 圈子聚焦 / 搜索装的都是**某一张图**上的位置与状态，换库就是换图。
@@ -326,6 +371,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
     () => (isKnowledgeMode ? buildKnowledgeNetwork(knowledge, settings) : buildGraph(data, settings)),
     [data, knowledge, isKnowledgeMode, settings.mode, settings.nodeLimit, settings.minCommon, settings.friendsOnly, settings.remarkClass, settings.firstChar],
   )
+  const { selectedEdge, onSelect, onSelectEdge, selectEdge } = useSelectedGraphEdge(graph.edges, setSelectedId, () => { setRailOpen(true) })
   // 深度过滤:有选中节点时以它为锚,否则自动锚定「我」——深度滑杆无需先选中即可生效。
   // 知识网络没有「我」节点,退到第一个节点作锚(否则 localGraph 会返回空图)。
   const depthAnchor = useMemo(
@@ -489,67 +535,6 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
           </>
         )}
       </div>
-      {!isKnowledgeMode && graph.coverage
-        && (graph.coverage.droppedNodes > 0
-          || graph.coverage.droppedEdges > 0
-          || graph.coverage.droppedEdgeEndpoints > 0
-          || graph.coverage.derived?.truncated) && (
-        <div className={kitCss.textMeta} role="status">
-          当前视图受节点上限/模式约束：隐藏 {graph.coverage.droppedNodes} 个节点
-          {graph.coverage.droppedEdgeEndpoints > 0 ? `、${graph.coverage.droppedEdgeEndpoints} 条关系` : ''}
-          {graph.coverage.droppedEdges > 0 ? `、${graph.coverage.droppedEdges} 条显示边` : ''}。
-          切换到「综合网络」或提高节点上限可查看跨人/群关系。
-        </div>
-      )}
-      {!isKnowledgeMode && graph.coverage?.derived
-        && (graph.coverage.derived.truncated
-          || graph.coverage.derived.commonSuppressedByAuthoritative > 0) && (
-        <div className={kitCss.textMeta} role="status">
-          客户端关系补位有界：共同群候选 {graph.coverage.derived.commonGroup.candidatePairs} 对、
-          检查 {graph.coverage.derived.commonGroup.consideredPairs} 对
-          {graph.coverage.derived.commonGroup.truncatedSources > 0
-            ? `（${graph.coverage.derived.commonGroup.truncatedSources} 个群超成员上限）`
-            : ''}；
-          共同成员候选 {graph.coverage.derived.commonMember.candidatePairs} 对、
-          检查 {graph.coverage.derived.commonMember.consideredPairs} 对
-          {graph.coverage.derived.commonMember.truncatedSources > 0
-            ? `（${graph.coverage.derived.commonMember.truncatedSources} 个成员关系来源超上限）`
-            : ''}。
-          {graph.coverage.derived.pairWorkExhausted ? ' 已达到客户端配对预算。' : ''}
-          {graph.coverage.derived.commonSuppressedByAuthoritative > 0
-            ? ` 后端权威关系已替代 ${graph.coverage.derived.commonSuppressedByAuthoritative} 次推导。`
-            : ''}
-          {graph.coverage.derived.commonDroppedByEdgeBudget > 0
-            ? ` 显示边预算再忽略 ${graph.coverage.derived.commonDroppedByEdgeBudget} 条共同关系。`
-            : ''}
-        </div>
-      )}
-      {!isKnowledgeMode && graph.coverage?.server && (
-        graph.coverage.server.derived_pairs?.truncated
-        || (graph.coverage.server.message_relations?.truncated_scopes ?? 0) > 0
-        || (graph.coverage.server.observed_edges?.dropped ?? 0) > 0
-        || (graph.coverage.server.message_relations?.dropped_records ?? 0) > 0
-        || (graph.coverage.server.unresolved_actors?.total ?? 0) > 0
-      ) && (
-        <div className={kitCss.textMeta} role="status">
-          后端关系查询有界：共同关系候选 {graph.coverage.server.derived_pairs?.common_group.candidates ?? 0}
-          {' / '}
-          {graph.coverage.server.derived_pairs?.common_member.candidates ?? 0} 对，扫描消息{' '}
-          {graph.coverage.server.message_relations?.scanned ?? 0} 行
-          {graph.coverage.server.observed_edges
-            ? `，观测边返回 ${graph.coverage.server.observed_edges.returned}/${graph.coverage.server.observed_edges.cap}`
-            : ''}
-          {(graph.coverage.server.observed_edges?.dropped ?? 0) > 0
-            ? `、因上限丢弃 ${graph.coverage.server.observed_edges?.dropped ?? 0} 条${droppedEdgeTypesText(graph.coverage.server.observed_edges?.dropped_by_type)}`
-            : ''}
-          {(graph.coverage.server.message_relations?.dropped_records ?? 0) > 0
-            ? `、回复/提及聚合达 ${graph.coverage.server.message_relations?.record_budget ?? 0} 条后丢弃 ${graph.coverage.server.message_relations?.dropped_records ?? 0} 条`
-            : ''}
-          {(graph.coverage.server.unresolved_actors?.total ?? 0) > 0
-            ? `；另有 ${graph.coverage.server.unresolved_actors?.total ?? 0} 条权威引用因未在通讯录/会话中获得稳定人物节点而未连线（成员 ${graph.coverage.server.unresolved_actors?.membership ?? 0}、群主 ${graph.coverage.server.unresolved_actors?.owner ?? 0}、邀请 ${graph.coverage.server.unresolved_actors?.invite ?? 0}、回复/提及 ${graph.coverage.server.unresolved_actors?.message_relation ?? 0}）`
-            : ''}。
-        </div>
-      )}
 
       <div className={css.body}>
         <div className={css.stage}>
@@ -570,7 +555,8 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                 positionScope={positionScope}
                 dark={dark}
                 selectedId={selectedId}
-                onSelect={setSelectedId}
+                onSelect={onSelect}
+                onSelectEdge={onSelectEdge}
                 settings={settings}
                 selfUsername={data?.self ?? undefined}
                 pinnedIds={pinned}
@@ -599,34 +585,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
                 onCreateNote={() => { setNoteEditor({ open: true }) }}
                 onDeleteNote={(node) => { void removeNote(Number(node.id.slice(5)), node.label) }}
               />
-              <div className={css.legend}>
-                {isKnowledgeMode ? (
-                  <>
-                    <span><i className={css.legendDotNote} />紫圆 = 笔记</span>
-                    <span><i className={css.legendLine} />灰线 = [[链接]]</span>
-                    <span><i className={css.legendLine} />虚线圆 = 尚未创建的笔记</span>
-                    {/* 文档实体层：这三类节点是后加的，图例必须补上 —— 光看图分不出
-                        「灰蓝的小点是待补笔记还是章节」。最后一格尤其要紧：虚线在这一层
-                        表示「模型说的」，用户据此决定能不能把它当引用依据。 */}
-                    <span><i className={css.legendDotFile} />绿圆 = 文件</span>
-                    <span><i className={css.legendDotSection} />灰圆 = 章节</span>
-                    <span><i className={css.legendDotEntity} />琥珀圆 = 模型抽出的实体</span>
-                    <span><i className={css.legendLineAmberDash} />虚线 = 推断的关系（文档里没写着）</span>
-                    <span><i className={css.legendBar} />半径 = 连接度</span>
-                  </>
-                ) : (
-                  <>
-                    <span><i className={css.legendDot} />颜色 = 圈子(社区)</span>
-                    <span><i className={css.legendLine} />灰线 = 共同群 / 群结构</span>
-                    <span><i className={css.legendLineGreen} />绿实线 = 好友 / 邀请 / 回复 / @提及等互动</span>
-                    <span><i className={css.legendLineGold} />金虚线 = 同备注编号</span>
-                    <span><i className={css.legendLineBlueDash} />蓝虚线 = 首字相同</span>
-                    <span><i className={css.legendLineBlue} />蓝实线 = 与我亲密度</span>
-                    <span><i className={css.legendBar} />半径 = 消息量</span>
-                    <span>点选节点 = 查看全部关系、方向与权重</span>
-                  </>
-                )}
-              </div>
+              <GraphLegend knowledge={isKnowledgeMode} shape={settings.islandShape} onShape={(islandShape) => { patch({ islandShape }) }} />
             </>
           )}
 
@@ -654,6 +613,8 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               selectedGroupNames={selectedGroupNames}
               selectedClass={selectedClass}
               selectedConnections={selectedConnections}
+              selectedEdge={selectedEdge}
+              onSelectEdge={selectEdge}
               communities={communities}
               focusCommunity={focusCommunity}
               topFriends={topFriends}
@@ -664,8 +625,8 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               pinned={pinned}
               patch={patch}
               setMode={setMode}
-              selectNode={(id) => { setSelectedId(id); canvasRef.current?.centerOn(id) }}
-              clearSelection={() => { setSelectedId(null) }}
+              selectNode={(id) => { onSelect(id); canvasRef.current?.centerOn(id) }}
+              clearSelection={() => { onSelect(null) }}
               focusNode={focusNode}
               togglePin={togglePin}
               setFocusCommunity={setFocusCommunity}
@@ -677,7 +638,7 @@ export function GraphPanel({ variant = 'social', onOpenChat }: {
               clearPinned={() => { setPinned(new Set()) }}
               restoreDefaults={restoreDefaults}
               runAnimation={() => { canvasRef.current?.runAnimation() }}
-              onOpenChat={onOpenChat}
+              onOpenChat={onOpenChat} onOpenPortrait={onOpenPortrait} groupNames={data?.group_names}
               onClose={() => { setRailOpen(false) }}
             />
           )}

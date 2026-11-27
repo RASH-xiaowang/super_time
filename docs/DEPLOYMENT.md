@@ -105,7 +105,52 @@ CI 里已经跑着的两条真机 e2e（都不需要许可证与私钥）：
 - 想完全离线：应用内**没有任何出网开关**（2026-09-30 起已全部移除），
   只能断网或在系统防火墙里禁止 Super Time 出站；出网点逐条清单在 `PRIVACY.md` 第五节。
 
-## 8. 还没闭环的部署项（不要当成已完成）
+## 8. 局域网部署（一台 Super Time 管理多台电脑上的 SuperLanguage）
+
+跨机和本机的差别只有两点：**票据怎么到实例**、**A 怎么拉起 B 的进程**。两条都已经落地。
+
+| 环节 | 本机实例 | 局域网实例 |
+|---|---|---|
+| 实例目录 | `<userData>\wechat\apps\superlanguage\inst-<uuid>` | A 在「新建实例」里填的共享目录 `\\PC-B\共享\inst-x` |
+| 票据 | 命名管道 `\\.\pipe\supertime-app-v1-*`（实例自取） | A 主进程 POST `http://<B-ip>:<port>/api/license/lease`，每 5 分钟续期 |
+| 监听 | 强制 `api-listen=loopback` | `api-listen=lan`（B 的防火墙按来源 IP 收口） |
+| 启动 | A 直接 spawn | A 往共享目录写 `.start-request`，B 上的启动器拉起 exe |
+| 停止/探活 | 子进程句柄 + `/api/*` | `/api/*`（`/api/stop`） |
+
+### 8.1 目标机器（B）准备
+
+1. 装同一版 Super Time（只为了 `SuperLanguage.exe` 与许可证？**不需要**：B 只跑 SuperLanguage，
+   不需要 B 上装 Super Time，也不需要给 B 签授权 —— 授权在 A 上）。
+2. 建共享目录 `\\PC-B\SuperTimeApps`，只给运行账号读写（这是唯一的信任边界）。
+3. Windows 防火墙：允许 SuperLanguage 的入站 TCP，**来源限定为 A 的 IP**。
+   不要放开「任何 IP」：实例令牌等同「能替你发微信」的凭据，而 LAN 上是明文 HTTP。
+4. 这台电脑上的微信必须登录（SuperLanguage 是 UI 自动化，只能驱动本机微信）。
+
+> 启动器 `superlanguage-launch-watch.cmd` **由「部署」自动复制进实例目录**，不需要手工拷。
+> 目标机上双击它（或放进 `shell:startup`）即可：它会先把实例拉起来，然后每 2 秒消费
+> A 写下的 `.start-request`。
+
+### 8.2 授权主机（A）操作
+
+1. 「应用托管」→ 新增实例 → **部署位置选「局域网另一台电脑」** → 填 B 的 IPv4 与共享目录。
+2. 点「部署」：A 把 `SuperLanguage.exe` **与 `superlanguage-launch-watch.cmd`** 一起复制进共享目录，
+   并写入 `instance.ini`（`broker=push`）、`api-enabled.txt`、`api-listen.txt=lan`、`api-token.txt`。
+   启动器复制失败（只读共享、杀软拦截）不会让部署失败，但提示里会写明原因。
+3. 点「启动」：A 写 `.start-request`，B 的启动器拉起 exe；A 探到端口后立刻推送票据。
+   失败会明确区分 `REMOTE_START_UNAVAILABLE`（共享不可写）与 `REMOTE_START_TIMEOUT`
+   （请求写了但实例没响应）。
+4. 「规则配置」→ 托管应用环境 → 选这台实例（地址会自动是 `http://<B-ip>:<port>/webhook/<token>`）。
+5. 卡片上「推送票据」可以在改配额/改 IP 后立即补推，不必等下一个续期周期。
+
+### 8.3 安全前提（不满足就别开）
+
+- 只在受信内网 / VLAN / WireGuard 里用；**不要**把实例端口暴露到公网。
+- B 的防火墙按来源 IP 限定；共享目录只给运行账号。
+- 实例令牌与票据密钥都在 A 的主进程里，渲染层只看到掩码；但 LAN 上是 HTTPS 缺席的明文，
+  抓到令牌就能操控那台电脑发消息 —— 这是这条路的已知代价。
+- 票据 10 分钟到期、15 分钟宽限：A 关机后，远端实例跑完在飞任务就停止领取新任务。
+
+## 9. 还没闭环的部署项（不要当成已完成）
 
 - 代码签名证书与 SmartScreen 信誉：发布链路已接入强制 Authenticode 门禁，但必须配置
   真实证书 secrets 并完成一次签名发版验收；未配置时发布会失败（见

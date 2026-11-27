@@ -75,7 +75,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
         title="通话"
         desc={snap
           ? `${snap.total} 通 · ${snap.peerCount} 位联系人 · 合计 ${fmtDuration(snap.durationSec)}`
-          : '语音/视频通话统计（来自消息库 type-50 的 voip XML）'}
+          : undefined}
         actions={(
           <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>
             {loading ? '读取中…' : '刷新'}
@@ -89,7 +89,7 @@ export function CallsPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       {loading && !snap && <LoadingState variant="compact" label="正在扫描消息库…" />}
 
       {snap && snap.total === 0 && (
-        <EmptyState icon="📞" title="没有通话记录" desc="本机消息库里没有 type-50 的通话消息。" />
+        <EmptyState icon="📞" title="没有通话记录" />
       )}
 
       {snap && snap.total > 0 && (

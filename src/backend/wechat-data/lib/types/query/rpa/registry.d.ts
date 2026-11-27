@@ -4,18 +4,18 @@
  * 新增一个厂商 = 在 `vendors/` 加一个文件 + 在本文件数组里加一行 import；
  * 核心管道、存储、Remote、前端 UI 都不需要改（见 `docs/RPA-VENDOR-TRIGGERS.md` §4.7）。
  *
- * 顺序即 UI 展顺序：内置 `webhook` / `bazhuayu` 在前，其后是外部 RPA 厂商。
+ * 顺序即 UI 顺序：内置 `webhook`，然后是八爪鱼 RPA。
  * `RPA_REGISTRY_VERSION` 是**注册表本身**的版本（用于核对目录快照），与各厂商
  * `descriptor.version`（参数/协议版本）分开维护。
  */
 import type { RpaVendorAdapter } from './types.ts';
 import type { RpaVendorDescriptor } from '../../types-rpa.ts';
-/** 内置 + 外部厂商适配器（顺序即 `listRpaVendors` / UI 顺序）。 */
+/** 内置触发方式（顺序即 `listRpaVendors` / UI 顺序）。 */
 export declare const RPA_VENDORS: RpaVendorAdapter[];
 /** id → 适配器（重复 id 是契约错误，由 `rpa-vendors.contract.spec.ts` 守）。 */
 export declare const RPA_VENDOR_MAP: ReadonlyMap<string, RpaVendorAdapter>;
 /** 注册表版本（目录结构的版本，不是某家厂商的参数版本）。 */
-export declare const RPA_REGISTRY_VERSION = "2026-10-21";
+export declare const RPA_REGISTRY_VERSION = "2026-11-26";
 /**
  * 按 id 找厂商适配器。
  * @param id - 触发方式 id（`webhook` 或厂商 id）。

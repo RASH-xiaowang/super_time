@@ -8,6 +8,7 @@ import type { AccountsSnapshot, SelfProfile, AnnualReport, AnnualSnapshot, AskHi
 import type { ChatCollectTaskResult, ChatCollectTaskSnapshot } from './types.ts';
 import type { RerankWeights } from './query/retrieval/types.ts';
 import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts';
+import type { PortraitVolume } from './types.ts';
 import type { AnnualReview } from './query/annual-review.ts';
 import { GatewayCore } from './gateway-core.ts';
 /** 方法面的一层：继承链上的一环，不单独实例化（abstract：`runSummaryTask` 由更下面那层实现）。 */
@@ -56,6 +57,7 @@ export declare abstract class GatewayRead extends GatewayCore {
         from?: number;
         to?: number;
         direction?: 'asc' | 'desc';
+        sort?: 'time' | 'amount';
     }): RecordsSnapshot;
     /**
      * Contact / group-member search.
@@ -400,6 +402,14 @@ export declare abstract class GatewayRead extends GatewayCore {
     getContact360(options: {
         username: string;
     }): Contact360Snapshot;
+    /**
+     * 批量读取联系人的聊天、图片和朋友圈条数，供好友目录按信息量排序。
+     * @param options - `usernames` 为目录里的好友 id。
+     * @returns 每人三项计数；没有记录的人返回 0。
+     */
+    getPortraitVolumes(options: {
+        usernames: string[];
+    }): Promise<PortraitVolume[]>;
     getCalls(options?: {
         topPeers?: number;
         recentLimit?: number;

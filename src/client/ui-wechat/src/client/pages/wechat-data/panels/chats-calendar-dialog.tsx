@@ -50,7 +50,7 @@ export function ChatsCalendarDialog(props: ChatsCalendarDialogProps): React.JSX.
   useWechatDataUpdated(() => { if (calOpen) void refreshCurrentMonth() })
   if (!calOpen) return null
   return (
-    <div className={cssshell.calOverlay} data-st-dialog="chats-cal" onClick={(e) => { if (e.target === e.currentTarget) setCalOpen(false) }} role="dialog" aria-modal="true">
+    <div className={cssshell.calOverlay} data-edge="right" data-st-dialog="chats-cal" onClick={(e) => { if (e.target === e.currentTarget) setCalOpen(false) }} role="dialog" aria-modal="true">
       <div className={cssshell.calDialog}>
         <div className={cssshell.calHeader}>
           <span className={cssshell.calTitle}>消息日历</span>

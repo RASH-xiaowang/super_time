@@ -44,7 +44,6 @@ export function OfficialAssetsPanel({ onOpenChat }: { onOpenChat?: (username: st
     <div className={kitCss.panelShell}>
       <PanelHeader
         title="公众号"
-        desc="gh_* 账号消息 / 文章规模 · 最近文章 · 本地离线"
         actions={(
           <PanelAction onClick={() => { void reload() }} disabled={loading}>{loading ? '统计中…' : '刷新'}</PanelAction>
         )}

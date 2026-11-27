@@ -11,6 +11,33 @@
 
 签名、载荷结构和私钥位置规则**不在 C++ 里重写**，而是调用同目录的 `engine.js`，由它复用仓库根的 `src/license` 与 `scripts/license-key-path`。这样签发结果与主应用、`npm run license-keygen` / `license-issue` 保持兼容。
 
+## 应用托管（2026-11-24）
+
+功能目录里新增「应用托管」分组与「应用托管实例」功能位（id `apps-superlanguage`）。
+勾选后：
+
+- **「席位（= 应用实例数上限）」同时是这张证允许绑定的 SuperLanguage 实例数**。Super Time
+  自身按设备指纹绑定，不使用这个数字。
+- 点「应用托管额度…」可以再单独指定：实例数（`0` = 跟随席位）、每小时任务上限、允许的能力
+  （会话搜索 / 文本发送 / 附件发送 / 群成员 @）。语义与校验在 `engine.js` 的
+  `buildAppsSection` 与 `src/license/service.js` 的 `getAppEntitlement` 里，
+  界面只负责编辑，算错也签不出非法证。
+- 没勾「应用托管实例」时该按钮是灰的；硬塞额度会被 engine 拒绝
+  （`未勾选「SuperLanguage 应用托管」，不能填写应用额度`）。
+- 高级 / 自动化调用 `engine.js issue` 时，表单可直接带 `apps` 字段：
+
+```json
+{
+  "features": ["wechat-data", "apps-superlanguage"],
+  "seats": 3,
+  "apps": { "superlanguage": { "maxInstances": 3, "caps": ["search", "send"], "maxJobsPerHour": 60 } }
+}
+```
+
+> ⚠️ **新版证书按清单逐项授权**（`featureSchemaVersion = 2`），不再享受旧证「基础位兼容
+> 所有数据模块」的待遇：漏勾哪一项，客户那边就真的没有那一项。界面默认全选，
+> 点过「仅基础」之后签发前请再核对一遍。
+
 ## 启动
 
 先编译（只需一次，或源码变更后）：

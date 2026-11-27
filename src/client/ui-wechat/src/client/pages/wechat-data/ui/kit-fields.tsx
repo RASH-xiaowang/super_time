@@ -150,6 +150,27 @@ export function LoadingState({ label = '加载中…', variant = 'compact', sinc
   )
 }
 
+/**
+ * 整页第一次打开时的说明。
+ *
+ * 列表里的等待用 {@link LoadingState} 一行就够。总览、年度报告这种大块内容
+ * 如果先画一排灰色占位卡，看起来像页面坏了。这里只说正在整理什么，数据到了再铺开。
+ * @param props.title - 正在做的事，例如「正在整理 2026 年的报告」。
+ * @param props.detail - 可选的一句补充，说明算完会出现什么。
+ */
+export function PageBoot({ title, detail }: {
+  title: string
+  detail?: string
+}): React.JSX.Element {
+  return (
+    <div className={css.pageBoot} role="status" aria-live="polite">
+      <span className={css.spinner} aria-hidden="true" />
+      <div className={css.pageBootTitle}>{title}</div>
+      {detail ? <div className={css.pageBootDetail}>{detail}</div> : null}
+    </div>
+  )
+}
+
 /** 空态占位。 */
 export function EmptyState({ icon = '🗂️', title = '暂无数据', desc, action }: {
   icon?: React.ReactNode

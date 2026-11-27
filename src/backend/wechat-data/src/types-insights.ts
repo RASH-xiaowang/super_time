@@ -71,6 +71,30 @@ export interface Contact360Group {
   memberCount: number
 }
 
+/**
+ * 一位联系人在本机留下的内容量：一对一聊天条数、其中的图片条数、朋友圈条数。
+ * 好友目录用三者之和排序。
+ */
+export interface PortraitVolume {
+  username: string
+  messages: number
+  images: number
+  moments: number
+}
+
+/** 根据一位好友的聊天和朋友圈写出的性格速写。 */
+export interface PortraitPersonalityResult {
+  ok: boolean
+  text: string
+  messages: number
+  moments: number
+  error?: string
+  /** 写入本机的时间（Unix 秒）。没有存档时不带。 */
+  savedAt?: number
+  /** 这次是从硬盘读出的，不是刚刚生成的。 */
+  cached?: boolean
+}
+
 /** Contact 360° profile snapshot: cross-domain stats for one username. */
 export interface Contact360Snapshot {
   username: string
@@ -369,6 +393,8 @@ export interface EmoticonItem {
    * 所以只能按这个地址下载一次再落进 decoded 缓存。
    */
   cdnUrl?: string
+  /** 已落盘文件名（相对 decoded_images），网格直接显示，不再逐张再请求。 */
+  file?: string
 }
 
 /** Emoticons snapshot: custom + static emoticons + store packages. */

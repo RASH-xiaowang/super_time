@@ -1,5 +1,5 @@
 /**
- * 会话级 AI 回复的默认大肥鱼 Webhook。
+ * 会话级 AI 回复的默认 Webhook。
  *
  * Webhook 完整地址只保存在本机任务库；读取 API 只返回脱敏端点。默认值按
  * (account_key, chat_username) 隔离，避免切换账号后串用另一账号的发送地址。
@@ -55,6 +55,8 @@ export interface ApplyChatAiReplyDefaultWebhookInput {
   targetName?: string
   greetingText?: string
   note?: string
+  /** 地址来自哪个托管实例；透传给自动绑定的精确规则，便于实例换端口后同步。 */
+  appInstanceId?: string
 }
 
 export type ApplyChatAiReplyDefaultWebhookResult =
@@ -334,7 +336,7 @@ export function applyChatAiReplyDefaultWebhook(
       endpoint: '',
       updatedAt: 0,
       reason: 'missing_webhook',
-      error: '请先配置默认大肥鱼 Webhook',
+      error: '请先配置默认 Webhook',
     }
   }
   const requestedChatName = textOf(input?.chatName, NAME_MAX)
@@ -355,6 +357,7 @@ export function applyChatAiReplyDefaultWebhook(
       ? {}
       : { greetingText: textOf(input.greetingText, TEXT_MAX) }),
     ...(input?.note === undefined ? {} : { note: textOf(input.note, NOTE_MAX) }),
+    ...(input?.appInstanceId ? { appInstanceId: textOf(input.appInstanceId, 64) } : {}),
     enabled: true,
   })
   if (!rule.ok) {

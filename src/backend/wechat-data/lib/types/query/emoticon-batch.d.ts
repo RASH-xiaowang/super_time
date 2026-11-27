@@ -16,4 +16,4 @@ import type { EmoticonDataUrlsResult } from '../types.ts';
 export declare function fetchEmoticonDataUrlsBatch(decryptedDir: string, decodedDir: string, base: string | undefined, items: ReadonlyArray<{
     md5: string;
     emojiUrl?: string;
-}> | undefined): Promise<EmoticonDataUrlsResult>;
+}> | undefined, localOnly?: boolean): Promise<EmoticonDataUrlsResult>;

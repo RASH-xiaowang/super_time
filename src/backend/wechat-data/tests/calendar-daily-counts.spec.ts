@@ -132,7 +132,7 @@ describe('getDailyCounts：按月统计每天的消息数', () => {
     const dec = makeRoot()
     mkdirSync(join(dec, 'message'), { recursive: true })
     onlyMine(dec, 'message_0.db', [tsLocal(2024, 3, 10)])
-    expect(isAbsolute(relative(REPO_ROOT, dec)), '夹具跑进仓库里了').toBe(true)
+    expect(dec.toLowerCase().startsWith(REPO_ROOT.toLowerCase()), '夹具跑进仓库里了').toBe(false)
     expect(existsSync(join(REPO_ROOT, 'msg')), '仓库根被建出了 msg/').toBe(false)
     expect(existsSync(join(REPO_ROOT, 'message')), '仓库根被建出了 message/').toBe(false)
     const r = getDailyCounts(dec, ME, 2024, 3)

@@ -22,10 +22,9 @@ export function MessageListRules(props: {
     <section className={css.rulesPane}>
       <div className={css.rulesHead}>
         <div>
-          <h3 className={css.rulesTitle}>首次触发文本与 Webhook 路由 · {props.total}</h3>
+          <h3 className={css.rulesTitle}>Webhook 路由 · {props.total}</h3>
           <p className={css.rulesDesc}>
-            每条规则同时决定任务首次触发时插入的文本和下游地址。不同触发对象可分别配置；
-            匹配顺序为会话名 + 触发对象精确匹配 → 同会话任意对象 → 任意会话指定对象 → 全局规则。
+            每条规则决定消息队列发往哪个地址。匹配顺序为会话名 + 触发对象精确匹配 → 同会话任意对象 → 任意会话指定对象 → 全局规则。
           </p>
         </div>
         <Button
@@ -50,7 +49,6 @@ export function MessageListRules(props: {
         <EmptyState
           icon="↗"
           title="还没有 Webhook 规则"
-          desc="先为会话名或触发对象配置一个下游地址；没有匹配规则的记录会保持“待执行”。"
           action={(
             <Button
               size="sm"
@@ -73,15 +71,20 @@ export function MessageListRules(props: {
                   <div className={css.ruleScope} title={ruleScope(rule)}>{ruleScope(rule)}</div>
                   <code className={css.ruleUrl} title={rule.webhookUrl}>{rule.webhookUrl}</code>
                   <div className={css.ruleMeta}>
-                    <span className={css.ruleGreeting} title={rule.greetingText || '你好'}>
-                      首次触发：{rule.greetingText || '你好'}
-                    </span>
                     {rule.note && (
                       <span className={css.ruleNote} title={rule.note}>备注：{rule.note}</span>
                     )}
                   </div>
                 </div>
                 <div className={css.ruleActions}>
+                  {rule.appInstanceId !== '' && (
+                    <Badge
+                      tone="cyan"
+                      title={'地址由托管应用实例提供；实例重启换了端口会自动同步到这条规则'}
+                    >
+                      托管应用
+                    </Badge>
+                  )}
                   <Badge tone={rule.enabled ? 'green' : 'default'}>{rule.enabled ? '启用' : '停用'}</Badge>
                   <Button
                     size="sm"

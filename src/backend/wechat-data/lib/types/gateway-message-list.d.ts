@@ -10,6 +10,9 @@ export declare abstract class GatewayMessageList extends GatewayAnalysisOps {
      * Feather Webhook 只能是基础发送地址 `/webhook/<token>`；
      * `/webhook/<token>/resources` 只是附件上传端点，会被拒绝保存。
      * 旧记录若已有资源端点快照，dispatch 会在任何出网前失败并记录 `failed`。
+     *
+     * 保存会顺带把地址回填到同类 pending 记录；回填后立刻调度一次投递批次，
+     * 兑现界面上「配置发送地址后自动投递」的承诺，不再等下一次任务触发。
      */
     saveMessageListRule(options: MessageListRuleInput): MessageListMutationResult;
     deleteMessageListRule(options: {

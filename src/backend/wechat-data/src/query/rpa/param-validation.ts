@@ -29,6 +29,8 @@ const PARAM_SOURCE_LABELS: Record<RpaParamSource, string> = {
   imagesJson: '触发图片（JSON 链接清单）',
   imageCount: '触发图片数量',
   firstImageUrl: '首张图片链接',
+  textsJson: '触发人最近文本（JSON 清单）',
+  textCount: '触发人文本条数',
   fixed: '固定值',
   template: '自定义模板',
 }

@@ -20,15 +20,15 @@ export function ThinkingSection({ text, live, duration, variant = 'section', lab
   const bodyId = useId()
   const headingId = useId()
   const durationText = formatAskRunDuration(duration)
-  const summary = [
-    live ? '生成中' : '',
-    durationText ? `耗时 ${durationText}` : '',
-    text !== '' ? `${String(text.length)} 字` : '',
-  ].filter(Boolean).join(' · ')
+  const title = !live && durationText
+    ? `${label}（用时 ${durationText}）`
+    : label
+  const summary = text !== '' ? `${String(text.length)} 字` : ''
 
   return (
     <section
       className={`${processCss.section} ${variant === 'trace' ? processCss.traceThinking : ''}`}
+      data-block="thinking"
       data-status={live ? 'running' : undefined}
       data-variant={variant}
       data-thinking-state={expanded ? 'open' : 'closed'}
@@ -49,7 +49,7 @@ export function ThinkingSection({ text, live, duration, variant = 'section', lab
         </svg>
         {live && <span className={processCss.liveDot} aria-hidden="true" />}
         <span id={headingId} className={processCss.sectionTitle} role="heading" aria-level={4}>
-          {label}
+          {title}
         </span>
         <span className={processCss.sectionSummary}>{summary}</span>
         <span className={css.srOnly}>{expanded ? '，已展开' : '，已折叠'}</span>

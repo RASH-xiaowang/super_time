@@ -20,6 +20,16 @@
   container-type: inline-size;
 }
 .panel[hidden] { display: none; }
+.panel[data-edge="drawer"] {
+  position: fixed;
+  top: var(--st-titlebar-h, 0px);
+  right: 0;
+  bottom: 0;
+  z-index: 80;
+  flex: none;
+  width: min(420px, 92vw);
+  box-shadow: var(--nm-shadow-popup);
+}
 /* 全屏：消息流由会话壳隐藏，右栏吃满剩余宽度。 */
 .panel[data-full] {
   flex: 1 1 auto;
@@ -132,11 +142,11 @@
 .thread { display: flex; flex-direction: column; gap: 20px; }
 .turnUser { display: flex; justify-content: flex-end; }
 .userBubble {
-  max-width: min(66%, 420px); padding: var(--nm-s-2) 11px;
-  font-size: 12.5px; line-height: 1.6; color: var(--nm-text-1);
-  background: color-mix(in srgb, var(--nm-text-1) 6%, var(--nm-bg-card));
-  border: 0;
-  border-radius: 14px 14px 4px 14px;
+  max-width: min(72%, 480px); padding: 10px 14px;
+  font-size: 14px; line-height: 1.65; color: var(--nm-text-1);
+  background: color-mix(in srgb, var(--nm-text-1) 8%, var(--nm-bg-card));
+  border: 1px solid var(--nm-border);
+  border-radius: 16px 16px 6px 16px;
   white-space: pre-wrap; word-break: break-word;
   overflow-wrap: anywhere;
 }

@@ -355,6 +355,75 @@
   background: var(--nm-bg-input);
 }
 
+/* ── 工具调用块（2026-11-24）──
+   它回答「为什么这条回复像没查数据」：哪些工具被调、成没成、失败原因、各花多久。 */
+.traceTools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-sm);
+  background: var(--nm-bg-input);
+}
+
+.traceToolsTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-xs);
+  font-weight: 600;
+}
+
+.traceToolList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.traceTool {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+}
+
+/* 失败的调用整行用警告色：这是「为什么没结果」的入口，不该和成功的看起来一样 */
+.traceTool:not([data-ok='true']) .traceToolState {
+  color: var(--nm-warning-text);
+}
+
+.traceToolName {
+  flex: none;
+  color: var(--nm-text-1);
+  font-family: var(--nm-font-mono, monospace);
+}
+
+.traceToolState {
+  flex: none;
+  color: var(--nm-text-2);
+}
+
+.traceToolCode {
+  min-width: 0;
+  color: var(--nm-warning-text);
+  overflow-wrap: anywhere;
+}
+
+.traceToolElapsed {
+  margin-left: auto;
+  flex: none;
+  color: var(--nm-text-3);
+  font-variant-numeric: tabular-nums;
+}
+
 .traceSummary {
   display: flex;
   align-items: center;

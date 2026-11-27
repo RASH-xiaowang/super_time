@@ -19,6 +19,9 @@ describe('AI 回复人格配置接线', () => {
     expect(menu).toContain('aria-label="AI回复设置"')
     expect(menu).toContain('onOpenSettings')
     expect(menu).toContain('<ChatAiReplySettingsDialog')
+    const settings = read('chat-ai-reply-settings-dialog.tsx')
+    expect(settings).toContain('<Drawer')
+    expect(settings).not.toContain('<Dialog')
     expect(menu).toContain('chatUsername={curSession.username}')
     expect(menu).toContain('initialPrompt={aiReply.personaPrompt}')
     expect(menu).toContain('initialSplitReply={aiReply.splitReply}')
@@ -100,17 +103,20 @@ describe('AI 回复人格配置接线', () => {
     expect(dialog).toContain('kbId: kbEnabled ? kbId : 0')
   })
 
-  it('上下文时间窗：会话级下拉、随草稿一起保存、文案说明窗口外不进提示词', () => {
+  it('上下文时间窗：会话级下拉、随草稿一起保存', () => {
     const dialog = read('chat-ai-reply-settings-dialog.tsx')
     expect(dialog).toContain('上下文时间窗')
     expect(dialog).toContain('CONTEXT_WINDOW_OPTIONS')
     expect(dialog).toContain('contextWindowHours')
-    expect(dialog).toContain('不会进提示词')
+    expect(dialog).toContain('aria-label="安全红线"')
+    expect(dialog).toContain('查无资料时的回复')
     // 弹窗要能收到当前值，否则每次打开都显示「不限」并把它写回去。
     const menu = read('chat-ai-reply-menu.tsx')
     expect(menu).toContain('initialContextWindowHours={aiReply.contextWindowHours}')
+    expect(menu).toContain('initialHandoff={aiReply.safetyHandoff}')
     const controls = read('use-chats-ai-reply-controls.ts')
     expect(controls).toContain('contextWindowHours: chatAiReply.state?.contextWindowHours ?? 0')
+    expect(controls).toContain('safetyHandoff: chatAiReply.state?.safetyHandoff ?? \'\'')
   })
 
   it('预设人格：弹窗渲染选择器，点选只填草稿、不写库', () => {

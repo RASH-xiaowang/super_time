@@ -137,6 +137,15 @@
   background: var(--nm-bg-card);
   padding: 8px;
 }
+.emoScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  padding: 10px;
+}
 .grid {
   flex: 1;
   min-height: 0;
@@ -195,7 +204,14 @@
   background: var(--nm-bg-hover);
   border-color: var(--nm-border-hover);
 }
-.emoPh { font-size: 30px; }
+.emoPh {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--nm-text-3);
+}
 /* 表情格里的真图：固定 72px 见方、只做 contain（动图自己会动，别加 transition） */
 .emoImg { width: 72px; height: 72px; object-fit: contain; display: block; }
 .emoMd5 { font-size: var(--nm-fs-xs, 11px); color: var(--nm-text-2); font-family: var(--ds-font-family-code); }
@@ -344,8 +360,14 @@
   background: rgba(0, 0, 0, 0.4);
 }
 .lightboxCard {
-  width: min(600px, 92vw);
-  max-height: 78vh;
+  box-sizing: border-box;
+  width: min(720px, 92vw, calc(78vh * 1.6));
+  min-width: min(480px, 92vw);
+  max-width: min(720px, 92vw);
+  aspect-ratio: 16 / 10;
+  height: min(450px, 78vh, calc(92vw * 0.625));
+  min-height: min(320px, 78vh);
+  max-height: min(450px, 78vh);
   display: flex;
   flex-direction: column;
   background: var(--nm-bg-card);

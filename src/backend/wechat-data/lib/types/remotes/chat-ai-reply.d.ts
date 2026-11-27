@@ -40,6 +40,7 @@ export declare function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInp
         chatUsername: string;
         chatName?: string;
         webhookUrl: string;
+        appInstanceId?: string;
     }): ChatAiReplyDefaultWebhookMutationResult;
     /**
      * 读取当前账号已开启 AI 回复的会话摘要（单聊与群聊）。
@@ -64,6 +65,8 @@ export declare function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInp
         kbEnabled?: boolean;
         kbId?: number;
         contextWindowHours?: number;
+        safetyHandoff?: string;
+        safetyBlocked?: string;
         expectedRevision?: number;
     }): ChatAiReplyMutationResult;
     scanOnce(): Promise<ChatAiReplyScanResult>;

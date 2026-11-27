@@ -65,6 +65,9 @@ const panel = [
   'KbFiles.tsx',
   'kb-files-support.tsx',
   'kb-files-panel.tsx',
+  'kb-upload.ts',
+  'use-kb-upload.ts',
+  'kb-upload-dropzone.tsx',
   'kb-files-detail.tsx',
   'kb-batch-actions.tsx',
   'use-kb-files-polling.ts',
@@ -141,12 +144,14 @@ describe('导航项：文件是「知识库」下的可路由隐藏项（侧栏�
     expect(visibleItems.map(i => i.tab)).toContain('groupinsights')
     expect(visibleItems.map(i => i.tab)).toContain('messagelist')
     // v41 adds exactly one desktop Agent entry; kbfiles itself remains hidden.
-    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(17)
+    // 2026-11-24：「本地工具」是另一个桌面可见入口（16 → 17），kbfiles 仍是 hidden。
+    // 2026-11-24（续）：「应用托管」也是桌面可见入口（17 → 18），kbfiles 仍是 hidden。
+    expect(renderedInGroups.length, '侧栏入口数变了 —— 文件是段条内的视图，不该改变这个数').toBe(18)
   })
 
   it('与 kb / knowledge 同在「联系人与社交」组（同源数据同组）', () => {
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'kbfiles'))
-    expect(group?.label, 'kbfiles 被挪到别的分组了').toBe('概览 · 问答 · 总结')
+    expect(group?.label, 'kbfiles 被挪到别的分组了').toBe('概览')
     expect(group?.items.some(it => it.tab === 'kb'), 'kb 与 kbfiles 不在同一组').toBe(true)
   })
 
@@ -219,7 +224,8 @@ describe('作用域：每个请求都带当前库，缓存键只经 kbCacheKey',
     // 2026-11-13：首屏改为按「用户已翻到的条数」取一页（`{ limit }`）以支持加载更多；
     // 第一个位置参数仍必须是 kbId —— 这条判据守的就是它。
     expect(panelCode).toMatch(/apiGetKbFiles\(kbId[,)]/)
-    expect(panelCode).toMatch(/apiAddKbFiles\(kbId, paths\)/)
+    expect(panelCode).toContain('createKbUploadManager(apiAddKbFiles)')
+    expect(panelCode).toContain('await register(kbId, [items[i]!.path!])')
     expect(panelCode).toMatch(/apiDeleteKbFile\(kbId, f\.id\)/)
     expect(panelCode).toMatch(/apiSetKbFileRag\(kbId, f\.id, next\)/)
   })
@@ -324,12 +330,13 @@ describe('添加：走原生对话框钩子，逐项回执', () => {
     expect(panelCode, '对话框过滤器里出现了硬编码的扩展名数组').not.toMatch(/extensions: \['/)
   })
 
-  it('上传结果逐项落地：收 results / failed，并把失败项逐条说出来', () => {
-    expect(panelCode).toMatch(/setReport\(\{ added: r\.added, failed: r\.failed, failures \}\)/)
-    expect(panelCode).toContain('r.results')
-    expect(panel, '部分成功时没有把失败项列出来 —— 用户会把没问题的文件也重选一遍').toContain('个未加入')
-    // `results` 与 `paths` 按下标对齐是后端契约（对每个 path 依次 push 一条）
-    expect(panelCode).toMatch(/\.map\(\(res, i\) => \(\{ res, path: paths\[i\] \?\? '' \}\)\)/)
+  it('逐文件RPC保留回执，展示成功、失败和未开始状态', () => {
+    expect(panelCode).toContain('await register(kbId, [items[i]!.path!])')
+    expect(panelCode).toContain('result.results[0]')
+    expect(panelCode).toContain("status: 'failed'")
+    expect(panelCode).toContain("status: 'added'")
+    expect(panelCode).toContain("status: 'cancelled'")
+    expect(panel).toContain('个未加入')
   })
 
   it('重复项按**内容指纹**措辞，不按文件名', () => {
@@ -338,9 +345,10 @@ describe('添加：走原生对话框钩子，逐项回执', () => {
     expect(panelCode).toContain("r.code === 'duplicate'")
   })
 
-  it('一个都没进来才算失败（不是「有一次失败就报错」）', () => {
-    expect(panelCode).toMatch(/if \(r\.added > 0\)/)
-    expect(panelCode).toMatch(/setError\(r\.error \?\? '这些文件都没有加入知识库'\)/)
+  it('部分成功不抛弃已登记文件，失败项独立可见', () => {
+    expect(panelCode).toContain("batch.items.filter(item => item.status === 'added').length")
+    expect(panelCode).toContain("batch.items.filter(item => item.status === 'failed').length")
+    expect(panelCode).toContain('res?.error || result.error')
   })
 })
 
@@ -497,7 +505,7 @@ describe('正文检索：一个搜索框同时做文件名过滤与正文检索�
   })
 
   it('切库时把上一个库的检索结果一起清掉', () => {
-    const from = panelCode.indexOf('setReport(null)')
+    const from = panelCode.indexOf("setFilter('all')", panelCode.indexOf('const upload ='))
     expect(from).toBeGreaterThan(0)
     const tail = panelCode.slice(from, from + 400)
     expect(tail, '切库没清检索结果 —— 乙库界面里会列着甲库的命中').toContain('setSearch(null)')

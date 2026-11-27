@@ -43,6 +43,8 @@ export interface ImageBatchItem {
     thumb?: boolean;
     /** 相对 decoded_images 的落盘路径（与单张入口同义）；前端据此拼 wechat-media:// 省 base64。 */
     file?: string;
+    /** 局域网取图地址。局域网访问开着且文件已落盘时才有。 */
+    lanUrl?: string;
     error?: string;
 }
 export declare function createMediaRemotes(rc: MediaRemoteCtx): {
@@ -72,6 +74,7 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
             md5: string;
             emojiUrl?: string;
         }>;
+        localOnly?: boolean;
     }): Promise<EmoticonDataUrlsResult>;
     getImageOriginal(options: {
         username?: string;
@@ -300,7 +303,8 @@ export declare function createMediaRemotes(rc: MediaRemoteCtx): {
     getEmoticons(options?: {
         limit?: number;
         offset?: number;
-    }): EmoticonsSnapshot;
+        includeOthers?: boolean;
+    }): Promise<EmoticonsSnapshot>;
     getFiles(options?: {
         limit?: number;
         offset?: number;

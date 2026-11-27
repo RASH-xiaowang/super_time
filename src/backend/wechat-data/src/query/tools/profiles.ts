@@ -90,7 +90,7 @@ const SESSION_TOOLS: readonly ToolName[] = [
   'search_revoked',
 ]
 
-/** 微信问答的完整工具集：20 个工具（含 search_hybrid）。 */
+/** 微信问答的完整工具集（含 search_hybrid 与社交圈摘要）。 */
 const WECHAT_TOOLS: readonly ToolName[] = [
   'search_messages',
   'search_semantic',
@@ -101,6 +101,7 @@ const WECHAT_TOOLS: readonly ToolName[] = [
   'get_message_context',
   'search_contacts',
   'get_contact_detail',
+  'get_social_summary',
   'search_moments',
   'search_favorites',
   'search_files',
@@ -172,7 +173,9 @@ export function filterToolsForProfile(
 ): RetrievalTool[] {
   const p = typeof profile === 'string' ? getAnswerProfile(profile) : profile
   const allowed = new Set<string>(p.allowedTools)
-  return tools.filter(t => allowed.has(t.name))
+  // 自定义工具（`custom: true`）不在代码白名单里，但它已经是用户显式创建并启用的：
+  // 只放行标记过的，不放行「名字恰好不在白名单」的任意工具。
+  return tools.filter(t => allowed.has(t.name) || t.custom === true)
 }
 
 /**
@@ -218,9 +221,67 @@ function fail(
   }
 }
 
+/** 像账号标识（wxid / 公众号 / 群 id），而不是给人看的群名。 */
+function looksLikeAccountId(value: string): boolean {
+  return /^(?:wxid_[A-Za-z0-9_-]+|gh_[A-Za-z0-9_-]+|.+@chatroom)$/i.test(value.trim())
+}
+
+/** 去掉空白和括号后再比，避免「【官方】群名」和「官方群名」被当成两个群。 */
+function normalizeGroupLabel(value: string): string {
+  return value.replace(/[\s\u3000【】\[\]「」"'“”]/g, '').toLowerCase()
+}
+
+/**
+ * 锁定群之后，模型经常把群名填进 `group`（工具说明允许填群名）。
+ * 那不是另一个群：收敛成锁定的 `@chatroom`。真正换了一个群号才拒绝。
+ * 已知显示名时，对不上的名字仍然拒绝，避免静默去查当前群却假装查了别的群。
+ */
+function alignLockedGroup(
+  toolName: string,
+  nextArgs: Record<string, unknown>,
+  lockedUsername: string,
+  displayName: string,
+  adjustments: ProfileScopeAdjustment[],
+): ProfileScopeDecision | null {
+  if (!/@chatroom$/i.test(lockedUsername)) {
+    return {
+      ok: false,
+      error: fail(toolName, 'unsupported_scope', '当前会话不是群聊，无法查询群资料', {
+        username: lockedUsername,
+      }),
+    }
+  }
+  const requested = argString(nextArgs['group']).trim()
+  if (requested === '' || requested.toLowerCase() === lockedUsername.toLowerCase()) {
+    nextArgs['group'] = lockedUsername
+    return null
+  }
+  const knownName = displayName.trim()
+  const sameName = knownName !== '' && normalizeGroupLabel(requested) === normalizeGroupLabel(knownName)
+  const otherAccount = looksLikeAccountId(requested)
+  if (otherAccount || (knownName !== '' && !sameName)) {
+    return {
+      ok: false,
+      error: fail(toolName, 'scope_violation', '请求的群与当前会话不一致', {
+        argument: 'group',
+        locked: lockedUsername,
+        requested,
+      }),
+    }
+  }
+  adjustments.push({
+    field: 'group',
+    locked: lockedUsername,
+    requested,
+    message: `group: 「${requested}」已按当前群收敛为 ${lockedUsername}`,
+  })
+  nextArgs['group'] = lockedUsername
+  return null
+}
+
 /** 范围校验结果。 */
 export interface ProfileScopeAdjustment {
-  field: 'from' | 'to'
+  field: 'from' | 'to' | 'group'
   locked: string
   requested: string
   message: string
@@ -255,8 +316,11 @@ const USERNAME_ARG_TOOLS = new Set<ToolName>([
 /**
  * 文件索引（hardlink.db）没有会话列：锁定会话时无论模型是否自带 username，
  * 都必须明确拒绝，否则不带 username 的调用会静默查全库（审计 2026-11-13）。
+ *
+ * 2026-11-24 起导出：自定义 alias 会以**自己的名字**通过 profile 白名单，但它内部
+ * 转发给目标工具 —— 目标若属于这一类，必须在保存时就拒绝，否则它会绕过这条限制。
  */
-const LOCKED_SCOPE_UNSUPPORTED_TOOLS = new Set<ToolName>(['search_files'])
+export const LOCKED_SCOPE_UNSUPPORTED_TOOLS = new Set<ToolName>(['search_files'])
 
 /**
  * 哪些工具声明了 `from` / `to` 参数。
@@ -323,6 +387,31 @@ function readDay(
 }
 
 /**
+ * 白名单判定（抽出来只为控制 `enforceProfileScope` 的行数：它已经在 250 行棘轮边缘）。
+ *
+ * 自定义工具（`customAllowed`）直接放行：它不在代码白名单里，但已经由用户显式创建并启用，
+ * 再套一层白名单只会让「新建后不能调用」。
+ * @param profile - 已解析的 profile。
+ * @param toolName - 模型请求的工具名（不可信）。
+ * @param customAllowed - 是否是自定义工具。
+ * @returns 拒绝时的结构化错误；放行时 null。
+ */
+function denyNotAllowed(
+  profile: AnswerProfile,
+  toolName: string,
+  customAllowed: boolean,
+): ProfileScopeDecision | null {
+  if (customAllowed || isToolAllowed(profile, toolName)) return null
+  return {
+    ok: false,
+    error: fail(toolName, 'tool_not_allowed', `工具 ${toolName} 不在 ${profile.label} 的允许范围内`, {
+      profile: profile.id,
+      tool: toolName,
+    }),
+  }
+}
+
+/**
  * 校验并归一执行范围。
  *
  * 这是**纯函数**：不读库、不执行工具，便于运行时与单测复用。
@@ -342,6 +431,8 @@ function readDay(
  * @param toolName - 模型请求的工具名（不可信）。
  * @param args - 模型参数（不可信；只读，不修改原对象）。
  * @param ctx - 执行上下文（只读，不修改原对象）。
+ * @param customAllowed - 该工具是否是用户自定义工具（`custom: true`）：自定义工具不在
+ *   代码白名单里，而它已经由用户显式创建并启用，所以白名单这一关放行。
  * @returns 归一后的参数与上下文，或结构化错误。
  */
 export function enforceProfileScope(
@@ -349,19 +440,14 @@ export function enforceProfileScope(
   toolName: string,
   args: Record<string, unknown>,
   ctx: ToolContext,
+  customAllowed = false,
 ): ProfileScopeDecision {
   const profile = typeof profileRef === 'string' ? getAnswerProfile(profileRef) : profileRef
-  if (!isToolAllowed(profile, toolName)) {
-    return {
-      ok: false,
-      error: fail(toolName, 'tool_not_allowed', `工具 ${toolName} 不在 ${profile.label} 的允许范围内`, {
-        profile: profile.id,
-        tool: toolName,
-      }),
-    }
-  }
+  const denied = denyNotAllowed(profile, toolName, customAllowed)
+  if (denied !== null) return denied
 
-  if (profile.requireKb && (ctx.kbId === undefined || ctx.kbId <= 0)) {
+  // 自定义工具不读知识库，所以「这个入口必须先选库」这条不该拦它。
+  if (!customAllowed && profile.requireKb && (ctx.kbId === undefined || ctx.kbId <= 0)) {
     return {
       ok: false,
       error: fail(toolName, 'not_configured', `${profile.label} 需要先选择知识库`, {
@@ -450,28 +536,8 @@ export function enforceProfileScope(
     }
 
     if (toolName === 'get_group_detail') {
-      // 私聊没有群档案：锁定会话不是群时直接明确拒绝，避免模型把
-      // 「查不到群」误当成「这个群不存在」。判据与 group-tools 保持一致（忽略大小写）。
-      if (!/@chatroom$/i.test(lockedUsername)) {
-        return {
-          ok: false,
-          error: fail(toolName, 'unsupported_scope', '当前会话不是群聊，无法查询群资料', {
-            username: lockedUsername,
-          }),
-        }
-      }
-      const requestedGroup = argString(nextArgs['group']).trim()
-      if (requestedGroup !== '' && requestedGroup !== lockedUsername) {
-        return {
-          ok: false,
-          error: fail(toolName, 'scope_violation', '请求的群与当前会话不一致', {
-            argument: 'group',
-            locked: lockedUsername,
-            requested: requestedGroup,
-          }),
-        }
-      }
-      if (requestedGroup === '') nextArgs['group'] = lockedUsername
+      const aligned = alignLockedGroup(toolName, nextArgs, lockedUsername, ctx.scope?.displayName ?? '', adjustments)
+      if (aligned !== null) return aligned
     }
   }
 
@@ -600,7 +666,7 @@ function guardTool(profile: AnswerProfile, tool: RetrievalTool): RetrievalTool {
   return {
     ...tool,
     run: async (args, ctx): Promise<ToolResult> => {
-      const decision = enforceProfileScope(profile, tool.name, args ?? {}, ctx)
+      const decision = enforceProfileScope(profile, tool.name, args ?? {}, ctx, tool.custom === true)
       if (!decision.ok) return decision.error
       const result = await tool.run(decision.args, decision.ctx)
       if (decision.adjustments.length === 0) return result

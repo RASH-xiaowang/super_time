@@ -19,6 +19,8 @@ export const RPA_PARAM_SOURCES: readonly RpaParamSource[] = [
   'imagesJson',
   'imageCount',
   'firstImageUrl',
+  'textsJson',
+  'textCount',
   'fixed',
   'template',
 ]

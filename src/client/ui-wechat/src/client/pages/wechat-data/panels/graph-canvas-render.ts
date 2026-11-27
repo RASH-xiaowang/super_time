@@ -7,16 +7,233 @@
  * @module graph-canvas-render
  */
 
-import { DEFAULT_GRAPH_SETTINGS, communityColor, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
+import { DEFAULT_GRAPH_SETTINGS, communityColor, remarkIslandCounts, remarkIslandKey, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import { MAX_ZOOM, Point, docColors, edgeStroke, fitCamera, graphTheme, nodeOpacity, nodeRadius, pickNode, worldToScreen } from './graph-canvas-theme.ts'
-import { FONT_STACK, LABEL_FONT, LABEL_MIN_ZOOM, REVEAL_MIN_SCALE, Scene, estimateTextWidth, labelCandidates, screenRadius, selectEdges } from './graph-canvas-geometry.ts'
+import { FONT_STACK, LABEL_FONT, LABEL_MIN_ZOOM, REVEAL_MIN_SCALE, Scene, estimateTextWidth, frameEdges, labelCandidates, screenRadius } from './graph-canvas-geometry.ts'
+
+function hexAlpha(hex: string, alpha: number): string {
+  const raw = hex.replace('#', '')
+  if (raw.length !== 6) return hex
+  const r = Number.parseInt(raw.slice(0, 2), 16)
+  const g = Number.parseInt(raw.slice(2, 4), 16)
+  const b = Number.parseInt(raw.slice(4, 6), 16)
+  return `rgba(${r},${g},${b},${alpha})`
+}
+
+function islandTitle(members: readonly GNode[], edges: readonly GEdge[]): string {
+  const ids = new Set(members.map((node) => node.id))
+  const tally = new Map<string, number>()
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue
+    for (const relation of edge.relations ?? []) {
+      if (relation.kind !== 'class') continue
+      for (const note of relation.evidence ?? []) {
+        const text = note.trim()
+        if (text.length < 2 || text.length > 18 || text.includes(':') || text.includes('#')) continue
+        tally.set(text, (tally.get(text) ?? 0) + 1)
+      }
+    }
+  }
+  let best = ''
+  let bestCount = 0
+  for (const [text, count] of tally) {
+    if (count > bestCount || (count === bestCount && text < best)) {
+      best = text
+      bestCount = count
+    }
+  }
+  return best
+}
+
+const ISLAND_PAD = 14
+
+function haloOf(
+  members: readonly GNode[],
+  scene: Scene,
+  community: number,
+  title: string,
+): { community: number; x: number; y: number; w: number; h: number; title: string } | null {
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  let count = 0
+  for (const node of members) {
+    const pos = scene.positions.get(node.id)
+    if (!pos) continue
+    const rad = scene.radii.get(node.id) ?? 8
+    minX = Math.min(minX, pos.x - rad)
+    minY = Math.min(minY, pos.y - rad)
+    maxX = Math.max(maxX, pos.x + rad)
+    maxY = Math.max(maxY, pos.y + rad)
+    count += 1
+  }
+  if (count < 2) return null
+  return {
+    community,
+    title,
+    x: minX - ISLAND_PAD,
+    y: minY - ISLAND_PAD,
+    w: maxX - minX + ISLAND_PAD * 2,
+    h: maxY - minY + ISLAND_PAD * 2,
+  }
+}
+/** 每个分组一块浅色底，底色只包住这座岛自己的人。没有分组的人不另成岛。 */
+function communityHalos(scene: Scene): Array<{ community: number; x: number; y: number; w: number; h: number; title: string }> {
+  const counts = remarkIslandCounts(scene.nodes)
+  const groups = new Map<number, GNode[]>()
+  for (const node of scene.nodes) {
+    if (node.kind === 'self' || node.community < 0) continue
+    const list = groups.get(node.community)
+    if (list) list.push(node)
+    else groups.set(node.community, [node])
+  }
+  const halos: Array<{ community: number; x: number; y: number; w: number; h: number; title: string }> = []
+  for (const [community, members] of groups) {
+    if (members.length < 2) continue
+    const named = remarkIslandKey(members[0] as GNode, counts)
+    const halo = haloOf(members, scene, community, named || islandTitle(members, scene.edges))
+    if (halo) halos.push(halo)
+  }
+  return halos
+}
+
+function traceRoundBox(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number): void {
+  const radius = Math.min(16, w / 2, h / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + radius, y)
+  ctx.arcTo(x + w, y, x + w, y + h, radius)
+  ctx.arcTo(x + w, y + h, x, y + h, radius)
+  ctx.arcTo(x, y + h, x, y, radius)
+  ctx.arcTo(x, y, x + w, y, radius)
+  ctx.closePath()
+}
+
+function paintCommunityHalos(ctx: CanvasRenderingContext2D, scene: Scene): void {
+  const alpha = scene.dark ? 0.18 : 0.13
+  ctx.save()
+  for (const halo of communityHalos(scene)) {
+    const origin = worldToScreen(scene.camera, scene.size, halo.x, halo.y)
+    const far = worldToScreen(scene.camera, scene.size, halo.x + halo.w, halo.y + halo.h)
+    const x = Math.min(origin.x, far.x)
+    const y = Math.min(origin.y, far.y)
+    const w = Math.abs(far.x - origin.x)
+    const h = Math.abs(far.y - origin.y)
+    const color = communityColor(halo.community)
+    traceRoundBox(ctx, x, y, w, h)
+    ctx.fillStyle = hexAlpha(color, alpha)
+    ctx.fill()
+    ctx.strokeStyle = hexAlpha(color, scene.dark ? 0.28 : 0.22)
+    ctx.lineWidth = 1
+    ctx.stroke()
+  }
+  ctx.restore()
+}
+
+function bridgeEdge(edge: GEdge, communityById: ReadonlyMap<string, number>): boolean {
+  const left = communityById.get(edge.source) ?? -1
+  const right = communityById.get(edge.target) ?? -1
+  return left >= 0 && right >= 0 && left !== right
+}
+
+function strokeGraphEdges(
+  ctx: CanvasRenderingContext2D,
+  scene: Scene,
+  edges: readonly GEdge[],
+  theme: ReturnType<typeof graphTheme>,
+  stubIds: ReadonlySet<string>,
+  hoverId: string | null,
+): void {
+  const { camera: cam, size, settings } = scene
+  const k = cam.k
+  const revealMap = scene.reveal ?? null
+  ctx.save()
+  ctx.lineCap = 'round'
+  const communityById = new Map(scene.nodes.map((node) => [node.id, node.community]))
+  if (revealMap == null && hoverId == null && !settings.showArrows) {
+    const batches = new Map<string, { color: string; width: number; dash: number[]; alpha: number; pts: number[] }>()
+    for (const edge of edges) {
+      const a = scene.positions.get(edge.source)
+      const b = scene.positions.get(edge.target)
+      if (!a || !b) continue
+      const sa = worldToScreen(cam, size, a.x, a.y)
+      const sb = worldToScreen(cam, size, b.x, b.y)
+      const stroke = edgeStroke(edge, theme, settings, stubIds)
+      const dashed = stroke.dashed ? 1 : 0
+      const alpha = bridgeEdge(edge, communityById) ? 0.22 : 1
+      const key = `${stroke.color}|${stroke.width}|${dashed}|${alpha}`
+      let batch = batches.get(key)
+      if (!batch) {
+        batch = {
+          color: stroke.color,
+          width: stroke.width,
+          dash: dashed ? [4 / Math.max(k, 0.5), 4 / Math.max(k, 0.5)] : [],
+          alpha,
+          pts: [],
+        }
+        batches.set(key, batch)
+      }
+      batch.pts.push(sa.x, sa.y, sb.x, sb.y)
+    }
+    for (const batch of batches.values()) {
+      ctx.beginPath()
+      ctx.globalAlpha = batch.alpha
+      ctx.setLineDash(batch.dash)
+      ctx.strokeStyle = batch.color
+      ctx.lineWidth = batch.width
+      const pts = batch.pts
+      for (let i = 0; i < pts.length; i += 4) {
+        ctx.moveTo(pts[i] ?? 0, pts[i + 1] ?? 0)
+        ctx.lineTo(pts[i + 2] ?? 0, pts[i + 3] ?? 0)
+      }
+      ctx.stroke()
+    }
+    ctx.restore()
+    return
+  }
+  const revealOf = (id: string): number => (revealMap ? revealMap.get(id) ?? 1 : 1)
+  for (const edge of edges) {
+    const a = scene.positions.get(edge.source)
+    const b = scene.positions.get(edge.target)
+    if (!a || !b) continue
+    if (hoverId != null && edge.source !== hoverId && edge.target !== hoverId) continue
+    const edgeReveal = Math.min(revealOf(edge.source), revealOf(edge.target))
+    if (edgeReveal <= 0) continue
+    ctx.globalAlpha = edgeReveal
+    const sa = worldToScreen(cam, size, a.x, a.y)
+    const sb = worldToScreen(cam, size, b.x, b.y)
+    const stroke = edgeStroke(edge, theme, settings, stubIds)
+    const width = Math.max(0.3, stroke.width * (hoverId != null ? 1.6 : 1))
+    ctx.beginPath()
+    ctx.setLineDash(stroke.dashed ? [4 / Math.max(k, 0.5), 4 / Math.max(k, 0.5)] : [])
+    ctx.strokeStyle = stroke.color
+    ctx.lineWidth = width
+    ctx.moveTo(sa.x, sa.y)
+    ctx.lineTo(sb.x, sb.y)
+    ctx.stroke()
+    if (settings.showArrows) {
+      const angle = Math.atan2(sb.y - sa.y, sb.x - sa.x)
+      const head = arrowSize(width, k)
+      const ends = arrowEnds(edge.bidirectional)
+      if (ends.target) {
+        const r = screenRadius(scene.radii.get(edge.target) ?? 8, k) + 2
+        drawArrowHead(ctx, sb.x - Math.cos(angle) * r, sb.y - Math.sin(angle) * r, angle, head, stroke.color)
+      }
+      if (ends.source) {
+        const r = screenRadius(scene.radii.get(edge.source) ?? 8, k) + 2
+        drawArrowHead(ctx, sa.x + Math.cos(angle) * r, sa.y + Math.sin(angle) * r, angle + Math.PI, head, stroke.color)
+      }
+    }
+  }
+  ctx.restore()
+}
 
 /**
  * 把场景画到 ctx 上。调用方负责 `ctx.setTransform(dpr,…)` 与清屏。
  *
- * 绘制顺序：边 → 节点圆盘/头像 → 描边环 → 标签 → 悬停气泡。后画的盖住先画的，
+  * 绘制顺序：圈子底色 → 边 → 节点圆盘/头像 → 描边环 → 标签 → 悬停气泡。后画的盖住先画的，
  * 所以「悬停/选中的节点在最上面」是靠把它们的节点序挪到末尾实现的。
  * @param ctx - 画布上下文（CSS 像素坐标系）。
  * @param scene - 场景。
@@ -28,52 +245,17 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
   const k = cam.k
   const stubIds = new Set(scene.nodes.filter(n => n.stub === true || n.kind === 'stub').map(n => n.id))
   const hoverId = scene.hoverNodeId
-  const edges = scene.edgesToDraw ?? selectEdges(scene.edges, scene.nodes)
+  const pack = scene.edgesToDraw ? { drawn: scene.edgesToDraw, spokes: new Map<string, GEdge>() } : frameEdges(scene.edges, scene.nodes)
+  const focus = hoverId ?? scene.selectedId
+  const spoke = focus ? pack.spokes.get(focus) : undefined
+  const edges = spoke ? pack.drawn.concat(spoke) : pack.drawn
   /** 出现动画里某节点当前的显现进度；没有动画时恒为 1。 */
   const revealMap = scene.reveal ?? null
   const revealOf = (id: string): number => (revealMap ? revealMap.get(id) ?? 1 : 1)
 
-  // ── 边 ──
-  ctx.save()
-  ctx.lineCap = 'round'
-  for (const e of edges) {
-    const a = scene.positions.get(e.source)
-    const b = scene.positions.get(e.target)
-    if (!a || !b) continue
-    if (hoverId != null && e.source !== hoverId && e.target !== hoverId) continue
-    // 出现动画：边要**两端都出现之后**才跟着淡入 —— 只按一端算的话，
-    // 新出现的节点会先拖着一条连向「还不存在的邻居」的线，看着像断线
-    const edgeReveal = Math.min(revealOf(e.source), revealOf(e.target))
-    if (edgeReveal <= 0) continue
-    ctx.globalAlpha = edgeReveal
-    const sa = worldToScreen(cam, size, a.x, a.y)
-    const sb = worldToScreen(cam, size, b.x, b.y)
-    const stroke = edgeStroke(e, theme, settings, stubIds)
-    const width = Math.max(0.3, stroke.width * (hoverId != null ? 1.6 : 1))
-    ctx.beginPath()
-    ctx.setLineDash(stroke.dashed ? [4 / Math.max(k, 0.5), 4 / Math.max(k, 0.5)] : [])
-    ctx.strokeStyle = stroke.color
-    ctx.lineWidth = width
-    ctx.moveTo(sa.x, sa.y)
-    ctx.lineTo(sb.x, sb.y)
-    ctx.stroke()
-    if (settings.showArrows) {
-      // 箭头内缩到节点环之外，别被圆盘盖住；两端都画的只有互惠关系（共同群 / 亲密度），
-      // 有方向的 [[链接]] 与「沉淀来源」只画指向 target 的那一端。
-      const angle = Math.atan2(sb.y - sa.y, sb.x - sa.x)
-      const size = arrowSize(width, k)
-      const ends = arrowEnds(e.bidirectional)
-      if (ends.target) {
-        const r = screenRadius(scene.radii.get(e.target) ?? 8, k) + 2
-        drawArrowHead(ctx, sb.x - Math.cos(angle) * r, sb.y - Math.sin(angle) * r, angle, size, stroke.color)
-      }
-      if (ends.source) {
-        const r = screenRadius(scene.radii.get(e.source) ?? 8, k) + 2
-        drawArrowHead(ctx, sa.x + Math.cos(angle) * r, sa.y + Math.sin(angle) * r, angle + Math.PI, size, stroke.color)
-      }
-    }
-  }
-  ctx.restore()
+  // ── 圈子底色，再画边 ──
+  paintCommunityHalos(ctx, scene)
+  strokeGraphEdges(ctx, scene, edges, theme, stubIds, hoverId)
 
   // ── 节点：先画普通节点，悬停/选中的最后画（压在最上层） ──
   const order: GNode[] = []
@@ -194,10 +376,12 @@ export function drawScene(ctx: CanvasRenderingContext2D, scene: Scene): { labels
     }
     ctx.restore()
 
-    // ── 描边环：社区色 2px；悬停变白加粗；选中加青色光环；固定画黄虚线 ──
+    // ── 描边环：头像保持细灰边；悬停变深、选中变绿；固定画黄虚线 ──
     const ringColor = isHover || isSelected
       ? (isSelected ? theme.ringSelected : theme.ringHover)
-      : commColor || (opacity >= 1 ? theme.ring : theme.ringDim)
+      : n.kind === 'self'
+        ? theme.ringSelected
+        : (opacity >= 1 ? theme.ring : theme.ringDim)
     ctx.save()
     ctx.globalAlpha = (isHover || isSelected ? 1 : opacity) * reveal
     if (isSelected) {
@@ -637,10 +821,22 @@ export function sceneToSvg(
   const theme = graphTheme(scene.dark)
   const { size, camera: cam, settings } = scene
   const stubIds = new Set(scene.nodes.filter(n => n.stub === true || n.kind === 'stub').map(n => n.id))
-  const edges = scene.edgesToDraw ?? selectEdges(scene.edges, scene.nodes)
+  const edges = scene.edgesToDraw ?? frameEdges(scene.edges, scene.nodes).drawn
   const parts: string[] = []
   parts.push(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${size.w}" height="${size.h}" viewBox="0 0 ${size.w} ${size.h}">`)
   parts.push(`<rect width="${size.w}" height="${size.h}" fill="${theme.bg}"/>`)
+  const haloAlpha = scene.dark ? 0.18 : 0.13
+  for (const halo of communityHalos(scene)) {
+    const origin = worldToScreen(cam, size, halo.x, halo.y)
+    const far = worldToScreen(cam, size, halo.x + halo.w, halo.y + halo.h)
+    const x = Math.min(origin.x, far.x)
+    const y = Math.min(origin.y, far.y)
+    const w = Math.abs(far.x - origin.x)
+    const h = Math.abs(far.y - origin.y)
+    const color = communityColor(halo.community)
+    parts.push(`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${w.toFixed(2)}" height="${h.toFixed(2)}" rx="16" fill="${color}" fill-opacity="${haloAlpha}" stroke="${color}" stroke-opacity="0.22"/>`)
+  }
+  const communityById = new Map(scene.nodes.map((node) => [node.id, node.community]))
   const clip = (id: string): string => `clip-${id.replace(/[^a-zA-Z0-9_-]/g, '_')}`
   // 边的描边
   parts.push('<g fill="none">')
@@ -652,7 +848,8 @@ export function sceneToSvg(
     const sb = worldToScreen(cam, size, b.x, b.y)
     const stroke = edgeStroke(e, theme, settings, stubIds)
     const dash = stroke.dashed ? ` stroke-dasharray="${(4 / Math.max(cam.k, 0.5)).toFixed(2)}"` : ''
-    parts.push(`<line x1="${sa.x.toFixed(2)}" y1="${sa.y.toFixed(2)}" x2="${sb.x.toFixed(2)}" y2="${sb.y.toFixed(2)}" stroke="${stroke.color}" stroke-width="${stroke.width.toFixed(2)}"${dash}/>`)
+    const bridge = bridgeEdge(e, communityById) ? ' opacity="0.22"' : ''
+    parts.push(`<line x1="${sa.x.toFixed(2)}" y1="${sa.y.toFixed(2)}" x2="${sb.x.toFixed(2)}" y2="${sb.y.toFixed(2)}" stroke="${stroke.color}" stroke-width="${stroke.width.toFixed(2)}"${dash}${bridge}/>`)
     if (settings.showArrows) {
       // 与画布绘制同一套口径（arrowEnds / arrowSize），否则导出的图与屏幕所见不一致
       const angle = Math.atan2(sb.y - sa.y, sb.x - sa.x)
@@ -711,7 +908,7 @@ export function sceneToSvg(
       parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${sr.toFixed(2)}" fill="${commColor || theme.disc}"${op}/>`)
     }
     if (!isStub) {
-      const ring = commColor || theme.ring
+      const ring = n.kind === 'self' ? theme.ringSelected : theme.ring
       const pinned = scene.pinnedIds.has(n.id) ? ' stroke-dasharray="3 3"' : ''
       parts.push(`<circle cx="${s.x.toFixed(2)}" cy="${s.y.toFixed(2)}" r="${(sr + 0.75).toFixed(2)}" fill="none" stroke="${ring}" stroke-width="2"${pinned}${op}/>`)
     }

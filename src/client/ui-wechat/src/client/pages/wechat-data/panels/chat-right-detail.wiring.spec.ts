@@ -77,7 +77,6 @@ describe('详情内容', () => {
     expect(DETAIL).not.toContain('apiAnalyzeMessage')
     expect(DETAIL).not.toContain('apiSuggestReplies')
     expect(DETAIL).not.toContain('remote()')
-    expect(DETAIL).toContain('这里只展示过程，不发任何请求')
   })
 
   it('④ 留痕缺失时分情况说清楚，而不是留白', () => {

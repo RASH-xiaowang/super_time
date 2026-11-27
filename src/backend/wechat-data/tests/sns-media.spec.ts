@@ -99,7 +99,7 @@ describe('resolveSnsImageDataUrl', () => {
 
     const first = await resolveSnsImageDataUrl(base, AES_KEY, 0x60, nobody)
     expect(first.url, '这批文件里没有目标 md5').toBeUndefined()
-    const after1 = snsAttachProgressForTest(base)
+    const after1 = snsAttachProgressForTest(base, AES_KEY, 0x60)
     expect(after1, '第一趟应当建起索引').toBeDefined()
     expect(after1?.decoded ?? 0, '单次解密量必须有上限（这正是"单次有界"）').toBeLessThanOrEqual(ATTACH_BUDGET_FILES)
     expect(after1?.decoded ?? 0, '而且确实干活了').toBeGreaterThan(0)
@@ -110,20 +110,20 @@ describe('resolveSnsImageDataUrl', () => {
     //    （真机 `[sns-trace]` 曾经是 7 个未命中各付 25ms）。这条把它钉住：
     //    同一时刻再调一次，进度**不许**前进。
     await resolveSnsImageDataUrl(base, AES_KEY, 0x60, nobody)
-    expect(snsAttachProgressForTest(base)?.decoded ?? 0, '闸门期内不该再推进一次').toBe(after1?.decoded ?? 0)
+    expect(snsAttachProgressForTest(base, AES_KEY, 0x60)?.decoded ?? 0, '闸门期内不该再推进一次').toBe(after1?.decoded ?? 0)
 
     // ④ 过了闸门期 ⇒ 必须继续推进（进度只会前进、不会卡死）
     vi.setSystemTime(new Date(Date.now() + 200))
     await resolveSnsImageDataUrl(base, AES_KEY, 0x60, nobody)
-    const after2 = snsAttachProgressForTest(base)
+    const after2 = snsAttachProgressForTest(base, AES_KEY, 0x60)
     expect(after2?.decoded ?? 0, '过了闸门期必须接着上一趟继续').toBeGreaterThan(after1?.decoded ?? 0)
 
     // ⑤ 一直推进下去必须清空队列，且每个文件都算过
-    for (let round = 0; round < 200 && (snsAttachProgressForTest(base)?.pending ?? 0) > 0; round += 1) {
+    for (let round = 0; round < 200 && (snsAttachProgressForTest(base, AES_KEY, 0x60)?.pending ?? 0) > 0; round += 1) {
       vi.setSystemTime(new Date(Date.now() + 200))
       await resolveSnsImageDataUrl(base, AES_KEY, 0x60, nobody)
     }
-    const drained = snsAttachProgressForTest(base)
+    const drained = snsAttachProgressForTest(base, AES_KEY, 0x60)
     expect(drained?.pending ?? -1, '一直调用下去必须把队列清空（进度只会前进、不会卡死）').toBe(0)
     expect(drained?.decoded ?? 0, '清空时应当每个文件都算过了').toBe(total)
     vi.useRealTimers()
@@ -145,7 +145,7 @@ describe('resolveSnsImageDataUrl', () => {
     writeV2(join(dir, 'ffffffffffffffffffffffffffffffff_t.dat'), jpeg)
     const r = await resolveSnsImageDataUrl(base, AES_KEY, 0x60, md5)
     expect(r.url).toBeUndefined()
-    expect(snsAttachProgressForTest(base)?.decoded ?? 0, '一个哈希命名的文件都不该解密').toBe(0)
+    expect(snsAttachProgressForTest(base, AES_KEY, 0x60)?.decoded ?? 0, '一个哈希命名的文件都不该解密').toBe(0)
   })
 })
 

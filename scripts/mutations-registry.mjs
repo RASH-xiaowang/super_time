@@ -256,7 +256,7 @@ const MUTATIONS_BATCH12 = [
     // 2026-11-16（AI 回复记录重新生成 / 专用清理 +2 → 236）：第二十二次跟。
     // 2026-11-18（AI 回复过程留痕 `getChatAiReplyTrace` → 237）：第二十三次跟。
     // 2026-11-18（移除本地 ONNX 决策模型、改为 LLM 消息分析：8 → 1 → 230）：第二十四次跟。
-    from: '238 个 Remote 方法）',
+    from: '236 个 Remote 方法）',
     to: '158 个 Remote 方法）',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
@@ -266,23 +266,23 @@ const MUTATIONS_BATCH12 = [
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
     // 2026-10-19（任务信息页签 +1 → 39）、2026-10-30（新增页签 → 41）；
     // 退役一个可见入口后（→ 40）：锚点跟着真源走。
-    from: '可路由页签共 **41**（其余 23 项',
+    from: '可路由页签共 **42**（其余 23 项',
     to: '可路由页签共 **32**（其余 23 项',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/docs-consistency.wiring.spec.ts',
   },
   {
     id: 'M20-merged-section-key-typo',
-    why: '把某个合并组的分段 key 拼错（ledger → ledgr）—— 深链 #ledger 会静默落回第一段，必须发现（2026-10-19 分段标签从「月度汇总」改名为「汇总」，锚点跟着新标签走）',
+    why: '把某个合并组的分段 key 拼错（files → filez）—— 深链 #files 会静默落回第一段，必须发现（2026-11-24 资金账本并成 FundsView 后，ledger 不再是分段 key，锚点改到「文件」段）',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: "{ key: 'ledger', label: '汇总',",
-    to: "{ key: 'ledgr', label: '汇总',",
+    from: "{ key: 'files', label: '文件', keepAlive: false,",
+    to: "{ key: 'filez', label: '文件', keepAlive: false,",
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/merged-sections.wiring.spec.ts',
   },
   {
     id: 'M21-merged-group-count-drift',
     why: '把合并组的组数注释改回旧的「共 6 组」—— 组数注释与代码必须一致',
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/WechatDataPanel.tsx',
-    from: '共 9 组**合并视图',
+    from: '共 8 组**合并视图',
     to: '共 6 组**合并视图',
     spec: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/merged-sections.wiring.spec.ts',
   },

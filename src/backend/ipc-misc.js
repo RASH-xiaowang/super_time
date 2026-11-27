@@ -12,6 +12,7 @@
  *   buildDiagnosticReport / installWebContentsGuards（后两个原来直接靠模块作用域，靠标识符审计才抓出来）。
  */
 const { bumpMutationEpoch } = require('./mutation-gate.js');
+const { fitWindow16x10 } = require('./main-window.js');
 
 /** 许可证变化会改变可写范围；成功后开新代际，阻挡旧代际的排队写。 */
 function bumpLicenseEpoch(result) {
@@ -290,21 +291,22 @@ function registerShellWindowIpc(reg, deps) {
     const win = getMainWindow();
     return win && !win.isDestroyed() ? win : null;
   };
-  /** 退出全屏时用的「合适尺寸」：启动基准 1440×900，按当前显示器工作区留 10% 边距并居中。 */
-  const SUITABLE_W = 1440;
-  const SUITABLE_H = 900;
-  const MIN_W = 960;
-  const MIN_H = 640;
+  /** 退出全屏时用的「合适尺寸」：启动基准 1440×900（16:10），按当前显示器工作区留 10% 边距并居中。 */
   const suitableBounds = (display) => {
     const wa = display.workArea;
-    const width = Math.max(MIN_W, Math.min(SUITABLE_W, Math.floor(wa.width * 0.9)));
-    const height = Math.max(MIN_H, Math.min(SUITABLE_H, Math.floor(wa.height * 0.9)));
+    const fitted = fitWindow16x10(Math.floor(wa.width * 0.9), Math.floor(wa.height * 0.9));
     return {
-      x: wa.x + Math.max(0, Math.round((wa.width - width) / 2)),
-      y: wa.y + Math.max(0, Math.round((wa.height - height) / 2)),
-      width,
-      height,
+      x: wa.x + Math.max(0, Math.round((wa.width - fitted.width) / 2)),
+      y: wa.y + Math.max(0, Math.round((wa.height - fitted.height) / 2)),
+      width: fitted.width,
+      height: fitted.height,
     };
+  };
+  const lockAspect = (win) => {
+    if (typeof win.setAspectRatio === 'function') win.setAspectRatio(16 / 10);
+  };
+  const unlockAspect = (win) => {
+    if (typeof win.setAspectRatio === 'function') win.setAspectRatio(0);
   };
   reg.onIpc('window:fullscreen-toggle', () => {
     const win = liveWindow();
@@ -321,12 +323,14 @@ function registerShellWindowIpc(reg, deps) {
         && restore.height >= Math.round(wa.height * 0.95);
       const outside = restore.width > wa.width || restore.height > wa.height;
       win.setBounds(nearlyFull || outside ? suitableBounds(display) : restore);
+      lockAspect(win);
       win.webContents.send('window:fullscreen-changed', false);
       return;
     }
     // 多屏：按窗口**当前所在**显示器取工作区，而不是主屏。
     const display = screen.getDisplayMatching(win.getBounds());
     savedBounds = win.getBounds();
+    unlockAspect(win);
     win.setBounds(display.workArea);
     win.webContents.send('window:fullscreen-changed', true);
   });

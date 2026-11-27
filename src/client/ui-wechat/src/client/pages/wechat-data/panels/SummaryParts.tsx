@@ -272,9 +272,6 @@ export function SummaryEmpty({ isSingleDay, modelReady, onOpenSettings, onGenera
     <div className={css.card}>
       <div className={css.empty}>
         <div className={css.emptyTitle}>还没有这一段的总结</div>
-        <div className={css.emptyHint}>选好上面的时间范围，点「{go}」即可；结果自动存进历史，随时回看。</div>
-        {/* 三步信息压成一行（不再是一张占满高度的三列卡） */}
-        <div className={css.emptySteps}>选时间范围 → 生成总结 → 回看与复制</div>
         <div className={css.emptyActions}>
           <button type="button" className={css.primaryBtn} onClick={() => { onGenerate?.() }}>{go}</button>
           {!modelReady && (

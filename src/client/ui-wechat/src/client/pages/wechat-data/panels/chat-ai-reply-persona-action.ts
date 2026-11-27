@@ -38,6 +38,8 @@ export async function saveChatAiReplyPersona(
     kbEnabled: boolean
     kbId: number
     contextWindowHours: number
+    safetyHandoff: string
+    safetyBlocked: string
   },
 ): Promise<boolean> {
   const latest = context.latestRef.current
@@ -67,6 +69,8 @@ export async function saveChatAiReplyPersona(
       kbEnabled: draft.kbEnabled,
       kbId: draft.kbId,
       contextWindowHours: draft.contextWindowHours,
+      safetyHandoff: draft.safetyHandoff,
+      safetyBlocked: draft.safetyBlocked,
       expectedRevision: context.state.revision,
     })
     if (context.requestIdRef.current !== requestId) return false

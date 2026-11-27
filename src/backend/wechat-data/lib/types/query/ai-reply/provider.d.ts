@@ -1,5 +1,5 @@
 /**
- * “大肥鱼”插件适配层。
+ * 发送端插件适配层。
  *
  * 当前支持两种已确认的发送协议：
  *  · `/send/text`：`{talker,text}`；
@@ -14,9 +14,9 @@
  * 也不自行出网。真正 POST 由消息列表 dispatch 完成。
  */
 import type { MessageListRecord } from '../../types.ts';
-/** 大肥鱼 `/webhook/<token>` 发送端点；资源上传子路径不算发送端点。 */
+/**  `/webhook/<token>` 发送端点；资源上传子路径不算发送端点。 */
 export declare function isFeatherWebhookEndpoint(url: string): boolean;
-/** 大肥鱼附件上传子路径；它不是发送消息的 Webhook。 */
+/** 附件上传子路径；它不是发送消息的 Webhook。 */
 export declare function isFeatherResourceEndpoint(url: string): boolean;
 /** 发送端按 UTF-16 code unit 计数；超限时给出可执行的拆分/缩短提示。 */
 export declare function featherTextCapacityError(value: string, label: string, kind: 'name' | 'message'): string | undefined;
@@ -31,7 +31,7 @@ export interface FeatherCapacityInput {
 export declare function featherRequestCapacityError(input: FeatherCapacityInput): string | undefined;
 type FeatherRecordShape = Pick<MessageListRecord, 'chatName' | 'targetName' | 'text' | 'source' | 'chatUsername'>;
 /**
- * 记录落库/补全前的容量闸门。只有命中大肥鱼发送端点时才套用字段上限；
+ * 记录落库/补全前的容量闸门。只有命中发送端点时才套用字段上限；
  * 通用 Webhook 仍保留自己的协议空间。
  */
 export declare function featherRecordCapacityError(record: FeatherRecordShape, webhookUrl: string): string | undefined;

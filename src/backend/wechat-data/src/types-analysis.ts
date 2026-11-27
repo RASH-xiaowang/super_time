@@ -95,6 +95,12 @@ export interface MessageAnalysisResult {
 
 /** 一次模型调用的过程留痕（详情视图用）。 */
 export interface ReplyTrace {
+  /** Public sources and stage-only metadata; never raw tool arguments. */
+  toolCalls?: import('./query/reply-tools/types.ts').ReplyToolObservation[]
+  toolSources?: import('./query/reply-tools/types.ts').ReplyToolSource[]
+  toolDegraded?: string
+  /** True when returned candidates use a safe evidence fallback rather than model text. */
+  toolEvidenceGuarded?: boolean
   /** 实际发给模型的 system 提示词（已过隐私闸）。 */
   systemPrompt: string
   /** 实际发给模型的 user 提示词（已过隐私闸）。 */

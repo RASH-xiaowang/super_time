@@ -1,5 +1,5 @@
 /**
- * “大肥鱼”插件适配层。
+ * 发送端插件适配层。
  *
  * 当前支持两种已确认的发送协议：
  *  · `/send/text`：`{talker,text}`；
@@ -26,7 +26,7 @@ function textOf(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-/** 大肥鱼 `/webhook/<token>` 发送端点；资源上传子路径不算发送端点。 */
+/**  `/webhook/<token>` 发送端点；资源上传子路径不算发送端点。 */
 export function isFeatherWebhookEndpoint(url: string): boolean {
   try {
     return /^\/webhook\/[^/]+\/?$/i.test(new URL(url).pathname)
@@ -35,7 +35,7 @@ export function isFeatherWebhookEndpoint(url: string): boolean {
   }
 }
 
-/** 大肥鱼附件上传子路径；它不是发送消息的 Webhook。 */
+/** 附件上传子路径；它不是发送消息的 Webhook。 */
 export function isFeatherResourceEndpoint(url: string): boolean {
   try {
     return /^\/webhook\/[^/]+\/resources\/?$/i.test(new URL(url).pathname)
@@ -53,8 +53,8 @@ export function featherTextCapacityError(
   const max = kind === 'message' ? FEATHER_MESSAGE_MAX_UTF16 : FEATHER_TARGET_MAX_UTF16
   if (value.length <= max) return undefined
   return kind === 'message'
-    ? `大肥鱼 ${label} 最多 ${String(max)} 个 UTF-16 字符（当前 ${String(value.length)}），请拆分为多条消息`
-    : `大肥鱼 ${label} 最多 ${String(max)} 个 UTF-16 字符（当前 ${String(value.length)}），请缩短发送目标名称`
+    ? ` ${label} 最多 ${String(max)} 个 UTF-16 字符（当前 ${String(value.length)}），请拆分为多条消息`
+    : ` ${label} 最多 ${String(max)} 个 UTF-16 字符（当前 ${String(value.length)}），请缩短发送目标名称`
 }
 
 export interface FeatherCapacityInput {
@@ -83,7 +83,7 @@ export function featherRequestCapacityError(input: FeatherCapacityInput): string
   const bytes = jsonUtf8Bytes(request)
   return bytes <= FEATHER_REQUEST_MAX_BYTES
     ? undefined
-    : `大肥鱼请求体 ${String(bytes)} 字节，超过发送程序 ${String(FEATHER_REQUEST_MAX_BYTES)} 字节上限；请缩短 target/message 或减少附件 resource_ids`
+    : `请求体 ${String(bytes)} 字节，超过发送程序 ${String(FEATHER_REQUEST_MAX_BYTES)} 字节上限；请缩短 target/message 或减少附件 resource_ids`
 }
 
 type FeatherRecordShape = Pick<
@@ -92,7 +92,7 @@ type FeatherRecordShape = Pick<
 >
 
 /**
- * 记录落库/补全前的容量闸门。只有命中大肥鱼发送端点时才套用字段上限；
+ * 记录落库/补全前的容量闸门。只有命中发送端点时才套用字段上限；
  * 通用 Webhook 仍保留自己的协议空间。
  */
 export function featherRecordCapacityError(
@@ -132,7 +132,7 @@ export function dshBridgeRequestOf(record: MessageListRecord): {
   request?: { talker: string; text: string }
 } {
   if (record.source !== 'ai_reply') {
-    return { ok: false, error: '仅 AI 回复记录允许走大肥鱼适配器' }
+    return { ok: false, error: '仅 AI 回复记录允许走适配器' }
   }
   if (record.images.length > 0) {
     return { ok: false, error: '/send/text 不支持附件，禁止静默丢件' }
@@ -185,7 +185,7 @@ export function featherRequestOf(
   }
   if (resourceIds !== undefined && resourceIds.length > 0 && message !== '') {
     // Feather 的单一任务不能同时粘贴正文和附件；先发资源任务，正文留在记录里。
-    return { ok: false, error: '大肥鱼一次任务只能发送正文或附件，不能混发' }
+    return { ok: false, error: '一次任务只能发送正文或附件，不能混发' }
   }
   const request = {
     target,

@@ -117,8 +117,9 @@
 
 .switchText {
   font-size: 12px;
+  line-height: 1.45;
   color: var(--nm-text-2, #94a3b8);
-  white-space: nowrap;
+  white-space: normal;
 }
 
 /* ── 状态条 ───────────────────────────────────────────── */

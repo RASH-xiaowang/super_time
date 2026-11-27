@@ -4,7 +4,7 @@
  * 主页面和聊天侧画像抽屉都渲染这一个组件，避免同一套规则在两个入口长出不同的
  * 信息层级。两个清晰板块固定为「客户画像」和「客户标签」，标签依据始终可见。
  */
-import { useId, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Contact360Snapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { EmptyState, ErrorState, LoadingState } from '../ui/kit.tsx'
 import { Avatar } from './chats-support.tsx'
@@ -21,8 +21,11 @@ import {
   type CustomerProfileContext,
   type CustomerTag,
 } from './customer-profile.ts'
+import { CustomerContentFeed } from './customer-portrait-feed.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
+import { CardCanvas } from './card-canvas.tsx'
+import { OvSection } from './overview-parts.tsx'
 import { fmtDateTimeSec } from '../utils/format.ts'
 import css from './portraits.module.css'
 
@@ -129,41 +132,22 @@ function ProfileBoard({
 }: Omit<CustomerPortraitViewProps, 'compact'>): React.JSX.Element {
   const activity = customerActivity(snapshot, context)
   const signature = cleanCustomerSignature(identity.description)
-  const headingId = useId()
 
   return (
-    <section className={css.board} aria-labelledby={headingId}>
-      <header className={css.boardHeader}>
-        <div>
-          <h3 className={css.boardTitle} id={headingId}>客户画像</h3>
-          <p className={css.boardDesc}>身份、关系和互动事实，均来自本机微信数据。</p>
-        </div>
-        <span className={css.ruleBadge}>本机规则</span>
-      </header>
-
-      <div className={css.sectionBlock}>
-        <div className={css.sectionHeading}>
-          <h4>身份资料</h4>
-          <span>{categoryText(identity)}</span>
-        </div>
-        <div className={css.factGrid}>
-          <Fact label="显示名称" value={withEnterprise(customerDisplayName(identity), identity.enterpriseName)} />
-          {identity.enterpriseName?.trim() && <Fact label="企业名称" value={identity.enterpriseName.trim()} />}
-          <Fact label="备注" value={identity.remark?.trim() || '未设置'} />
-          <Fact label="昵称" value={identity.nickName?.trim() || '未设置'} />
-          <Fact label="微信号" value={identity.username} />
-          <Fact label="别名" value={identity.alias?.trim() || '未设置'} />
-          <Fact label="所属群" value={groupFactText(identity, snapshot)} />
-          <Fact label="个性签名" value={signature || '未设置'} />
-        </div>
+    <>
+    <OvSection canvasId="portrait-profile" zone="身份" icon="relation" title="客户画像" action={<span className={css.ruleBadge}>本机规则</span>}>
+      <div className={css.factGrid}>
+        <Fact label="显示名称" value={withEnterprise(customerDisplayName(identity), identity.enterpriseName)} />
+        {identity.enterpriseName?.trim() && <Fact label="企业名称" value={identity.enterpriseName.trim()} />}
+        <Fact label="备注" value={identity.remark?.trim() || '未设置'} />
+        <Fact label="昵称" value={identity.nickName?.trim() || '未设置'} />
+        <Fact label="微信号" value={identity.username} />
+        <Fact label="别名" value={identity.alias?.trim() || '未设置'} />
+        <Fact label="所属群" value={groupFactText(identity, snapshot)} />
+        <Fact label="个性签名" value={signature || '未设置'} />
       </div>
-
-      <div className={css.sectionBlock}>
-        <div className={css.sectionHeading}>
-          <h4>互动事实</h4>
-          <span>按最近消息与累计记录计算</span>
-        </div>
-
+    </OvSection>
+    <OvSection canvasId="portrait-activity" zone="互动" icon="trend" title="互动事实">
         {loading && <LoadingState label="正在汇总画像数据…" />}
         {!loading && error && (
           <ErrorState
@@ -221,8 +205,8 @@ function ProfileBoard({
             desc="身份资料仍可查看；互动统计需要本机数据同步完成后才能生成。"
           />
         )}
-      </div>
-    </section>
+    </OvSection>
+    </>
   )
 }
 
@@ -250,7 +234,6 @@ function TagBoard({ identity, snapshot, context }: {
   snapshot: Contact360Snapshot | null
   context: CustomerProfileContext
 }): React.JSX.Element {
-  const headingId = useId()
   const tags = useMemo(
     () => buildCustomerTags(identity, snapshot, context),
     [identity, snapshot, context],
@@ -262,15 +245,7 @@ function TagBoard({ identity, snapshot, context }: {
     .filter((group) => group.items.length > 0)
 
   return (
-    <section className={css.board} aria-labelledby={headingId}>
-      <header className={css.boardHeader}>
-        <div>
-          <h3 className={css.boardTitle} id={headingId}>客户标签</h3>
-          <p className={css.boardDesc}>每条标签都由固定阈值与可复查的本机记录生成，不做意向推断。</p>
-        </div>
-        <span className={css.tagCount}>{tags.length} 个标签</span>
-      </header>
-
+    <OvSection canvasId="portrait-tags" zone="标签" icon="content" title="客户标签" action={<span className={css.tagCount}>{tags.length} 个标签</span>}>
       {grouped.length === 0 ? (
         <EmptyState icon="🏷️" title="暂无标签" desc="当前数据不足，未生成任何可核验标签。" />
       ) : (
@@ -301,9 +276,9 @@ function TagBoard({ identity, snapshot, context }: {
           </div>
           <p>{selected.evidence}</p>
           <small>来源：本机规则自动生成 · 可回到对应数据页核验</small>
-        </div>
+      </div>
       )}
-    </section>
+    </OvSection>
   )
 }
 
@@ -321,7 +296,8 @@ export function CustomerPortraitView({
         context={context}
         onOpenChat={onOpenChat}
       />
-      <div className={css.portraitGrid}>
+      <CardCanvas year={0} scope="portrait">
+        <CustomerContentFeed username={identity.username} />
         <ProfileBoard
           identity={identity}
           snapshot={snapshot}
@@ -331,7 +307,7 @@ export function CustomerPortraitView({
           context={context}
         />
         <TagBoard identity={identity} snapshot={snapshot} context={context} />
-      </div>
+      </CardCanvas>
     </div>
   )
 }

@@ -146,6 +146,14 @@
   gap: var(--nm-s-3);
 }
 
+/* 表格类抽屉：内容区不再自己滚，高度交给里面的面板。 */
+.drawer[data-fill] > .drawerBd {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  gap: 0;
+}
+
 .drawerFt {
   display: flex;
   align-items: center;
@@ -178,8 +186,16 @@
   left: 50%;
   transform: translate(-50%, -50%);
   z-index: 71;
-  width: min(520px, 92vw);
-  max-height: 84vh;
+  box-sizing: border-box;
+  /* 默认弹窗锁成 16:10。更宽的弹窗用自己的双类名覆盖宽高，比例仍是 16:10。 */
+  width: min(640px, 92vw, calc(78vh * 1.6));
+  min-width: min(480px, 92vw);
+  max-width: min(640px, 92vw);
+  aspect-ratio: 16 / 10;
+  height: min(400px, 78vh, calc(92vw * 0.625));
+  min-height: min(320px, 78vh);
+  max-height: min(400px, 78vh);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   background: var(--nm-bg-2);
@@ -192,7 +208,8 @@
 .dialog[data-state='open'] { animation: kitPopIn 0.15s ease-out; }
 
 .dialogBd {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   padding: var(--nm-s-4);
   display: flex;
@@ -225,7 +242,7 @@
  * 从下方升起、顶部露出一条遮罩（点它即关）、高度受键盘影响小。
  *
  * `!important` 在这里是必需的，不是偷懒：`Drawer` 的宽度是**内联 style**
- * （`kit-overlay.tsx` 的 `style={{ width: Math.min(width, 560) }}`），
+ * （`kit-overlay.tsx` 的 `width: min(Npx, 92vw)`，默认 N 不超过 560），
  * 内联样式优先级高于任何选择器，媒体查询不加 `!important` 就压不住它。
  *
  * 圆角只用单值令牌：`theme-geometry.spec.ts` 的复合角白名单是**封闭清单**
@@ -263,8 +280,12 @@
     left: 0;
     right: 0;
     width: 100%;
+    min-width: 0;
     max-width: 100%;
-    max-height: 88dvh;
+    height: 82dvh;
+    min-height: 0;
+    max-height: 82dvh;
+    aspect-ratio: auto;
     transform: none;
     border-radius: var(--nm-r-xl);
     /* 手势条那一段留白，免得底部按钮压在系统手势区里点不到 */

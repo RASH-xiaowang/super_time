@@ -1,6 +1,6 @@
 {
   "name": "super-time-electron",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Super Time —— 把本机微信数据变成可检索、可分析、可导出的 Electron 桌面工作台（仅支持 Windows x64）",
   "main": "main.js",
   "scripts": {
@@ -300,6 +300,16 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    }
+    },
+    "beforePack": "scripts/electron-builder-before-pack.js",
+    "extraResources": [
+      {
+        "from": "build/staged-apps",
+        "to": "apps",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

@@ -31,6 +31,13 @@ export interface EnsureExactMessageListRuleInput {
     greetingText?: string;
     note?: string;
     enabled?: boolean;
+    /**
+     * 地址由哪个托管实例提供（`apps.superlanguage` 实例 id）。
+     *
+     * 默认规则也要记住它：实例换端口后主进程靠这一列把地址同步过来，
+     * 否则「会话级默认 Webhook 指向实例」的规则一重启就指向死端口。
+     */
+    appInstanceId?: string;
 }
 export type EnsureExactMessageListRuleResult = {
     ok: true;
@@ -49,5 +56,15 @@ export type EnsureExactMessageListRuleResult = {
  * 附件、且尚无地址快照的 AI pending 记录，状态始终保持 pending。
  */
 export declare function ensureExactMessageListRule(decryptedDir: string, input: EnsureExactMessageListRuleInput): EnsureExactMessageListRuleResult;
+/**
+ * 任务创建/更新后，保证「会话名 + 触发对象」有一条消息列表规则。
+ *
+ * 已有精确规则不改。没有时新建：下游地址优先沿用同会话规则，其次全局规则；
+ * 都没有就先留空，用户再到规则里补地址。
+ */
+export declare function ensureTaskMessageListRule(db: DatabaseSync, input: {
+    chatName: string;
+    targetName: string;
+}): void;
 /** 按 id 读取规则（桌面端探测已保存地址用）。 */
 export declare function getMessageListRule(decryptedDir: string, id: number): MessageListRule | undefined;

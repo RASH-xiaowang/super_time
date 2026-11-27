@@ -75,7 +75,7 @@ export function HealthPanel({ embedded = false }: {
       ) : (
         <PanelHeader
           title="数据健康中心"
-          desc={`解密库/索引/插件存储/解码缓存占用 · 本地检查${snap ? ` · 快照 ${new Date(snap.updatedAt * 1000).toLocaleString('zh-CN')}` : ''}`}
+          desc={snap ? new Date(snap.updatedAt * 1000).toLocaleString('zh-CN') : undefined}
           actions={(
             <>
               <Button variant="outline" size="sm" onClick={() => { void load() }} disabled={loading}>{loading ? '检查中…' : '重新检查'}</Button>

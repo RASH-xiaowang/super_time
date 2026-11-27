@@ -1,10 +1,9 @@
 /**
  * Single execution timeline shared by WeChat Q&A and session AI Q&A.
  *
- * Tools are the primary rows. The reasoning produced by that round is rendered
- * underneath the tools, so a long thought can never bury the actions that
- * produced it. Legacy runs without round metadata fall back to one trace group
- * with the same "tools first, reasoning second" order.
+ * 一轮助手消息按内容块排：思考（Thinking）在前，系统步骤（Hint）其次，
+ * 工具调用和结果（ToolCall / ToolResult）成对跟在后面。回答整理阶段的思考
+ * 跟在工具结果之后、正式正文之前。没有轮次元数据的旧记录仍落在同一组里。
  */
 import { useId, type ReactNode } from 'react'
 import { formatStageElapsed, type AskStage } from './ask-stage-merge.ts'
@@ -131,8 +130,23 @@ export function RunTraceTimeline(input: {
               </span>
               <span className={processCss.traceGroupSummary}>{groupSummary(group)}</span>
             </div>
+            {reasoning !== undefined && reasoning.phase !== 'synthesis' && (
+              <ThinkingSection
+                key={reasoning.key}
+                text={reasoning.text}
+                live={live}
+                variant="trace"
+                label="已思考"
+              />
+            )}
+            {thinkingPending && (
+              <div className={processCss.traceThinkingPending} data-live="" role="status">
+                <span className={processCss.tracePipelineDot} aria-hidden="true" />
+                <span>本轮思考中…</span>
+              </div>
+            )}
             {group.stages.length > 0 && (
-              <ol className={processCss.tracePipelineList}>
+              <ol className={processCss.tracePipelineList} data-block="hint" aria-label="系统提示">
                 {group.stages.map(stage => (
                   <TracePipelineStage
                     key={stage.key}
@@ -143,24 +157,18 @@ export function RunTraceTimeline(input: {
               </ol>
             )}
             {group.tools.length > 0 && (
-              <ol className={processCss.toolList}>
+              <ol className={processCss.toolList} data-block="tool" aria-label="工具调用与结果">
                 {group.tools.map(tool => input.renderTool(tool))}
               </ol>
             )}
-            {reasoning !== undefined && (
+            {reasoning !== undefined && reasoning.phase === 'synthesis' && (
               <ThinkingSection
                 key={reasoning.key}
                 text={reasoning.text}
                 live={live}
                 variant="trace"
-                label={reasoning.phase === 'synthesis' ? '回答整理思考' : '本轮思考 · 调用前'}
+                label="回答整理思考"
               />
-            )}
-            {thinkingPending && (
-              <div className={processCss.traceThinkingPending} data-live="" role="status">
-                <span className={processCss.tracePipelineDot} aria-hidden="true" />
-                <span>本轮思考中…</span>
-              </div>
             )}
           </section>
         )

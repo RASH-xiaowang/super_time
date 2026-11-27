@@ -284,7 +284,6 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
               微信数据配置
             </>
           )}
-          desc="本地检测 · 数据库密钥 · 图片密钥 · 图片解码 · 语音转写"
         />
       )}
       {/* 宽屏左侧目录、窄屏顶部标签；右侧只承载当前一页。 */}
@@ -476,7 +475,7 @@ function SettingsDesktopPanel({ inDialog = false, initialSection, onNavigateOut,
         </div>
       </div>
 
-      <div className={acctCss.saveBar} hidden={activeKey === 'ai'}>
+      <div className={acctCss.saveBar}>
         <span
           className={acctCss.saveMeta}
           title={pathConfigPath ? `打开路径配置文件：${pathConfigPath}` : '读取路径配置文件…'}

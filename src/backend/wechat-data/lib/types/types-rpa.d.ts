@@ -22,7 +22,7 @@ export type RpaFieldType = 'text' | 'password' | 'number' | 'boolean' | 'select'
  *    `http://<可达地址>:<端口>/api/rpa-media/<token>`，由机器人自己去取。取图要求本机
  *    已打开局域网访问；取不到时该张图片写 `error` 而不是让整条投递失败。
  */
-export type RpaParamSource = 'room' | 'content' | 'at' | 'taskName' | 'keyword' | 'triggeredAt' | 'chatType' | 'taskId' | 'recordId' | 'imagesJson' | 'imageCount' | 'firstImageUrl' | 'fixed' | 'template';
+export type RpaParamSource = 'room' | 'content' | 'at' | 'taskName' | 'keyword' | 'triggeredAt' | 'chatType' | 'taskId' | 'recordId' | 'imagesJson' | 'imageCount' | 'firstImageUrl' | 'textsJson' | 'textCount' | 'fixed' | 'template';
 /** 一条附加参数（存 `triggerConfig[extrasField]`，随厂商参数容器一起发出去）。 */
 export interface RpaParamEntry {
     /** 参数名（发到厂商的 key；同一列表内唯一，且不得与三个语义映射键重名）。 */

@@ -99,7 +99,7 @@ describe('布局重排：只随结构与力度参数发生，且合并连续变�
   it('布局 effect 的依赖只有图与力度指纹 —— 外观参数不该触发整图重排', () => {
     expect(code).toContain('const forceKey = forceKeyOf(settings)')
     const deps = depsOf('useEffect(() => {\n    const graphChanged = previousGraphRef.current !== graph')
-    expect(deps).toBe('[graph, forceKey, relayoutNow, runForcePreview]')
+    expect(deps).toBe('[graph, forceKey, shapeKey, relayoutNow, runForcePreview]')
     for (const cosmetic of ['nodeScale', 'labelOpacity', 'edgeWidth', 'showArrows', 'showLabels', 'showGrid', 'blurNodes']) {
       expect(deps).not.toContain(cosmetic)
     }
@@ -117,7 +117,7 @@ describe('布局重排：只随结构与力度参数发生，且合并连续变�
     expect(fn).toContain('previewLastAtRef.current = startedAt')
     // 预览路径绝不能跑完整布局；否则每个 input 事件都会阻塞主线程
     expect(fn).not.toContain('runLayout(')
-    expect(code).toMatch(/if \(forceChanged && !graphChanged && !propsRef\.current\.settings\.lockLayout\) runForcePreview\(\)/)
+    expect(code).toMatch(/if \(forceChanged && !graphChanged && !shapeChanged && !propsRef\.current\.settings\.lockLayout\) runForcePreview\(\)/)
   })
 
   it('力度指纹只含六个力度参数（混进外观参数 = 拖滑杆就重排）', () => {
@@ -254,7 +254,7 @@ describe('拖拽联动与碰撞：邻居跟着走，且移动/静止都不重叠
    */
   it('pointerdown 建立物理世界：自然长度取按下瞬间 + 固定节点锚定', () => {
     const down = bodyOf('const onPointerDown = (ev: React.PointerEvent<HTMLCanvasElement>): void =>')
-    expect(down).toMatch(/createPhysicsWorld\(p\.graph, positionsRef\.current, radiiRef\.current\)/)
+    expect(down).toMatch(/createPhysicsWorld\(\{ \.\.\.p\.graph, edges: drawn \}, positionsRef\.current, radiiRef\.current\)/)
     expect(down).toMatch(/anchorNodes\(simWorld, p\.pinnedIds \?\? \[\]\)/)
     expect(down).toMatch(/simRef\.current = \{ world: simWorld, id: hit, target: \{ x: pos\?\.x \?\? 0, y: pos\?\.y \?\? 0 \}, releasedAt: 0 \}/)
   })

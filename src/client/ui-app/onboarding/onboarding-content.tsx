@@ -90,16 +90,16 @@ export const QUESTION_CARDS: Array<{
 ]
 
 /**
- * 功能引导：**按侧栏真实分组逐组对齐**（`nav-config.ts` 的 5 组）。
+ * 功能引导：**按侧栏真实分组逐组对齐**（`nav-config.ts` 的 6 组）。
  *
  * `name` 必须与 `NAV_GROUPS` 的 label 逐组同序（防漂移守卫盯着）；`items` 只保留
  * 侧栏真实入口（可见项 + 已合并的 hidden 分段），每组 ≤5 个，避免一屏堆三十多个胶囊。
  */
 export const FEATURE_GROUPS = [
   {
-    name: '概览 · 问答 · 总结',
-    desc: '先看清账号规模，再用自然语言提问；年度/周期报告与知识库都在这一组。问答只检索本机语料，回答带 [n] 来源。',
-    items: ['数据总览', '微信问答', '总结', '年度报告（分段）', '周期报告（分段）', '知识库'],
+    name: '概览',
+    desc: '先看清账号规模，再用自然语言提问；报告与知识库都在这一组。问答只检索本机语料，回答带 [n] 来源。',
+    items: ['数据总览', '微信问答', '总结', '知识库'],
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <rect x="3" y="3" width="7" height="9" rx="1" />
@@ -108,7 +108,7 @@ export const FEATURE_GROUPS = [
     ),
   },
   {
-    name: '会话与消息',
+    name: '消息',
     desc: '按人 / 群 / 时间段检索消息；通话、撤回、公众号都收进了「聊天会话」的顶部分段，不必另找入口。',
     items: ['聊天会话', '群聊分析', '通话记录（分段）', '撤回消息（分段）', '公众号 / 服务号 / 客服（分段）'],
     icon: (
@@ -119,9 +119,9 @@ export const FEATURE_GROUPS = [
     ),
   },
   {
-    name: '关系与社交',
-    desc: '通讯录、社交图谱、朋友圈与朋友圈洞察：同一批关系数据的几种看法，分段切换即可。',
-    items: ['通讯录', '社交图谱（分段）', '朋友圈', '朋友圈洞察（分段）'],
+    name: '联系人',
+    desc: '通讯录、客户档案、社交图谱、朋友圈与朋友圈洞察：同一批关系数据的几种看法，分段切换即可。',
+    items: ['通讯录', '客户画像与标签', '社交图谱（分段）', '朋友圈', '朋友圈洞察（分段）'],
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
@@ -129,7 +129,7 @@ export const FEATURE_GROUPS = [
     ),
   },
   {
-    name: '资产与资金',
+    name: '资产',
     desc: '收藏、表情、文件与媒体资产的盘点，以及资金往来与逐笔转账红包。',
     items: ['收藏与表情', '文件与存储', '媒体资产 / 存储分析（分段）', '公众号文章（分段）', '资金往来', '转账红包（分段）'],
     icon: (
@@ -140,9 +140,20 @@ export const FEATURE_GROUPS = [
     ),
   },
   {
-    name: '行动与维护',
-    desc: '待办与任务、操作日志，以及设置弹窗（含隐私体检、备份恢复与数据库健康）。',
-    items: ['待办日程', '任务信息', '操作日志', '设置'],
+    name: '任务',
+    desc: '从聊天里提取的待办、你显式创建的监听任务，以及回复有没有发出去。',
+    items: ['待办日程', '任务信息', '消息列表'],
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M9 11l3 3L22 4" />
+        <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+      </svg>
+    ),
+  },
+  {
+    name: '系统',
+    desc: '本机工具、托管的程序、操作日志，以及设置弹窗（含隐私体检、备份恢复与数据库健康）。',
+    items: ['本地工具', '应用托管', '操作日志', '设置'],
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />

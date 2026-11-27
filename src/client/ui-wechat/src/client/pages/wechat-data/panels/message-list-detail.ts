@@ -8,6 +8,8 @@
 import type { MessageListImage, MessageListRecord } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   SOURCE_LABEL,
+  aiReplyPhase,
+  isMissingWebhookError,
   messageListFailureCopy,
   messageListRecordStatusHint,
   messageListRecordStatusLabel,
@@ -112,6 +114,7 @@ function mentionOfDetail(record: MessageListRecord): MessageListDetailMention | 
 export function messageListDetailModel(
   record: MessageListRecord,
   now = Date.now(),
+  hasRule = false,
 ): MessageListDetailModel {
   const sourceRef = record.sourceRef?.trim() ?? ''
   const segmentIndex = positiveInt(record.segmentIndex)
@@ -127,15 +130,17 @@ export function messageListDetailModel(
       total: record.text.length,
     }
   const mention = mentionOfDetail(record)
+  const phase = aiReplyPhase(record, now, hasRule)
+  // 规则已匹配但地址快照还没写入时，记录上的「没配地址」是旧结论，不算失败。
+  const staleAddressError = phase === 'queued_send' && isMissingWebhookError(record.error)
   return {
     title: '记录 #' + String(record.id),
     sourceLabel: SOURCE_LABEL[record.source],
-    statusLabel: messageListRecordStatusLabel(record, now),
-    statusHint: messageListRecordStatusHint(record, now),
+    statusLabel: messageListRecordStatusLabel(record, now, hasRule),
+    statusHint: messageListRecordStatusHint(record, now, hasRule),
     showFailure: record.status === 'failed'
       || record.status === 'sent_unconfirmed'
-      || record.error.trim() !== ''
-      || (record.failureKind ?? '') !== '',
+      || ((record.error.trim() !== '' || (record.failureKind ?? '') !== '') && !staleAddressError),
     failure: messageListFailureCopy(record),
     times: [
       { label: '创建时间', value: timeText(record.createdAt) },

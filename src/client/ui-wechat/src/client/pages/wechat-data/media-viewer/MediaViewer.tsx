@@ -210,6 +210,8 @@ export function MediaViewer({
         data-dragging={dragging || undefined}
         onPointerDown={(e) => {
           if (zoom <= minZoom) return
+          // 左右切换钮在舞台里面。这里若抢指针，click 会落到舞台上，按钮就像没反应。
+          if (e.target instanceof Element && e.target.closest('button') !== null) return
           e.preventDefault()
           dragRef.current = { x: e.clientX, y: e.clientY, ox: pan.x, oy: pan.y }
           setDragging(true)

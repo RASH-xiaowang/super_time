@@ -74,12 +74,18 @@ export function uniqueText(values: readonly (string | undefined)[]): string[] {
   return out
 }
 
+const TOOL_RESULT_PREVIEW = 1400
+
+/** 结构化结果只给界面一段预览，避免一条工具把整页撑成 JSON 墙。 */
 export function formatToolResultDetail(raw: string): string {
+  let text = raw
   try {
-    return JSON.stringify(JSON.parse(raw), null, 2)
+    text = JSON.stringify(JSON.parse(raw), null, 2)
   } catch {
-    return raw
+    text = raw
   }
+  if (text.length <= TOOL_RESULT_PREVIEW) return text
+  return `${text.slice(0, TOOL_RESULT_PREVIEW)}\n…（界面只展示前一段）`
 }
 
 export function mergeStages(stages: readonly AskStage[] | undefined): AskStage[] {

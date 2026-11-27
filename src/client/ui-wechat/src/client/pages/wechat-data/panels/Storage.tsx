@@ -136,7 +136,6 @@ export function StoragePanel({ onOpenChat }: { onOpenChat?: (username: string) =
     <div className={css.panel}>
       <PanelHeader
         title="存储"
-        desc="来自消息资源库的只读统计（不含本地数据库本身）"
         actions={(
           <PanelAction onClick={() => { void load() }} disabled={loading}>{loading ? '统计中…' : '刷新'}</PanelAction>
         )}

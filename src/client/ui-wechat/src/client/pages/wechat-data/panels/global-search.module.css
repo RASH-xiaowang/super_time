@@ -488,42 +488,6 @@
   line-height: 1.5;
 }
 
-.skeletonList {
-  padding: 4px;
-}
-
-.skeletonRow {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
-  gap: 10px;
-  padding: var(--nm-s-2, 8px) 6px;
-}
-
-.skeletonAvatar {
-  width: 38px;
-  height: 38px;
-  border-radius: var(--nm-r-xl);
-  background: var(--nm-bg-active);
-}
-
-.skeletonBody {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-top: 4px;
-}
-
-.skeletonLine {
-  width: 72%;
-  height: 8px;
-  border-radius: var(--nm-r-sm);
-  background: var(--nm-bg-active);
-}
-
-.skeletonLine[data-short] {
-  width: 45%;
-}
-
 .empty {
   padding: 14px;
   text-align: center;

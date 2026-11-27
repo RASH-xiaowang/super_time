@@ -39,7 +39,6 @@ import { desktopActionProps } from '../ui/desktop-only.tsx'
 import { TaskDeleteButton } from './task-delete-button.tsx'
 import {
   addKeywords,
-  clampPhotoLimit,
   configMapValue,
   configTextValue,
   defaultVendorConfig,
@@ -48,8 +47,6 @@ import {
   findVendorDescriptor,
   groupVendorFields,
   hasDraftErrors,
-  PHOTO_LIMIT_MAX,
-  PHOTO_LIMIT_MIN,
   readyMissingFields,
   readyRequirementHint,
   removeKeyword,
@@ -63,6 +60,7 @@ import {
   type TaskEditDraft,
 } from './task-center.ts'
 import css from './task-center.module.css'
+import { PhotoLimitField, TextLimitField } from './task-center-limit-fields.tsx'
 import triggerCss from './task-center-trigger.module.css'
 import { paramEntriesOf } from './task-center-param-list.ts'
 import { ParamListField } from './task-center-param-list-field.tsx'
@@ -87,44 +85,6 @@ export interface TaskEditFormProps {
   onDelete: () => Promise<TaskInfoMutationResult>
   /** 成功提示（容器的 `useTransientNotice.flash`）。 */
   onNotice: (text: string) => void
-}
-
-/** 照片数量字段的 props（独立成小组件，避免主表单越过函数行数棘轮）。 */
-interface PhotoLimitFieldProps {
-  value: number
-  error?: string
-  inputRef: React.MutableRefObject<HTMLInputElement | null>
-  onChange: (value: number) => void
-}
-
-/**
- * 照片数量输入（0 = 不带图片，最多 9 张）。
- * @param props - 当前值 / 错误 / 输入框 ref / 变更回调。
- * @returns 数字输入框 + 单位说明。
- */
-function PhotoLimitField({ value, error, inputRef, onChange }: PhotoLimitFieldProps): React.JSX.Element {
-  return (
-    <div className={css.field}>
-      <span className={css.fieldLabel}>照片数量（触发时随记录带上的图片张数）</span>
-      <div className={css.photoRow}>
-        <input
-          ref={inputRef}
-          className={`${css.input} ${css.photoInput}`}
-          type="number"
-          inputMode="numeric"
-          min={PHOTO_LIMIT_MIN}
-          max={PHOTO_LIMIT_MAX}
-          step={1}
-          value={String(value)}
-          aria-label="照片数量"
-          aria-invalid={error !== undefined}
-          onChange={(e) => { onChange(clampPhotoLimit(Number(e.target.value))) }}
-        />
-        <span className={css.photoUnit}>张（0 = 不带图片，最多 {PHOTO_LIMIT_MAX} 张）</span>
-      </div>
-      {error !== undefined && <span className={css.errorText} role="alert">{error}</span>}
-    </div>
-  )
 }
 
 /** 关键词编辑区的 props。 */
@@ -579,12 +539,13 @@ function useTaskDraftState(
   setBusy: React.Dispatch<React.SetStateAction<boolean>>
   keywordRef: React.MutableRefObject<HTMLInputElement | null>
   photoRef: React.MutableRefObject<HTMLInputElement | null>
+  textRef: React.MutableRefObject<HTMLInputElement | null>
   selectRef: React.MutableRefObject<HTMLSelectElement | null>
   fieldRefsRef: React.MutableRefObject<Record<string, HTMLElement | null>>
   commitKeyword: () => void
   dropKeyword: (keyword: string) => void
   onKeywordKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void
-  patchBase: <K extends 'name' | 'keywords' | 'photoLimit' | 'mentionMeOnly'>(key: K, value: TaskEditDraft[K]) => void
+  patchBase: <K extends 'name' | 'keywords' | 'photoLimit' | 'textLimit' | 'mentionMeOnly' | 'greetingEnabled' | 'greetingText'>(key: K, value: TaskEditDraft[K]) => void
   patchConfig: (key: string, value: RpaConfigValue) => void
   patchSecret: (key: string, value: string) => void
   changeTriggerMethod: (method: string) => void
@@ -598,6 +559,7 @@ function useTaskDraftState(
   const taskIdRef = useRef(task.id)
   const keywordRef = useRef<HTMLInputElement | null>(null)
   const photoRef = useRef<HTMLInputElement | null>(null)
+  const textRef = useRef<HTMLInputElement | null>(null)
   const selectRef = useRef<HTMLSelectElement | null>(null)
   /** 厂商字段 key → 输入框（校验失败时把焦点移过去；map 字段取第一行）。 */
   const fieldRefsRef = useRef<Record<string, HTMLElement | null>>({})
@@ -656,7 +618,7 @@ function useTaskDraftState(
   }, [commitKeyword, dropKeyword, draft.keywords, keywordInput])
 
   /** 就地写回一个基础字段（任务名/关键词/照片/@过滤），并清掉该字段错误。 */
-  const patchBase = useCallback(<K extends 'name' | 'keywords' | 'photoLimit' | 'mentionMeOnly'>(
+  const patchBase = useCallback(<K extends 'name' | 'keywords' | 'photoLimit' | 'textLimit' | 'mentionMeOnly' | 'greetingEnabled' | 'greetingText'>(
     key: K,
     value: TaskEditDraft[K],
   ): void => {
@@ -734,6 +696,7 @@ function useTaskDraftState(
     setBusy,
     keywordRef,
     photoRef,
+    textRef,
     selectRef,
     fieldRefsRef,
     commitKeyword,
@@ -759,6 +722,7 @@ function useTaskFormActions(options: {
   selectRef: React.MutableRefObject<HTMLSelectElement | null>
   keywordRef: React.MutableRefObject<HTMLInputElement | null>
   photoRef: React.MutableRefObject<HTMLInputElement | null>
+  textRef: React.MutableRefObject<HTMLInputElement | null>
   fieldRefsRef: React.MutableRefObject<Record<string, HTMLElement | null>>
   onSave: (input: TaskInfoInput) => Promise<TaskInfoMutationResult>
   onSetStatus: (status: TaskInfoStatus) => Promise<TaskInfoMutationResult>
@@ -783,7 +747,8 @@ function useTaskFormActions(options: {
     if (found.triggerMethod !== undefined) options.selectRef.current?.focus()
     else if (found.keywords !== undefined) options.keywordRef.current?.focus()
     else if (found.photoLimit !== undefined) options.photoRef.current?.focus()
-  }, [descriptor, options.fieldRefsRef, options.keywordRef, options.photoRef, options.selectRef])
+    else if (found.textLimit !== undefined) options.textRef.current?.focus()
+  }, [descriptor, options.fieldRefsRef, options.keywordRef, options.photoRef, options.textRef, options.selectRef])
 
   /**
    * 校验并提交。
@@ -872,6 +837,7 @@ export function TaskEditForm(props: TaskEditFormProps): React.JSX.Element {
     selectRef: state.selectRef,
     keywordRef: state.keywordRef,
     photoRef: state.photoRef,
+    textRef: state.textRef,
     fieldRefsRef: state.fieldRefsRef,
     onSave,
     onSetStatus,
@@ -952,6 +918,39 @@ export function TaskEditForm(props: TaskEditFormProps): React.JSX.Element {
         inputRef={state.photoRef}
         onChange={(value) => { state.patchBase('photoLimit', value) }}
       />
+
+      <TextLimitField
+        value={draft.textLimit}
+        error={errors.textLimit}
+        inputRef={state.textRef}
+        onChange={(value) => { state.patchBase('textLimit', value) }}
+      />
+
+      <label className={css.mentionRow}>
+        <input
+          type="checkbox"
+          checked={draft.greetingEnabled}
+          onChange={(e) => { state.patchBase('greetingEnabled', e.target.checked) }}
+        />
+        <span>
+          <span className={css.mentionTitle}>命中后写入消息队列</span>
+          <span className={css.mentionHint}>打开后，关键词命中才把下面的问候语写入消息列表</span>
+        </span>
+      </label>
+      {draft.greetingEnabled && (
+        <label className={css.field}>
+          <span className={css.fieldLabel}>问候语</span>
+          <textarea
+            className={css.textarea}
+            rows={3}
+            maxLength={4000}
+            value={draft.greetingText}
+            onChange={(e) => { state.patchBase('greetingText', e.target.value) }}
+            placeholder="例如：您好，已收到，我会尽快处理。"
+          />
+          {errors.greetingText !== undefined && <span className={css.errorText} role="alert">{errors.greetingText}</span>}
+        </label>
+      )}
 
       {ctx !== null && (
         <VendorFormBody descriptor={ctx.descriptor} ctx={ctx} savedVersion={task.triggerVendorVersion ?? ''} />

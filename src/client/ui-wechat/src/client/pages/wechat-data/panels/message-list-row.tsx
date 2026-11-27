@@ -8,6 +8,7 @@ import {
   aiReplyPhase,
   aiReplyRegenerateEligibility,
   batchDeleteEligibility,
+  isMissingWebhookError,
   localImageKey,
   messageListFailureCopy,
   messageListRecordStatusHint,
@@ -35,6 +36,8 @@ export interface MessageListRowProps {
   probeBusyId: number | null
   jobBusyId: number | null
   thumbs: Record<string, string>
+  /** 当前规则表里是否已有覆盖这条记录的规则（地址快照之外的事实）。 */
+  hasRule: boolean
   onToggle: (id: number) => void
   onResend: (record: MessageListRecord) => void
   onProbe: (record: MessageListRecord) => void
@@ -73,14 +76,17 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
   const { record } = props
   const deleteEligibility = batchDeleteEligibility(record)
   const selectable = deleteEligibility.eligible
-  const phase = aiReplyPhase(record, props.now)
+  const phase = aiReplyPhase(record, props.now, props.hasRule)
   const waitingConfig = phase === 'waiting_config'
+  const queuedSend = phase === 'queued_send'
   const failedGeneration = phase === 'failed_generation'
   const downstreamActive = record.status === 'queued' || record.status === 'running'
   const failure = messageListFailureCopy(record)
+  // 规则已匹配时，记录上残留的「没配地址」是旧结论；地址会在投递认领时写入。
+  const staleAddressError = queuedSend && isMissingWebhookError(record.error)
   const showFailure = record.status === 'failed'
     || record.status === 'sent_unconfirmed'
-    || record.error.trim() !== ''
+    || (record.error.trim() !== '' && !staleAddressError)
   const regenerateEligibility = aiReplyRegenerateEligibility(record, props.now)
   const aiReplyDelete = aiReplyAnyDeleteEligibility(record, props.now)
   // 备注列只显示分层标题；完整原文/建议放悬停属性，留给后续详情抽屉。
@@ -126,9 +132,9 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
         >
           <Badge
             tone={statusTone(record.status)}
-            title={messageListRecordStatusHint(record, props.now) || undefined}
+            title={messageListRecordStatusHint(record, props.now, props.hasRule) || undefined}
           >
-            {messageListRecordStatusLabel(record, props.now)}
+            {messageListRecordStatusLabel(record, props.now, props.hasRule)}
           </Badge>
         </button>
         {record.attempts > 0 && <span className={css.attempts}>第 {record.attempts} 次</span>}
@@ -176,11 +182,13 @@ export function MessageListRow(props: MessageListRowProps): React.JSX.Element {
               ? '没有正文，重发不会发送任何内容'
               : waitingConfig
                 ? '请先在规则配置中设置会话或全局 Webhook'
-                : downstreamActive
-                  ? '下游异步任务尚未结束，禁止重复发送'
-                  : record.status === 'sent_unconfirmed'
-                    ? '远端可能已发送；请先核对，再在弹出的确认框中确认重发'
-                    : '重新投递这条记录'}
+                : queuedSend
+                  ? '规则已匹配，会自动按序投递；如需立即重试可手动重发'
+                  : downstreamActive
+                    ? '下游异步任务尚未结束，禁止重复发送'
+                    : record.status === 'sent_unconfirmed'
+                      ? '远端可能已发送；请先核对，再在弹出的确认框中确认重发'
+                      : '重新投递这条记录'}
           >
             {props.resendingId === record.id
               ? '重发中…'

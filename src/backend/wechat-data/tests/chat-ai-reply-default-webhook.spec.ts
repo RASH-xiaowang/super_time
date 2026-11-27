@@ -34,7 +34,7 @@ beforeEach(() => {
 
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
-describe('AI 回复默认大肥鱼 Webhook', () => {
+describe('AI 回复默认 Webhook', () => {
   it('旧消息规则表会迁移到账号作用域唯一索引', () => {
     withWritableDb(taskDbPath(decrypted), (db) => {
       db.exec(`CREATE TABLE message_list_rules (

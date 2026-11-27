@@ -280,6 +280,139 @@ export interface LicenseBridge {
   remove(): Promise<LicenseRemoveResult>
 }
 
+/** 应用托管里一个 SuperLanguage 实例的公开字段（不含令牌与票据密钥）。 */
+export interface AppInstanceView {
+  id: string
+  appId: string
+  name: string
+  seat: number
+  enabled: boolean
+  /** `local` = 本机管道自取票据；`lan` = 实例在局域网另一台电脑，票据由本机推送。 */
+  mode: 'local' | 'lan'
+  /** 局域网实例所在电脑的 IPv4；`local` 时为空串。 */
+  host: string
+  caps: string[]
+  maxJobsPerHour: number
+  dir: string
+  exeVersion: string
+  exeSha256: string
+  createdAt: number
+  updatedAt: number
+  lastLeaseAt: number
+  lastSeenAt: number
+  lastError: string
+  live: {
+    ok: boolean
+    running: boolean
+    deployed: boolean
+    tokenMasked?: string
+    error?: string
+    health?: unknown
+    details?: unknown
+  }
+}
+
+/** `apps:summary`：面板的唯一数据入口。 */
+export interface AppsSummary {
+  ok: boolean
+  licensed: boolean
+  error: string
+  code: string
+  license: {
+    state: string
+    licensed: boolean
+    code: string
+    reason: string
+    daysToExpiry: number | null
+    licenseId: string
+    expiresAt: string | null
+  } | null
+  entitlement: {
+    maxInstances: number
+    caps: string[]
+    maxJobsPerHour: number
+    standalone: boolean
+  } | null
+  seats: { used: number, max: number }
+  broker: {
+    running: boolean
+    pipePath: string
+    connections: number
+    tickets: number
+    denied: number
+    lastDeniedCode: string
+    lastTicketAt: number
+    graceMs: number
+  }
+  sourceExe: string
+  instances: AppInstanceView[]
+}
+
+export interface AppsActionResult {
+  ok: boolean
+  error?: string
+  code?: string
+  instance?: AppInstanceView
+  /** 部署时是否把局域网启动器一并复制过去（`apps:deploy` 的返回值）。 */
+  launcher?: boolean
+  /** 启动器复制失败的原因（`launcher === false` 时才有）。 */
+  launcherError?: string
+  [key: string]: unknown
+}
+
+export interface AppsBridge {
+  summary(): Promise<AppsSummary>
+  /** `mode: 'lan'` 时要同时给 `host`（目标电脑 IPv4）与 `dir`（共享目录 \\PC\共享\…）。 */
+  create(input: {
+    name: string
+    mode?: 'local' | 'lan'
+    host?: string
+    dir?: string
+  }): Promise<AppsActionResult>
+  update(input: { id: string, patch: Partial<Pick<AppInstanceView, 'name' | 'enabled' | 'caps' | 'maxJobsPerHour'>> }): Promise<AppsActionResult>
+  remove(input: { id: string, purge?: boolean }): Promise<AppsActionResult>
+  deploy(input: { id: string }): Promise<AppsActionResult>
+  start(input: { id: string }): Promise<AppsActionResult>
+  stop(input: { id: string }): Promise<AppsActionResult>
+  restart(input: { id: string }): Promise<AppsActionResult>
+  status(input: { id: string }): Promise<AppsActionResult>
+  logs(input: { id: string }): Promise<AppsActionResult>
+  proxy(input: { id: string, action: string, payload?: Record<string, unknown> }): Promise<AppsActionResult>
+  openDir(input: { id: string }): Promise<AppsActionResult>
+  seedCaps(input: { id: string }): Promise<AppsActionResult>
+  /** 局域网实例：立即补推一次票据。 */
+  pushTicket(input: { id: string }): Promise<AppsActionResult>
+  /** 「下游 Webhook」候选实例；地址已脱敏。 */
+  webhookTargets(): Promise<AppsWebhookTargets>
+  /** 用实例地址保存一条消息列表规则（真实地址由主进程解析）。 */
+  saveRule(input: { instanceId: string, rule: Record<string, unknown> }): Promise<AppsActionResult>
+  /** 用实例地址保存当前会话默认 Webhook。 */
+  saveAiReplyWebhook(input: {
+    instanceId: string
+    chatUsername: string
+    chatName?: string
+  }): Promise<AppsActionResult>
+  onEvent(listener: (payload: { type: string, instanceId?: string, code?: string }) => void): () => void
+}
+
+/** 可作为下游 Webhook 的托管实例（地址脱敏，令牌 `***`）。 */
+export interface AppsWebhookTarget {
+  id: string
+  name: string
+  seat: number
+  enabled: boolean
+  running: boolean
+  ready: boolean
+  usable: boolean
+  maskedUrl: string
+}
+
+export interface AppsWebhookTargets {
+  ok: boolean
+  licensed: boolean
+  targets: AppsWebhookTarget[]
+}
+
 export interface DiagBridge {
   logInfo(): Promise<DiagLogInfo>
   exportLog(): Promise<DiagExportResult>
@@ -303,6 +436,8 @@ export interface ElectronApi {
   runMode(): Promise<{ test: boolean, llmMock: boolean, dataRoot: string }>
   debugGates(): Promise<{ packaged: boolean, skipGates: boolean }>
   ping(): Promise<unknown>
+  /** Desktop-only knowledge-file drag/drop; absent in browser handoff. */
+  kbFiles?: { getPathForFile(file: File): string }
   openFile(opts?: OpenFileOptions): Promise<OpenFileResult>
   pickDirectory(): Promise<PickDirectoryResult>
   saveFileDialog(opts?: SaveFileOptions): Promise<SaveFileResult>
@@ -313,6 +448,7 @@ export interface ElectronApi {
   remoteAccess: RemoteAccessBridge
   webHandoff: WebHandoffBridge
   license: LicenseBridge
+  apps: AppsBridge
   diag: DiagBridge
   update: UpdateBridge
 }

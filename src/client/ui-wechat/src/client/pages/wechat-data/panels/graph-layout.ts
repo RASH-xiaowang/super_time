@@ -20,7 +20,11 @@ import {
   GRAPH_FORCE_FACTOR_MAX,
   GRAPH_FORCE_FACTOR_MIN,
   GRAPH_FORCE_KEYS,
+  SELF_ID,
+  remarkIslandCounts,
+  remarkIslandKey,
   type BuiltGraph,
+  type GEdge,
   type GNode,
   type GraphSettings,
 } from './graph-model.ts'
@@ -179,7 +183,7 @@ export function graphDataKey(graph: BuiltGraph, settings: GraphSettings): string
     .sort()
   const forces = GRAPH_FORCE_KEYS.map(k => Number(settings[k]).toFixed(3)).join('|')
   // 长度同时进指纹：哈希只有 32 位，带上规模才是「几乎不可能撞」的组合
-  return `n${nodeIds.length}:${hashParts(nodeIds)}:e${edges.length}:${hashParts(edges)}:f${forces}`
+  return `n${nodeIds.length}:${hashParts(nodeIds)}:e${edges.length}:${hashParts(edges)}:f${forces}:s${settings.islandShape}`
 }
 
 /**
@@ -258,6 +262,19 @@ function readV2(): { tables: ScopeTables; order: string[] } {
   return { tables, order }
 }
 
+const SOCIAL_LOOK_KEY = 'dsh-graph-social-look'
+const SOCIAL_LOOK = 'island-8'
+
+/** 社交图谱换过一版布局。旧坐标还在时返回 true，调用方丢掉它，重新排一次。 */
+export function socialLookStale(scope: string): boolean {
+  if (scope !== SOCIAL_SCOPE) return false
+  try {
+    return localStorage.getItem(SOCIAL_LOOK_KEY) !== SOCIAL_LOOK
+  } catch {
+    return false
+  }
+}
+
 /**
  * 读某个作用域上次落盘的布局。
  *
@@ -311,6 +328,7 @@ export function savePositions(scope: string, pos: ReadonlyMap<string, GridPos>):
   for (const s of kept) next[s] = tables[s]
   try {
     localStorage.setItem(POSITION_KEY, JSON.stringify(next))
+    if (scope === SOCIAL_SCOPE) localStorage.setItem('dsh-graph-social-look', 'island-2')
   } catch (error) {
     if (!quotaWarned) {
       quotaWarned = true
@@ -442,18 +460,408 @@ export function isolatedStripPositions(
   return out
 }
 
-/** 每个节点的度数（只数一次，供「有结构 / 无结构」分组复用）。 */
-function degreeOf(graph: BuiltGraph): Map<string, number> {
-  const deg = new Map<string, number>()
-  for (const n of graph.nodes) deg.set(n.id, 0)
-  for (const e of graph.edges) {
-    if (deg.has(e.source)) deg.set(e.source, (deg.get(e.source) ?? 0) + 1)
-    if (deg.has(e.target)) deg.set(e.target, (deg.get(e.target) ?? 0) + 1)
+/**
+ * 这个人是否和「我」以外的人有关系。
+ * 只和我有消息、或仅仅名字首字相同，都算没有关系，排到外圈。
+ */
+export function hasPeerRelation(id: string, edges: readonly GEdge[]): boolean {
+  for (const edge of edges) {
+    if (edge.kind === 'initial') continue
+    const other = edge.source === id ? edge.target : edge.target === id ? edge.source : ''
+    if (other !== '' && other !== id && other !== SELF_ID) return true
   }
-  return deg
+  return false
 }
 
-/** 布局任务：只带坐标与边表（结构化克隆友好，不向 Worker 传整张图与节点详情）。 */
+/** 已经分好组的人留在各自的岛上。没有分组的人不另排一座岛。 */
+export function splitOuterNodes(nodes: readonly GNode[], edges: readonly GEdge[]): { core: GNode[]; outer: GNode[] } {
+  const counts = remarkIslandCounts(nodes)
+  const assigned = nodes.some((node) => node.community >= 0)
+  const core: GNode[] = []
+  const outer: GNode[] = []
+  for (const node of nodes) {
+    if (node.id === SELF_ID || node.kind === 'self' || remarkIslandKey(node, counts) !== '') {
+      core.push(node)
+      continue
+    }
+    const inside = assigned ? node.community >= 0 : hasPeerRelation(node.id, edges)
+    if (inside) core.push(node)
+    else outer.push(node)
+  }
+  return { core, outer }
+}
+
+/**
+ * 把没有关系的人收成一块网格，贴在核心的正下方，留一条窄缝。
+ * 格子只由半径和间距决定，力度滑杆不会把他们打乱。
+ */
+export function outerRingPositions(
+  outer: readonly GNode[],
+  radiusOf: (node: GNode) => number,
+  placed: ReadonlyMap<string, GridPos>,
+  nodeGap: number,
+): Map<string, GridPos> {
+  const out = new Map<string, GridPos>()
+  if (outer.length === 0) return out
+  const ordered = [...outer].sort((a, b) => a.id.localeCompare(b.id))
+  const grid = isolatedStripPositions(ordered, radiusOf, new Map(), nodeGap)
+  let gx = 0
+  let gy = 0
+  for (const pos of grid.values()) {
+    gx += pos.x
+    gy += pos.y
+  }
+  gx /= grid.size
+  gy /= grid.size
+  let gridReach = 0
+  for (const pos of grid.values()) gridReach = Math.max(gridReach, Math.hypot(pos.x - gx, pos.y - gy))
+  let cx = 0
+  let maxY = 0
+  if (placed.size > 0) {
+    let count = 0
+    for (const pos of placed.values()) {
+      cx += pos.x
+      if (count === 0 || pos.y > maxY) maxY = pos.y
+      count += 1
+    }
+    cx /= count
+  }
+  let maxR = 1
+  for (const node of ordered) maxR = Math.max(maxR, radiusOf(node))
+  const gap = Math.max(28, maxR * Math.max(1, nodeGap))
+  const ox = cx
+  const oy = maxY + gridReach + gap
+  for (const [id, pos] of grid) out.set(id, { x: ox + pos.x - gx, y: oy + pos.y - gy })
+  return out
+}
+
+/**
+ * 把同一座岛里被拉开的人收到一团里。
+ * 只缩小离岛心太远的人，谁在谁的哪一侧保持不变。还没有坐标的同岛成员补到岛心旁边。
+ */
+export function packIslands(nodes: readonly GNode[], positions: Map<string, GridPos>): void {
+  const groups = new Map<number, GNode[]>()
+  for (const node of nodes) {
+    if (node.community < 0 || node.id === SELF_ID || node.kind === 'self') continue
+    const list = groups.get(node.community)
+    if (list) list.push(node)
+    else groups.set(node.community, [node])
+  }
+  for (const members of groups.values()) {
+    let sx = 0
+    let sy = 0
+    let count = 0
+    for (const node of members) {
+      const pos = positions.get(node.id)
+      if (!pos) continue
+      sx += pos.x
+      sy += pos.y
+      count += 1
+    }
+    const cx = count > 0 ? sx / count : 0
+    const cy = count > 0 ? sy / count : 0
+    let reach = 0
+    for (const node of members) {
+      const pos = positions.get(node.id)
+      if (!pos) continue
+      reach = Math.max(reach, Math.hypot(pos.x - cx, pos.y - cy))
+    }
+    const target = 22 * Math.sqrt(members.length)
+    const scale = reach > target && reach > 0 ? target / reach : 1
+    for (const node of members) {
+      const pos = positions.get(node.id)
+      if (!pos) continue
+      pos.x = cx + (pos.x - cx) * scale
+      pos.y = cy + (pos.y - cy) * scale
+    }
+    const missing = members.filter((node) => !positions.has(node.id))
+    missing.forEach((node, index) => {
+      const angle = -Math.PI / 2 + (index * Math.PI * 2) / missing.length
+      positions.set(node.id, { x: cx + Math.cos(angle) * 28, y: cy + Math.sin(angle) * 28 })
+    })
+  }
+}
+
+/**
+ * 把彼此离得太远的岛朝中间拉近。每座岛内部不动，左右前后的相对方向也不变。
+ */
+export function gatherIslands(nodes: readonly GNode[], positions: Map<string, GridPos>): void {
+  const groups = new Map<number, string[]>()
+  for (const node of nodes) {
+    if (node.community < 0 || node.id === SELF_ID || node.kind === 'self') continue
+    if (!positions.has(node.id)) continue
+    const list = groups.get(node.community)
+    if (list) list.push(node.id)
+    else groups.set(node.community, [node.id])
+  }
+  if (groups.size < 2) return
+  const islands = [...groups.entries()].map(([, ids]) => {
+    let x = 0
+    let y = 0
+    for (const id of ids) {
+      const pos = positions.get(id)
+      if (!pos) continue
+      x += pos.x
+      y += pos.y
+    }
+    return { ids, x: x / ids.length, y: y / ids.length }
+  })
+  let gx = 0
+  let gy = 0
+  for (const island of islands) {
+    gx += island.x
+    gy += island.y
+  }
+  gx /= islands.length
+  gy /= islands.length
+  let max = 0
+  for (const island of islands) max = Math.max(max, Math.hypot(island.x - gx, island.y - gy))
+  const wanted = 48 + 28 * Math.sqrt(islands.length)
+  if (max <= wanted || max < 1) return
+  const scale = wanted / max
+  for (const island of islands) {
+    const dx = (island.x - gx) * (scale - 1)
+    const dy = (island.y - gy) * (scale - 1)
+    for (const id of island.ids) {
+      const pos = positions.get(id)
+      if (!pos) continue
+      pos.x += dx
+      pos.y += dy
+    }
+  }
+}
+
+interface SeatedIsland {
+  local: Map<string, GridPos>
+  minX: number
+  minY: number
+  w: number
+  h: number
+  maxR: number
+}
+
+function placeIsland(island: SeatedIsland, positions: Map<string, GridPos>, originX: number, originY: number): void {
+  for (const [id, pos] of island.local) {
+    positions.set(id, { x: originX + pos.x - island.minX, y: originY + pos.y - island.minY })
+  }
+}
+
+/**
+ * 每个圈子贴着「我」放到刚好不重叠的位置。
+ * 半径只留头像之间的缝，不再按整圈里最大的岛把所有人一起往外推。
+ */
+function seatCircle(islands: readonly SeatedIsland[], positions: Map<string, GridPos>, nodeGap: number, selfR: number): void {
+  const gap = 6 * Math.max(1, nodeGap)
+  const placed: { x: number; y: number; reach: number }[] = []
+  islands.forEach((island, index) => {
+    const reach = Math.max(island.w, island.h) / 2 + island.maxR
+    const minRing = selfR + gap + reach
+    const prefer = -Math.PI / 2 + (islands.length <= 1 ? 0 : (index * Math.PI * 2) / islands.length)
+    let spot = { x: Math.cos(prefer) * minRing, y: Math.sin(prefer) * minRing }
+    const collides = (x: number, y: number): boolean => placed.some((other) => {
+      return Math.hypot(other.x - x, other.y - y) < other.reach + reach + gap
+    })
+    if (collides(spot.x, spot.y)) {
+      let found = false
+      for (let step = 0; step < 48 && !found; step++) {
+        const ring = minRing + step * 4
+        for (let turn = 0; turn < 24; turn++) {
+          const delta = turn === 0 ? 0 : (turn % 2 === 0 ? 1 : -1) * Math.ceil(turn / 2) * (Math.PI / 16)
+          const angle = prefer + delta
+          const x = Math.cos(angle) * ring
+          const y = Math.sin(angle) * ring
+          if (!collides(x, y)) {
+            spot = { x, y }
+            found = true
+            break
+          }
+        }
+      }
+    }
+    placed.push({ x: spot.x, y: spot.y, reach })
+    placeIsland(island, positions, spot.x - island.w / 2, spot.y - island.h / 2)
+  })
+}
+
+/** 1、2、3… 逐行变宽，最后一行收下剩下的人。 */
+function pyramidCounts(total: number): number[] {
+  const rows: number[] = []
+  let left = total
+  let width = 1
+  while (left > 0) {
+    const take = Math.min(width, left)
+    rows.push(take)
+    left -= take
+    width += 1
+  }
+  return rows
+}
+
+/**
+ * 一个分组摆成一座金字塔，再把这些岛也排成金字塔。
+ * 人少的圈子靠近「我」，人多的圈子落在底层。
+ */
+export function seatIslands(
+  nodes: readonly GNode[],
+  positions: Map<string, GridPos>,
+  radiusOf: (node: GNode) => number,
+  nodeGap: number,
+  shape: GraphSettings['islandShape'] = 'pyramid',
+): void {
+  const groups = new Map<number, GNode[]>()
+  for (const node of nodes) {
+    if (node.community < 0 || node.kind === 'self' || node.id === SELF_ID) continue
+    const list = groups.get(node.community)
+    if (list) list.push(node)
+    else groups.set(node.community, [node])
+  }
+  const gap = 72
+  const selfNode = nodes.find((node) => node.kind === 'self' || node.id === SELF_ID)
+  const selfR = selfNode ? radiusOf(selfNode) : 14
+  const islands = [...groups.entries()]
+    .sort((a, b) => a[1].length - b[1].length || a[0] - b[0])
+    .map(([, members]) => {
+      const ordered = [...members].sort((a, b) => a.id.localeCompare(b.id))
+      let maxR = 1
+      for (const node of ordered) maxR = Math.max(maxR, radiusOf(node))
+      const pitch = maxR * 2 * Math.max(1, nodeGap) * (shape === 'circle' ? 0.85 : 1) + (shape === 'circle' ? 2 : 6)
+      const local = new Map<string, GridPos>()
+      const rows = pyramidCounts(ordered.length)
+      let index = 0
+      let y = 0
+      for (const count of rows) {
+        const rowW = (count - 1) * pitch
+        for (let col = 0; col < count; col++) {
+          const node = ordered[index++]
+          if (!node) break
+          local.set(node.id, { x: -rowW / 2 + col * pitch, y })
+        }
+        y += pitch
+      }
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+      for (const pos of local.values()) {
+        minX = Math.min(minX, pos.x)
+        minY = Math.min(minY, pos.y)
+        maxX = Math.max(maxX, pos.x)
+        maxY = Math.max(maxY, pos.y)
+      }
+      if (!Number.isFinite(minX)) {
+        minX = 0
+        minY = 0
+        maxX = 0
+        maxY = 0
+      }
+      return { local, minX, minY, w: maxX - minX, h: maxY - minY, maxR }
+    })
+  if (islands.length === 0) return
+  if (shape === 'circle') {
+    seatCircle(islands, positions, nodeGap, selfR)
+  } else {
+    const rows = pyramidCounts(islands.length)
+    let index = 0
+    let y = 0
+    for (const count of rows) {
+      const row = islands.slice(index, index + count)
+      index += count
+      const rowW = row.reduce((sum, island, rowIndex) => sum + island.w + (rowIndex > 0 ? gap : 0), 0)
+      let x = -rowW / 2
+      let rowH = 0
+      for (const island of row) {
+        placeIsland(island, positions, x, y)
+        x += island.w + gap
+        rowH = Math.max(rowH, island.h)
+      }
+      y += rowH + gap
+    }
+  }
+  const self = positions.get(SELF_ID)
+  if (self) {
+    self.x = 0
+    self.y = shape === 'circle' ? 0 : -gap
+  }
+}
+
+/**
+ * 只把叠在一起的圈子推开，圈子内部的相对位置不动。
+ * 不把圈子摆成绕着「我」的圆环，避免整张图变成机械的花瓣。
+ */
+export function spreadCommunities(
+  nodes: readonly GNode[],
+  positions: Map<string, GridPos>,
+  separation: number,
+): void {
+  const groups = new Map<number, string[]>()
+  for (const node of nodes) {
+    if (node.community < 0 || node.id === SELF_ID || node.kind === 'self') continue
+    if (!positions.has(node.id)) continue
+    const list = groups.get(node.community)
+    if (list) list.push(node.id)
+    else groups.set(node.community, [node.id])
+  }
+  if (groups.size < 2) return
+  const gap = 20 * Math.max(0.6, separation)
+  for (let pass = 0; pass < 16; pass++) {
+    const placed = [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([, ids]) => {
+      let x = 0
+      let y = 0
+      let reach = 12
+      let count = 0
+      for (const id of ids) {
+        const pos = positions.get(id)
+        if (!pos) continue
+        x += pos.x
+        y += pos.y
+        count += 1
+      }
+      if (count === 0) return null
+      x /= count
+      y /= count
+      for (const id of ids) {
+        const pos = positions.get(id)
+        if (!pos) continue
+        reach = Math.max(reach, Math.hypot(pos.x - x, pos.y - y))
+      }
+      return { ids, x, y, reach }
+    }).filter((group): group is { ids: string[]; x: number; y: number; reach: number } => group !== null)
+    let moved = false
+    for (let i = 0; i < placed.length; i++) {
+      for (let j = i + 1; j < placed.length; j++) {
+        const left = placed[i]
+        const right = placed[j]
+        if (!left || !right) continue
+        let dx = right.x - left.x
+        let dy = right.y - left.y
+        let dist = Math.hypot(dx, dy)
+        if (dist < 1) {
+          const angle = (left.ids[0] ?? '').length
+          dx = Math.cos(angle)
+          dy = Math.sin(angle)
+          dist = 1
+        }
+        const need = left.reach + right.reach + gap
+        if (dist >= need) continue
+        const push = (need - dist) / 2
+        const ux = dx / dist
+        const uy = dy / dist
+        const shift = (ids: string[], sx: number, sy: number): void => {
+          for (const id of ids) {
+            const pos = positions.get(id)
+            if (!pos) continue
+            pos.x += sx
+            pos.y += sy
+          }
+        }
+        shift(left.ids, -ux * push, -uy * push)
+        shift(right.ids, ux * push, uy * push)
+        moved = true
+      }
+    }
+    if (!moved) break
+  }
+}
 export interface LayoutTask {
   /** 指纹原样带回：主线程靠它认领回包、丢掉过期结果。 */
   key: string
@@ -598,7 +1006,18 @@ interface LayoutOutcome {
   converged: boolean
 }
 
-/** 计时。performance 缺失时退回 Date（精度差一档，不影响这个用途）。 */
+function edgesAmong(
+  edges: readonly GEdge[],
+  nodes: readonly { id: string }[],
+): Array<{ source: string; target: string; weight: number }> {
+  const ids = new Set(nodes.map(node => node.id))
+  const out: Array<{ source: string; target: string; weight: number }> = []
+  for (const edge of edges) {
+    if (!ids.has(edge.source) || !ids.has(edge.target)) continue
+    out.push({ source: edge.source, target: edge.target, weight: layoutWeight(edge.weight) })
+  }
+  return out
+}
 function nowMs(): number {
   return typeof performance !== 'undefined' && typeof performance.now === 'function' ? performance.now() : Date.now()
 }
@@ -633,8 +1052,7 @@ export function previewLayout(input: {
 }): Map<string, GridPos> {
   const all = input.graph.nodes
   if (all.length < 2) return new Map()
-  const deg = degreeOf(input.graph)
-  const linked = all.filter(n => (deg.get(n.id) ?? 0) > 0)
+  const linked = splitOuterNodes(all, input.graph.edges).core
   if (linked.length < 2) return new Map()
   const init = initialPositions(linked, new Map(input.positions))
   const iterations = linked.length > 1200 ? 1 : linked.length > 350 ? 2 : 4
@@ -644,7 +1062,7 @@ export function previewLayout(input: {
       const pos = init.get(n.id)
       return { id: n.id, x: pos?.x ?? 0, y: pos?.y ?? 0 }
     }),
-    edges: input.graph.edges.map(e => ({ source: e.source, target: e.target, weight: layoutWeight(e.weight) })),
+    edges: edgesAmong(input.graph.edges, linked),
     iterations,
     params: fa2Settings(input.settings, linked.length),
   }
@@ -661,11 +1079,8 @@ async function computeLayout(
     // 空图没有可收敛的东西；仍然登记缓存，免得空态里反复走进来
     return { result: { positions: new Map(), engine: 'main', elapsedMs: nowMs() - startedAt }, converged: true }
   }
-  // 无边节点不参与力导向（原因见 isolatedStripPositions）：它们没有弹簧可收敛，
-  // 留在仿真里只会被斥力甩远，白占包围盒。
-  const deg = degreeOf(input.graph)
-  const linked = all.filter(n => (deg.get(n.id) ?? 0) > 0)
-  const isolated = all.filter(n => (deg.get(n.id) ?? 0) === 0)
+  const { core } = splitOuterNodes(all, input.graph.edges)
+  const linked = core.filter(n => input.graph.edges.some(edge => edge.source === n.id || edge.target === n.id))
   const init = initialPositions(linked, input.saved)
   const task: LayoutTask = {
     key,
@@ -673,16 +1088,17 @@ async function computeLayout(
       const pos = init.get(n.id)
       return { id: n.id, x: pos?.x ?? 0, y: pos?.y ?? 0 }
     }),
-    edges: input.graph.edges.map(e => ({ source: e.source, target: e.target, weight: layoutWeight(e.weight) })),
+    edges: edgesAmong(input.graph.edges, linked),
     iterations: input.iterations ?? layoutIterations(linked.length),
     params: fa2Settings(input.settings, linked.length),
   }
   const radiusOf = (n: GNode): number => nodeRadius(n, input.settings, all.length)
-  /** 主簇坐标 + 单独展示区，合成完整坐标表。 */
+  /** 社交图谱才按金字塔或圆圈落位；知识图谱保持力导向。 */
   const withIsolated = (core: ReadonlyMap<string, GridPos>): Map<string, GridPos> => {
     const out = new Map<string, GridPos>(core)
-    if (isolated.length === 0) return out
-    for (const [id, p] of isolatedStripPositions(isolated, radiusOf, core, input.settings.nodeGap)) out.set(id, p)
+    if (all.some((node) => node.kind === 'person' || node.kind === 'self')) {
+      seatIslands(all, out, radiusOf, input.settings.nodeGap, input.settings.islandShape)
+    }
     return out
   }
   if (linked.length >= WORKER_NODE_THRESHOLD) {

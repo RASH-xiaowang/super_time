@@ -135,7 +135,7 @@ describe('AnswerRunView 执行轨迹', () => {
     expect(document.activeElement).toBe(processButton)
   })
 
-  it('每一轮思考都渲染在对应工具调用之后', () => {
+  it('每一轮思考都渲染在对应工具调用之前', () => {
     render({
       turn: turn({
         text: '最终结论。',
@@ -172,10 +172,10 @@ describe('AnswerRunView 执行轨迹', () => {
     const firstThought = content.indexOf('第一轮检索思路')
     const secondTool = content.indexOf('读取会话消息')
     const secondThought = content.indexOf('第二轮核对思路')
-    expect(firstTool).toBeGreaterThan(-1)
-    expect(firstThought).toBeGreaterThan(firstTool)
-    expect(secondTool).toBeGreaterThan(firstThought)
-    expect(secondThought).toBeGreaterThan(secondTool)
+    expect(firstThought).toBeGreaterThan(-1)
+    expect(firstThought).toBeLessThan(firstTool)
+    expect(secondThought).toBeGreaterThan(firstTool)
+    expect(secondThought).toBeLessThan(secondTool)
     const groups = host.querySelectorAll('section[class*="traceGroup"]')
     expect(groups[0]?.getAttribute('aria-labelledby')).toBeTruthy()
     expect(groups[1]?.getAttribute('aria-labelledby')).toBeTruthy()

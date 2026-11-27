@@ -1,3 +1,4 @@
+import { readReplyToolsConfig } from './config/wechat-config.ts'
 /**
  * 会话级 AI 回复的 Remote 方法面。
  *
@@ -29,19 +30,6 @@ import { getConfig } from './query/config.ts'
 import { WHISPER_DEFAULT_MODEL, resolveWhisperModelsDir, whisperEnginePath } from './query/whisper.ts'
 import { resolveImageKeyPair } from './query/image-key.ts'
 import { collectReplyKbSnippetsHybrid } from './query/reply-kb.ts'
-import {
-  addAgentPromise,
-  beginSendApproval,
-  deleteAgentMemory,
-  finishSendApproval,
-  listAgentProposals,
-  readAgentDesk,
-  saveAgentControl,
-  setProposalStatus,
-  writeAgentMemory,
-} from './query/agent/store.ts'
-import { getMessageListRecord, listHeldAiReplyDrafts } from './query/message-list-store.ts'
-import type { MemoryFact } from './query/agent/decision.ts'
 import { rawWechatBase } from './gateway-support.ts'
 import { GatewayMessageList } from './gateway-message-list.ts'
 
@@ -79,7 +67,7 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
     return this.chatAiReplyRemotes().getState(options)
   }
 
-  /** 读取当前账号、当前会话的默认大肥鱼 Webhook；只返回脱敏端点。 */
+  /** 读取当前账号、当前会话的默认 Webhook；只返回脱敏端点。 */
   @Remote('getChatAiReplyDefaultWebhook')
   getChatAiReplyDefaultWebhook(options: {
     chatUsername: string
@@ -94,8 +82,15 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
     chatUsername: string
     chatName?: string
     webhookUrl: string
+    /** 地址来自哪个托管实例（内部透传，界面不填）；用于实例换端口后同步规则。 */
+    appInstanceId?: string
   }): ChatAiReplyDefaultWebhookMutationResult {
-    return this.chatAiReplyRemotes().saveDefaultWebhook(options)
+    const result = this.chatAiReplyRemotes().saveDefaultWebhook(options)
+    // 回填只补地址快照；再调度一拍投递，避免记录停在「待执行」等人工重发。
+    if (result.ok && (result.backfilled ?? 0) > 0) {
+      void this.scheduleMessageListDispatch()
+    }
+    return result
   }
 
   /**
@@ -121,7 +116,13 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
     provider?: 'dsh-wechat-bridge' | 'custom-webhook'
     expectedRevision?: number
   }): ChatAiReplyMutationResult {
-    return this.chatAiReplyRemotes().setEnabled(options)
+    const result = this.chatAiReplyRemotes().setEnabled(options)
+    // 开启时绑定默认规则会回填已有 pending 记录；顺手投递一拍，
+    // 让「开启开关」到「真正发出」之间不再依赖下一次任务扫描。
+    if (result.ok && options.enabled === true) {
+      void this.scheduleMessageListDispatch()
+    }
+    return result
   }
 
   /**
@@ -141,6 +142,10 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
     kbId?: number
     /** 上下文时间窗（小时）；0 = 不限。上限 720（30 天），超出按上限夹紧。 */
     contextWindowHours?: number
+    /** 查无资料时的转人工话术；空串使用内置句。 */
+    safetyHandoff?: string
+    /** 额外禁说词，逗号分隔。 */
+    safetyBlocked?: string
     expectedRevision?: number
   }): ChatAiReplyMutationResult {
     return this.chatAiReplyRemotes().setPersona(options)
@@ -223,7 +228,7 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
       selfUsername: () => this.selfUsername(),
       op: (category, action, status, target, detail) => this.op(category, action, status, target, detail),
       gate: (feature, stats, texts) => this.privacyGate(feature, stats, texts),
-      generate: createDefaultChatAiReplyGenerator({ ctx: () => this._ctx }),
+      generate: createDefaultChatAiReplyGenerator({ ctx: () => this._ctx, toolConfig: () => readReplyToolsConfig(this._dirs.decrypted) }),
       decodeImages: ({ decryptedDir, talker, candidates }) => {
         const image = resolveImageKeyPair(this._dirs.decrypted)
         return decodeChatAiReplyImages(
@@ -315,103 +320,6 @@ export abstract class GatewayChatAiReply extends GatewayMessageList {
       },
       changed: () => this.emitMessageListUpdated(0, 0),
     }
-  }
-
-  /** AI 队友总览：控制、记忆、提案和审计都在本机，不把主动提案送进微信。 */
-  @Remote('getAgentDesk')
-  getAgentDesk() {
-    const desk = readAgentDesk(this._dirs.decrypted, this.selfUsername())
-    return { ...desk, drafts: listHeldAiReplyDrafts(this._dirs.decrypted) }
-  }
-
-  @Remote('saveAgentControl')
-  saveAgentControl(options: {
-    killed?: boolean
-    shadow?: boolean
-    quietStart?: string
-    quietEnd?: string
-    cooldownMs?: number
-    hourCap?: number
-    dayCap?: number
-    proactiveHourCap?: number
-    handoff?: boolean
-  }) {
-    return saveAgentControl(this._dirs.decrypted, options)
-  }
-
-  @Remote('writeAgentMemory')
-  writeAgentMemory(options: {
-    scope: MemoryFact['scope']
-    scopeKey: string
-    kind: MemoryFact['kind']
-    text: string
-  }) {
-    return writeAgentMemory(this._dirs.decrypted, { accountKey: this.selfUsername(), ...options })
-  }
-
-  @Remote('deleteAgentMemory')
-  deleteAgentMemory(options: { id: number }) {
-    return { ok: deleteAgentMemory(this._dirs.decrypted, this.selfUsername(), options.id) }
-  }
-
-  @Remote('addAgentPromise')
-  addAgentPromise(options: { text: string; dueAt: number }) {
-    return { ok: addAgentPromise(this._dirs.decrypted, this.selfUsername(), options.text, options.dueAt) }
-  }
-
-  @Remote('setAgentProposalStatus')
-  setAgentProposalStatus(options: { id: number; status: 'accepted' | 'dismissed' }) {
-    return {
-      ok: setProposalStatus(this._dirs.decrypted, this.selfUsername(), options.id, options.status),
-    }
-  }
-
-  /** 把已确认的草稿按原 Webhook 地址重发。自动投递不会走这条。 */
-  @Remote('sendAgentDraft')
-  async sendAgentDraft(options: { id: number }) {
-    const record = getMessageListRecord(this._dirs.decrypted, options.id)
-    if (record === undefined || record.failureKind !== 'held_draft') {
-      return { ok: false, error: '这不是待确认的 AI 回复草稿' }
-    }
-    const callId = 'draft:' + String(options.id)
-    const argsHash = String(options.id) + ':' + record.text
-    if (!beginSendApproval(this._dirs.decrypted, callId, argsHash)) {
-      return { ok: false, error: '这条草稿已经发送过' }
-    }
-    const sent = await this.messageListRemotes().resendMessageListRecord({ id: options.id })
-    if (sent.ok) finishSendApproval(this._dirs.decrypted, callId, argsHash)
-    return sent
-  }
-
-  /**
-   * 把一条提案正文按图中的 Webhook 发出。
-   * target 就是请求体里的 target，例如「文件传输助手」；要先有匹配的消息列表规则。
-   */
-  @Remote('sendAgentProposal')
-  async sendAgentProposal(options: { id: number; target: string }) {
-    const target = options.target.trim()
-    if (target === '') return { ok: false, error: '请填写发送目标，例如文件传输助手' }
-    const item = listAgentProposals(this._dirs.decrypted, this.selfUsername())
-      .find((proposal) => proposal.id === options.id)
-    if (item === undefined || item.body.trim() === '') {
-      return { ok: false, error: '提案没有可发送的正文' }
-    }
-    const callId = 'proposal:' + String(options.id)
-    const argsHash = target + ':' + item.body
-    if (!beginSendApproval(this._dirs.decrypted, callId, argsHash)) {
-      return { ok: false, error: '这条提案已经发送过' }
-    }
-    const sent = await this.messageListRemotes().insertMessageListRecord({
-      chatName: target,
-      targetName: target,
-      text: item.body,
-      note: 'AI 队友提案',
-    })
-    if (sent.ok) {
-      finishSendApproval(this._dirs.decrypted, callId, argsHash)
-      setProposalStatus(this._dirs.decrypted, this.selfUsername(), options.id, 'accepted')
-    }
-    return sent
   }
 
   /** 后台扫描：由同步事件与 10s 兜底调用；失败不影响微信同步主流程。 */

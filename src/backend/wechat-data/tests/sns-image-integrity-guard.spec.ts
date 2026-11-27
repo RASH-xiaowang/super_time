@@ -216,23 +216,23 @@ describe('高清原图：缩略图不许被当成高清沉淀下来', () => {
 
   it('前端：进面板恢复与单张查询都遵守「本地优先」', () => {
     // 单张先查 IndexedDB 原图（命中就不再出网）
-    expect(momentsMedia).toMatch(/const cached = await snsMediaCacheGet\(it\.key, true\)/)
+    expect(momentsMedia).toMatch(/const cached = await snsMediaCacheGet\(storageKey, true\)/)
     // 批量恢复不再分有网/无网
     expect(momentsMedia).not.toMatch(/if \(!isOffline\(\)\) return/)
-    expect(momentsMedia).toMatch(/snsMediaCacheGetMany\(keys, true\)/)
+    expect(momentsMedia).toMatch(/snsMediaCacheGetMany\(\[\.\.\.names\.keys\(\)\], true\)/)
     // 网络状态由界面读同一个信号（navigator.onLine），不在后端另造一套探网
     expect(momentsMedia).toMatch(/navigator\.onLine === false/)
     // 并且把它传给后端：后端仍要靠它决定「本地都没有时能不能出网」
     expect(momentsMedia).toMatch(/const options = buildSnsImageRequestOptions\(image, offline\)/)
-    expect(momentsMedia).toMatch(/const imageOpts = buildSnsImageRequestOptions\(it, offline\)/)
+    expect(momentsMedia).toMatch(/request\(buildSnsImageRequestOptions\(gridSource\(item\), offline\)\)/)
     expect(momentsMedia).toMatch(/\.\.\.snsImageMetadata\(source\),\s*offline,/)
     expect(mediaRemotes).toMatch(/offline\?: boolean/)
   })
 
   it('前端：写回时把 thumb 标记一起存下去', () => {
     expect(momentsMedia).toMatch(/const original = (?:r|result)\.thumb !== true/)
-    expect(momentsMedia).toMatch(/snsMediaCacheSet\(it\.key, r\.url, !original\)/)
-    expect(momentsMedia).toMatch(/snsMediaCacheSet\(key, result\.url, !original\)/)
+    expect(momentsMedia).toMatch(/snsMediaCacheSet\(loaded\.storageKey, loaded\.entry\.url, !loaded\.entry\.original\)/)
+    expect(momentsMedia).toMatch(/snsMediaCacheSet\(storageKey, result\.url, !original\)/)
     expect(mediaCache).toMatch(/thumb\?: boolean/)
     // wantOriginal 为真时，缩略图**与 v1 旧条目**都必须当未命中。
     // 只判 thumb 不够：v1 条目根本没有这个字段（真机清点 1186 条里 1093 条是那种）。
@@ -321,8 +321,8 @@ describe('评论图：token/key 从解析到批处理，四处缺一不可', () 
     // 这条是本 PR 里最容易回归的一处：把 `!== 'video'` 写回 `=== 'img'`，
     // 评论图就静默退回 [图]，而所有单测仍然全绿（因为它们都不走真实批处理）。
     // 现在三件套由共享构造器统一透传；批处理只按「视频 / 非视频」分流。
-    expect(mediaHook).toMatch(/const imageOpts = buildSnsImageRequestOptions\(it, offline\)/)
-    expect(mediaHook).toMatch(/it\.kind === 'video'\s*\?\s*apiGetSnsVideoCoverDataUrl\(videoOpts\)\s*:\s*apiGetSnsImageDataUrl\(imageOpts\)/)
+    expect(mediaHook).toMatch(/request\(buildSnsImageRequestOptions\(gridSource\(item\), offline\)\)/)
+    expect(mediaHook).toMatch(/item\.kind === 'video'[\s\S]*?apiGetSnsVideoCoverDataUrl[\s\S]*?: request\(buildSnsImageRequestOptions\(gridSource\(item\), offline\)\)/)
     expect(mediaHook).toMatch(/\.\.\.\(url !== undefined \? \{ url \} : \{\}\)/)
     expect(mediaHook).toMatch(/\.\.\.\(token !== undefined \? \{ token \} : \{\}\)/)
     expect(mediaHook).toMatch(/\.\.\.\(seed !== undefined \? \{ seed \} : \{\}\)/)

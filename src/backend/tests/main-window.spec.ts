@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const HERE = dirname(fileURLToPath(import.meta.url))
 const ROOT = join(HERE, '..', '..', '..')
 const require = createRequire(import.meta.url)
-const { broadcastToWindows, createMainWindow } = require(join(HERE, '..', 'main-window.js'))
+const { broadcastToWindows, createMainWindow, fitWindow16x10 } = require(join(HERE, '..', 'main-window.js'))
 
 interface WindowStubOptions {
   destroyed?: boolean
@@ -209,6 +209,25 @@ describe('main-window 渲染进程崩溃恢复', () => {
     second.webContents.emit('destroyed')
     expect(vi.getTimerCount()).toBe(0)
     expect(second.webContents.listenerCount('render-process-gone')).toBe(0)
+  })
+})
+
+describe('启动窗口保持 16:10', () => {
+  it('基准屏是 1440×900，矮屏同时缩小两边而不是只压高度', () => {
+    expect(fitWindow16x10(1440, 900)).toEqual({ width: 1440, height: 900 })
+    expect(fitWindow16x10(2560, 1440)).toEqual({ width: 1440, height: 900 })
+    expect(fitWindow16x10(1366, 768)).toEqual({ width: 1216, height: 760 })
+    for (const size of [fitWindow16x10(1366, 768), fitWindow16x10(1920, 800), fitWindow16x10(800, 900)]) {
+      expect(size.width * 10).toBe(size.height * 16)
+      expect(size.width).toBeGreaterThan(0)
+      expect(size.height).toBeGreaterThan(0)
+    }
+  })
+
+  it('创建窗口时锁定 16:10', () => {
+    const source = readFileSync(join(ROOT, 'src', 'backend', 'main-window.js'), 'utf8')
+    expect(source).toContain('win.setAspectRatio(16 / 10)')
+    expect(source).toContain('fitWindow16x10(area.width, area.height)')
   })
 })
 

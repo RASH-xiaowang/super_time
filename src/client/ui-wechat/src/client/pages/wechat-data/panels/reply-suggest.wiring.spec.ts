@@ -74,7 +74,9 @@ describe('推荐回复的接线', () => {
   it('会话级推荐固定使用最近 60 条，并把唯一目标行交给提示词', () => {
     expect(data).toContain('export const REPLY_SUGGEST_CONTEXT_LIMIT = 60')
     expect(remotes).toContain('REPLY_SUGGEST_CONTEXT_LIMIT')
-    expect(remotes).toContain('buildReplyPrompt(lines, snippets, want, targetLine)')
+    expect(remotes).toContain('buildReplyPrompt(promptLines, promptSnippets, want, targetLine)')
+    expect(remotes).toContain('REPLY_TOOL_RESULT_RESERVE')
+    expect(remotes).toContain('promptLines.shift()')
     expect(data).toContain('const targetLine = targetText !== \'\' && targetSpeaker !== undefined')
   })
 

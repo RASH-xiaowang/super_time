@@ -71,7 +71,7 @@ export function PeriodSummaryPanel({ onOpenSettings }: { onOpenSettings?: (secti
 
   return (
     <div className={kitCss.panelShell}>
-      <PanelHeader title="周期总结" desc="按日期区间汇总聊天要点 · 复用每日总结链路（DSH LLM）" />
+      <PanelHeader title="周期总结" />
 
       {/* 表单整块就是一行：区间（含预设）· 生成 · 复制 · 当前区间。
           改前是纵向四行（预设 / 起止 / 按钮 / 当前区间）—— 一屏最上面那块白占约 110px，

@@ -1,0 +1,307 @@
+/*
+ * 应用托管面板。
+ *
+ * 颜色/圆角/间距**只用 --nm-\* 令牌**（浅色与深色主题共用同一套变量）：
+ * 早期版本用了 `--text` / `--panel` 这类不存在的名字，浅色主题下兜底值变成
+ * 近白色文字，提示语几乎看不见 —— 这类"看着写出了颜色其实没有"的写法在这里明确排除。
+ * 圆角与间距也只用令牌：theme-geometry 的棘轮不允许新的字面量。
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+  padding-block: 0 var(--nm-s-6);
+  min-width: 0;
+}
+
+.headActions {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+}
+
+.licenseLocked {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  padding: var(--nm-s-3);
+  border: 1px solid color-mix(in srgb, var(--nm-danger) 32%, var(--nm-border));
+  border-left: 3px solid var(--nm-danger);
+  border-radius: var(--nm-r-md);
+  background: color-mix(in srgb, var(--nm-danger) 6%, var(--nm-bg-card));
+}
+
+.licenseLockedTitle {
+  font-size: var(--nm-fs-md);
+  font-weight: 500;
+  line-height: var(--nm-lh-tight);
+  color: var(--nm-danger-text);
+}
+
+.licenseLockedText {
+  margin: 0;
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-1);
+}
+
+.licenseLockedMeta {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-3);
+}
+
+.statRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nm-s-2);
+}
+
+.statCell {
+  flex: 1 1 140px;
+  min-width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+}
+
+.statLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.statValue {
+  font-size: var(--nm-fs-xl);
+  font-weight: 500;
+  line-height: var(--nm-lh-tight);
+  color: var(--nm-text-1);
+}
+
+.statValue[data-ok='true'] {
+  color: var(--nm-success-text);
+}
+
+.notice {
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
+  font-size: var(--nm-fs-sm);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-1);
+}
+
+.noticeOk {
+  border-color: color-mix(in srgb, var(--nm-success) 30%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-success) 7%, var(--nm-bg-card));
+  color: var(--nm-success-text);
+}
+
+.noticeWarn {
+  border-color: color-mix(in srgb, var(--nm-warning) 32%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-warning) 8%, var(--nm-bg-card));
+  color: var(--nm-warning-text);
+}
+
+.noticeErr {
+  border-color: color-mix(in srgb, var(--nm-danger) 32%, var(--nm-border));
+  background: color-mix(in srgb, var(--nm-danger) 8%, var(--nm-bg-card));
+  color: var(--nm-danger-text);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-3);
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-2);
+  min-width: 0;
+  padding: var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+  box-shadow: var(--nm-shadow-card);
+}
+
+.card[data-disabled='true'] {
+  opacity: 0.72;
+}
+
+.cardHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--nm-s-2);
+}
+
+.cardTitleRow {
+  display: flex;
+  align-items: center;
+  gap: var(--nm-s-2);
+  min-width: 0;
+}
+
+.cardTitle {
+  margin: 0;
+  font-size: var(--nm-fs-lg);
+  font-weight: 500;
+  color: var(--nm-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.cardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--nm-s-1);
+}
+
+.meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--nm-s-1) var(--nm-s-4);
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+}
+
+.meta div {
+  display: flex;
+  gap: var(--nm-s-1);
+  min-width: 0;
+}
+
+.meta dt {
+  flex: 0 0 auto;
+  color: var(--nm-text-3);
+}
+
+.meta dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--nm-text-1);
+}
+
+.lastError {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-danger-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.capsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--nm-s-2);
+  padding-top: var(--nm-s-2);
+  border-top: 1px dashed var(--nm-border);
+}
+
+.capsLabel {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.capCheck {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--nm-s-1);
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-1);
+  cursor: pointer;
+}
+
+.capCheck input {
+  cursor: pointer;
+}
+
+.quota {
+  margin-left: auto;
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.muted {
+  font-size: var(--nm-fs-xs);
+  color: var(--nm-text-3);
+}
+
+.footnote {
+  margin: 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-3);
+}
+
+.dialogFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--nm-s-2);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--nm-s-1);
+  font-size: var(--nm-fs-md);
+  color: var(--nm-text-1);
+}
+
+.input {
+  padding: var(--nm-s-2) var(--nm-s-3);
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-input);
+  color: var(--nm-text-1);
+  font-size: var(--nm-fs-md);
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--nm-border-active);
+}
+
+.hint {
+  margin: var(--nm-s-2) 0 0;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  color: var(--nm-text-3);
+}
+
+.logBox {
+  margin: 0;
+  padding: var(--nm-s-3);
+  max-height: 60vh;
+  overflow: auto;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-1);
+  color: var(--nm-text-2);
+  font-family: ui-monospace, monospace;
+  font-size: var(--nm-fs-xs);
+  line-height: var(--nm-lh-body);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

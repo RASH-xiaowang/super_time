@@ -349,6 +349,7 @@ describe('任务触发问候', () => {
       targetUsername: 'wxid_wang',
       images: [],
       triggeredAt: 1_700_000_000_200,
+      greetingText: '小王你好，已收到',
     }))
     const li = withWritableDb(taskDbPath(decrypted), (db) => insertTaskTriggerGreeting(decrypted, db, {
       taskId: 12,
@@ -360,6 +361,7 @@ describe('任务触发问候', () => {
       targetUsername: 'wxid_li',
       images: [],
       triggeredAt: 1_700_000_000_300,
+      greetingText: '小李你好，资料已收到',
     }))
 
     expect(wang.record).toMatchObject({
@@ -392,6 +394,7 @@ describe('任务触发问候', () => {
       targetUsername: 'wxid_wang',
       images: [],
       triggeredAt: 1_700_000_000_000,
+      greetingText: '小王你好，已收到',
     }))
     const second = withWritableDb(taskDbPath(decrypted), (db) => insertTaskTriggerGreeting(decrypted, db, {
       taskId: 9,
@@ -403,6 +406,7 @@ describe('任务触发问候', () => {
       targetUsername: 'wxid_wang',
       images: [],
       triggeredAt: 1_700_000_000_000,
+      greetingText: '小王你好，已收到',
     }))
 
     expect(first.ok).toBe(true)
@@ -428,12 +432,13 @@ describe('任务触发问候', () => {
       targetUsername: '',
       images: [],
       triggeredAt: 1_700_000_000_100,
+      greetingText: '你好',
     }))
     expect(defaultGreeting.record?.text).toBe('你好')
   })
 })
 
-describe('大肥鱼健康检查、任务查询与旧库兼容', () => {
+describe('健康检查、任务查询与旧库兼容', () => {
   it('健康检查只用已保存地址 GET，返回地址不含 token', async () => {
     const saved = saveMessageListRule(decrypted, {
       targetName: '小王',

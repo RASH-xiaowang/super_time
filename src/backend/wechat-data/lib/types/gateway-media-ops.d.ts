@@ -31,7 +31,8 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
     getEmoticons(options?: {
         limit?: number;
         offset?: number;
-    }): EmoticonsSnapshot;
+        includeOthers?: boolean;
+    }): Promise<EmoticonsSnapshot>;
     /**
      * Resource files.
      * @param options - Optional limit/offset and category filter for incremental loading.
@@ -231,6 +232,7 @@ export declare abstract class GatewayMediaOps extends GatewayAskOps {
             md5: string;
             emojiUrl?: string;
         }>;
+        localOnly?: boolean;
     }): Promise<EmoticonDataUrlsResult>;
     /**
      * 取一条图片消息的**原图**，但只走消息里自带的免登录预签名直链（`<img tpurl=…/tphdurl=…>`）。

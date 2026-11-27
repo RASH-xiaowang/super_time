@@ -64,7 +64,8 @@ describe('设置工作区：结构、滚动与响应式', () => {
   })
 
   it('桌面弹窗有足够宽度承载目录与正文', () => {
-    expect(SHELL).toMatch(/\.settingsDialog\.settingsDialog\s*\{[^}]*width:\s*min\(1120px,\s*94vw\)/)
+    expect(SHELL).toMatch(/\.settingsDialog\.settingsDialog\s*\{[^}]*width:\s*min\(1120px,\s*94vw,\s*calc\(78vh \* 1\.6\)\)/)
+    expect(SHELL).toMatch(/\.settingsDialog\.settingsDialog\s*\{[^}]*aspect-ratio:\s*16\s*\/\s*10/)
     expect(CSS).toMatch(/\.workspace\s*\{[^}]*min-width:\s*0/)
   })
 })

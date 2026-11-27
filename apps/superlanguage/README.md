@@ -128,6 +128,29 @@ API 令牌、运行日志等运行数据可能含敏感信息，不应分发。`
 
 ## 运行与配置
 
+> **2026-11-24 起：本程序由 Super Time 授权后才能运行。**
+> 部署后的实例目录里必须存在 `instance.ini`（由 Super Time「应用托管」写入），
+> 且启动时能连上本机授权管道换取票据；否则进程以**退出码 4** 拒绝启动
+> （缺少文件时为 `NOT_MANAGED`，连不上主机时为 `BROKER_DOWN`，功能位未开通时为
+> `FEATURE_DENIED`）。运行中票据失效超过 15 分钟宽限后，队列停止领取新任务，
+> 已在发送的任务不打断；`/api/send-message`、`/api/send-attachments` 与 Webhook
+> 入队会返回 403 `license_required`。
+>
+> **单实例锁按 exe 目录派生**：不同实例目录可以同时各跑一份（一个 Super Time 托管多个
+> 实例），同一目录仍只允许一份 —— 第二次启动会激活已有窗口并以**退出码 5** 退出
+> （托管模式下；手工双击的旧行为仍是 0）。Super Time 重启后会**接手**还在跑的实例，
+> 不会再拉起第二个副本。
+>
+> **跨机托管（2026-11-24）**：`instance.ini` 里的 `broker` 支持两种取值 ——
+> `\\.\pipe\...`（本机自取）与 `push`（由 Super Time 从局域网 POST 到
+> `/api/license/lease`）。`push` 模式下实例**先开 HTTP API**，票据到达前
+> `license.state=blocked`、队列暂停（不会有消息发出）；票据 10 分钟到期、宽限 15 分钟。
+> 启动请求走实例目录里的 `.start-request`（由 `scripts\superlanguage-launch-watch.cmd`
+> 消费），不额外开端口。详见 [`../../docs/DEPLOYMENT.md`](../../docs/DEPLOYMENT.md) 第 8 节。
+>
+> 隔离测试用 `--test-skip-license` 跳过校验；`--no-error-ui` 只抑制启动失败对话框
+> （自动化需要立刻拿到退出码），**不改变任何授权判定**。
+
 ```powershell
 .\build\SuperLanguage.exe
 .\build\SuperLanguage.exe --tray
@@ -151,7 +174,7 @@ API 令牌、运行日志等运行数据可能含敏感信息，不应分发。`
 | `resource-spool\` | 上传附件及元数据，以及按原文件名暂存的 `<id>\<原名>`；未被引用的资源保留 7 天 |
 | `flow-debug.log` | 运行日志镜像；含会话名称，Webhook URL 中的令牌已打码；超过 1 MiB 轮转为 `.1`（只保留一份） |
 | `mention-debug.log` | @ 与附件流程的结构化诊断，不记录昵称、目标或正文；超过 1 MiB 轮转为 `.1` |
-| `instance.lock` | 实例锁；同一目录在另一个 Windows 用户会话中重复启动会被拒绝 |
+| `instance.lock` | 实例锁；同一目录在另一个 Windows 用户会话中重复启动会被拒绝。**单实例互斥体按 exe 目录派生**，因此不同实例目录可并存（多实例托管），同目录第二份会激活已有窗口并以退出码 5 退出 |
 
 API 默认关闭，可在主界面开启。监听端口由系统自动分配（每次启动可能不同），
 运行时写入 `api-port.txt`。`api-listen.txt` 指定的地址不可用时会回退到 `127.0.0.1` 并记录

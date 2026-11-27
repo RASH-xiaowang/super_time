@@ -38,6 +38,7 @@
 import { wechatCdnHostAllowed } from './cdn-hosts.ts'
 import { snsCdnUrl } from './sns-cdn-url.ts'
 import { decryptSnsAll } from './sns-keystream.ts'
+import { downloadSnsBody, type SnsDownloadOptions } from './sns-cdn-download.ts'
 
 /** 取图结果：成功给 data URL，失败给可读原因（调用方据此回落本机解密或显示说明）。 */
 export interface SnsCdnImageResult {
@@ -155,6 +156,7 @@ export async function fetchSnsCdnImage(
   token: string | undefined,
   seed: string | undefined,
   fetchImpl: typeof fetch = fetch,
+  downloadOptions: SnsDownloadOptions = {},
 ): Promise<SnsCdnImageResult> {
   const url = snsCdnUrl(rawUrl, token)
   if (url === '') return { error: '没有可用的 CDN 地址' }
@@ -165,15 +167,14 @@ export async function fetchSnsCdnImage(
   const key = String(seed ?? '').trim()
   if (key === '') return { error: '缺少解密种子（<enc key>），无法还原图片' }
 
-  let res: Response
+  let res: Response, raw: Buffer
   try {
-    res = await fetchImpl(url, { headers: { 'User-Agent': 'Mozilla/5.0 MicroMessenger/8.0.49' } })
+    const result = await downloadSnsBody(url, fetchImpl, downloadOptions)
+    res = result.response
+    raw = result.bytes
   } catch (e) {
     return { error: '取图请求失败：' + (e as Error).message }
   }
-  if (!res.ok) return { error: 'CDN 返回 HTTP ' + String(res.status) }
-  const raw = Buffer.from(await res.arrayBuffer())
-  if (raw.length === 0) return { error: 'CDN 返回空响应' }
 
   // 实测响应头恒为 `x-enc: 1`。它与「响应体看起来是不是图片」一起决定要不要解密
   // （对齐参考项目 `sns_media.py:1234-1239`）：部分端点会直接给已解码的图片，

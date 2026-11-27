@@ -3,7 +3,7 @@
  *
  * 实测发现的两个问题都还钉在这里，只是**机制换了**：
  *
- *  ① **封面失败会留下空框**。`.linkCover` 是固定 60×60 的框，而最初的失败处理是
+ *  ① **封面失败会留下空框**。`.linkCover` 是固定 96×96 的框，而最初的失败处理是
  *     `e.currentTarget.style.display = 'none'` —— 图片一藏，框还在。实测 64 个链接封面里
  *     有 **60 个**没有任何可用 URL（`coverSrc` 为空串），旧代码统统变成 60 个灰色空格子。
  *     M23 之前靠面板自己维护 `failedImgs` 状态机（onError 里 add、渲染时 has）来换 🔗 占位；
@@ -111,7 +111,7 @@ describe('朋友圈：图片失败要有占位，不能留空格子', () => {
   })
 
   it('`.linkCover` 是固定尺寸的框 —— 这正是必须给占位的原因', () => {
-    expect(momentsCss).toMatch(/\.linkCover\s*\{[^}]*width:\s*60px[^}]*height:\s*60px/)
+    expect(momentsCss).toMatch(/\.linkCover\s*\{[^}]*width:\s*96px[^}]*height:\s*96px/)
   })
 
   it('朋友圈图的失败口径保持一致（评论图/正文图也是占位或提示，不是空框）', () => {

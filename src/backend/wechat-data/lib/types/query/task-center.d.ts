@@ -7,6 +7,7 @@ export type { ScanTaskTriggersOptions } from './task-center-scan.ts';
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts';
 export type { PendingDispatchResult, TaskDispatchDeps, TaskDispatchOptions } from './task-center-callback.ts';
 export { storeExists, taskDbPath };
+export { parseTriggerImages, parseTriggerTexts } from './task-center-trigger-parse.ts';
 /** 建表语句（两张表一次建齐；`IF NOT EXISTS` ⇒ 可在每个写连接里重复执行）。 */
 export declare function ensureTaskSchema(db: DatabaseSync): void;
 /** `task_triggers` 行 → 契约里的 `TaskTriggerRecord`。 */
@@ -58,25 +59,24 @@ export declare function saveTaskInfo(decryptedDir: string, input: TaskInfoInput,
  */
 export declare function setTaskInfoStatus(decryptedDir: string, id: number, status: TaskInfoStatus, selfUsername?: string): TaskInfoMutationResult;
 /**
- * 删除任务。**触发记录刻意保留**：任务删了，记录仍是已经发生过的事实，
- * 前端也能凭记录里的快照字段继续展示（见 `types-taskcenter.ts` 的 `task_name` 注释）。
+ * 删除任务，并在同一事务里删掉它的全部触发记录。
  * @param decryptedDir - 解密数据根。
  * @param id - 任务 id。
  * @returns 写结果（失败带中文 error）。
  */
 export declare function deleteTaskInfo(decryptedDir: string, id: number): TaskInfoMutationResult;
 /**
- * 批量删除任务配置。与单条删除同一语义：**触发记录刻意保留**，它们是已经发生过的事实。
+ * 批量删除任务，并在同一事务里删掉这些任务的全部触发记录。
  * @param decryptedDir - 解密数据根。
  * @param rawIds - 任务 id 列表（运行时未受类型保护）。
- * @returns 实际删除行数；空选择 / 非法 id / 超过上限时整单失败。
+ * @returns 实际删除的任务行数；空选择 / 非法 id / 超过上限时整单失败。
  */
 export declare function deleteTaskInfos(decryptedDir: string, rawIds: unknown): TaskBatchMutationResult;
 /**
  * 批量删除触发记录，并在**同一事务**里重算受影响任务的统计缓存。
  *
- * `deleteTaskInfos` 刻意保留触发记录，所以这里要让任务行的 `trigger_count` /
- * `last_triggered_at` 重新等于记录表事实；否则删了记录，左栏仍显示旧的触发次数。
+ * 删掉记录后，把还在的任务的 `trigger_count` / `last_triggered_at` 重新算成记录表事实；
+ * 否则左栏仍显示旧的触发次数。
  * 任一步失败都回滚，不能留下「记录删了、统计没更新」的半完成状态。
  * @param decryptedDir - 解密数据根。
  * @param rawIds - 触发记录 id 列表（运行时未受类型保护）。

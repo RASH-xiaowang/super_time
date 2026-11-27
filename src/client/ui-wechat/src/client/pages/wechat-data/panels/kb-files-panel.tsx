@@ -9,11 +9,10 @@
 
 import clsx from 'clsx'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiAddKbFiles, apiBuildKbVectorIndex, apiDeleteKbFile, apiGetKbFileChunks, apiGetKbVectorIndex, apiOpenFileDialog, apiSearchKb, apiSetKbFileRag, apiSummarizeKbFile, runtimeCapabilities, writeRenderCache } from '../api.ts'
+import { apiBuildKbVectorIndex, apiDeleteKbFile, apiGetKbFileChunks, apiGetKbVectorIndex, apiSearchKb, apiSetKbFileRag, apiSummarizeKbFile, runtimeCapabilities, writeRenderCache } from '../api.ts'
 import { useKbFileDetailActions, useLoadAllChunks } from './kb-save-note.ts'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
 import type { KbFileMeta, KbSearchResult, KbVectorIndexView } from '../types.ts'
-import { KB_ACCEPTED_EXTS } from '../types.ts'
 import { Button, Card, EmptyState, PanelHeader, SearchInput, Toolbar, useDebouncedValue } from '../ui/kit.tsx'
 import { useConfirm } from '../ui/confirm.tsx'
 import { ListSkeleton, useTransientNotice } from './hooks.tsx'
@@ -26,9 +25,11 @@ import { useKbFilesBatch } from './use-kb-files-batch.ts'
 import { useKbIndexPolling, useKbParsePolling } from './use-kb-files-polling.ts'
 import { useKbFilesSnapshot } from './use-kb-files-snapshot.ts'
 import { useKeepAliveActive } from './keep-alive.tsx'
+import { useKbUpload } from './use-kb-upload.ts'
+import { KbUploadDropzone, KbUploadReceipt } from './kb-upload-dropzone.tsx'
 import css from './kbfiles.module.css'
 import kitCss from '../ui/kit.module.css'
-import { AddReport, FILTERS, KbFileList, KbPanelAlerts, KbTitleRow, PARSE_LOOK, SnippetText, StateFilter, baseName, cachedFiles, indexLabel, reasonText } from './kb-files-support.tsx'
+import { FILTERS, KbFileList, KbPanelAlerts, KbTitleRow, PARSE_LOOK, SnippetText, StateFilter, cachedFiles, indexLabel } from './kb-files-support.tsx'
 
 /**
  * 知识库文件面板。
@@ -106,7 +107,8 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   const [search, setSearch] = useState<KbSearchResult | null>(null)
   const [searchError, setSearchError] = useState<string | null>(null)
   const [searching, setSearching] = useState(false)
-  const [adding, setAdding] = useState(false)
+  const upload = useKbUpload(kbId, () => load({ silent: true }), active)
+  const adding = upload.busy
   /** 正在被改的那一行（删除 / 开关）：期间禁用它的按钮，避免同一行并发两次变更。 */
   const [busyId, setBusyId] = useState<number | null>(null)
   /**
@@ -118,7 +120,6 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
   const [indexView, setIndexView] = useState<KbVectorIndexView | null>(null)
   /** 建索引失败的原因（出站拦截 / 未配向量模型 / 网络）。 */
   const [indexError, setIndexError] = useState<string | null>(null)
-  const [report, setReport] = useState<AddReport | null>(null)
   const { notice, flash, hold } = useTransientNotice()
   const confirm = useConfirm()
 
@@ -206,7 +207,6 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
     setSelectedId(null)
     setQuery('')
     setFilter('all')
-    setReport(null)
     // 检索结果也属于「上一个库」：留着它，切库后会在乙库的界面里看到甲库的命中。
     setSearch(null)
     setSearchError(null)
@@ -372,51 +372,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
     setFilter('all')
   }, [focusFileId, focusNonce])
 
-  /**
-   * 选一个文件加入知识库。
-   *
-   * 走原生对话框**只取路径**：选中的可能是几十 MB 的文件，读盘与登记都由后端做
-   * （与 `apiSaveFileDialog` 同口径）。`filters` 由这里传、不写死在主进程 ——
-   * 写死就会与后端 `ACCEPTED_EXTS` 漂移成两份，症状是「选得进来但登记被拒」。
-   *
-   * 逐项回执：**部分成功是常态**（一次选 10 个、3 个重复、1 个类型不支持），
-   * 所以这里把失败项逐条列出来，而不是压成一句「添加失败」。
-   */
-  const addFiles = useCallback(async (): Promise<void> => {
-    const picked = await apiOpenFileDialog({
-      title: '选择要加入知识库的文件',
-      // 一个「全部支持的类型」分组：用户看不到不支持的扩展名，也就不会选进来再被拒。
-      filters: [{ name: '支持的文件', extensions: [...KB_ACCEPTED_EXTS] }],
-    })
-    if (picked.error) { setError(picked.error); return }
-    if (picked.canceled || picked.files.length === 0) return
-    setAdding(true)
-    try {
-      const paths = picked.files
-      const r = await apiAddKbFiles(kbId, paths)
-      // `results` 与 `paths` 按下标对齐（后端对每个 path 依次 push 一条）。用它把
-      // 失败项还原成「哪个文件、为什么」，否则界面只能说「有 4 个没进来」。
-      const failures = r.results
-        .map((res, i) => ({ res, path: paths[i] ?? '' }))
-        .filter(x => !x.res.ok)
-        .map(x => ({
-          name: x.res.duplicateOf?.name || baseName(x.path) || '（未识别的文件）',
-          reason: reasonText(x.res),
-        }))
-      setReport({ added: r.added, failed: r.failed, failures })
-      if (r.added > 0) {
-        flash(`已加入 ${r.added} 个文件`)
-        await load()
-      } else {
-        setError(r.error ?? '这些文件都没有加入知识库')
-      }
-    } catch (e) {
-      setError((e as Error).message)
-    } finally {
-      setAdding(false)
-    }
-  }, [flash, kbId, load])
-
+  const addFiles = upload.pick
 
   /**
    * 从知识库里删掉一个文件。
@@ -553,13 +509,13 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
       : (
         <EmptyState
           title="还没有登记文件"
-          desc="① 点「添加文件」加入电脑上的 txt / md / csv / json / html 等资料；② 等右上角状态变成「已就绪」；③ 到「微信问答」提问——回答会标注来自哪份文件，并可点回原文。文件只被读取，不会被修改或删除。"
           action={<Button variant="pill" onClick={() => { void addFiles() }} disabled={adding} {...desktopActionProps()}>{desktopAction() ? '添加文件（仅电脑）' : '添加文件'}</Button>}
         />
       )
 
   return (
     <div className={clsx(kitCss.panelShell, css.shell)}>
+      <KbUploadDropzone kbId={kbId} busy={upload.busy}>
       {/* 页头与工具栏**吸顶**，与笔记库同一套骨架：三栏之后本面板高度由外壳给足，
           整块跟着滚会让「添加文件 / 搜索 / 状态筛选」滚出屏幕。 */}
       <div className={css.head}>
@@ -628,28 +584,12 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
       {notice && <div className={css.notice}>{notice}</div>}
       {error && <div className={kitCss.error} role="alert">{error}</div>}
       <KbPanelAlerts indexBuildError={indexBuildError} indexError={indexError} readError={readError} kbLabel={kbLabel} />
+      {/* 独立于正文滚动区，避免回执挤出已展开的阅读器。 */}
+      <KbUploadReceipt kbId={kbId} batch={upload.batch} busy={upload.busy} ownBusy={upload.ownBusy} />
 
       {/* 滚动区：回执、检索结果与主从两栏一起滚（与改前「整块面板滚」的行为一致），
           被吸住的只有上面的页头与工具栏。 */}
       <div className={css.bodyWrap}>
-        {/* 添加回执：成功数一句话，失败项逐条给原因。一个都没失败时不渲染这一段。 */}
-        {report && report.failures.length > 0 && (
-          <div className={css.report} role="status">
-            <div className={css.reportHead}>
-              <span className={css.reportTitle}>已加入 {report.added} 个，{report.failed} 个未加入</span>
-              <Button size="sm" variant="outline" onClick={() => { setReport(null) }}>知道了</Button>
-            </div>
-            <ul className={css.reportList}>
-              {report.failures.map((x, i) => (
-                <li className={css.reportItem} key={`${x.name}-${i}`}>
-                  <span className={css.reportName} title={x.name}>{x.name}</span>
-                  <span className={css.reportReason}>{x.reason}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-
         {/* 正文检索结果（设计稿 §8.4）。只在有关键词时出现：它不占独立视图，
             也不给「只用关键词 / 语义」这类模式开关 —— 走哪条通道由系统决定，
             标题行说明实际走了什么（§6.3：降级必须被看见）。 */}
@@ -737,6 +677,7 @@ export function KbFilesPanel({ focusFileId, focusNonce }: {
           />
         </div>
       </div>
+      </KbUploadDropzone>
     </div>
   )
 }

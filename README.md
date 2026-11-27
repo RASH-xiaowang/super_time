@@ -106,7 +106,7 @@ npm run license-issue -- --from-request ./activation-request.json --name "本机
 | `npm run font:check` / `npm run font:check:packaged` | 字体合规门禁：源码/官网/工具与打包产物中的专有字体、远程字体和未登记字体资产 |
 | `npm run license-studio` | 许可签发 GUI（`apps/license-studio`，Win32 原生窗口） |
 | `npm run ui:accept` | 人工验收脚本（需要真实数据与许可证，手动运行） |
-| `npm run theme:live-audit -- --all-tabs` | 真机主题审计**全部 37 个页签**（默认 17 个可见页签） |
+| `npm run theme:live-audit -- --all-tabs` | 真机主题审计**全部 37 个页签**（默认 16 个可见页签） |
 
 CI（[`.github/workflows/ci.yml`](.github/workflows/ci.yml)）在 windows-latest 上跑上面这套检查，
 并额外包含两条**一致性门禁**：后端 bundle / `lib/types` 重建后 `git diff` 必须为空。
@@ -167,7 +167,7 @@ src/backend/             宿主层：后端进程监管、RPC 超时、配置与
     resources/           区域映射 JSON；`resources/win32/x64/wx_silk.exe` 是语音解码器（必须解包，不能从 asar 内执行）
   tests/                 宿主层单测（含各类「守卫」用例）
 src/client/ui-app/       前端入口、启动引导（四页）、隐私同意屏、授权界面
-src/client/ui-wechat/    数据面板（panels/ 下 201 个 .tsx 视图）
+src/client/ui-wechat/    数据面板（panels/ 下 212 个 .tsx 视图）
 src/client/ui-primitives-shim/  组件原语的本地 shim（构建时直接读源码）
 src/client/ui-dist/      前端构建产物（**不入库**，`.gitignore` 已忽略；`pack`/`dist` 前置 `build:all` 生成后由 `src/**/*` 打进 asar）
 src/license/             授权：指纹、签名校验、许可证解析
@@ -209,8 +209,9 @@ docs/                    十八份当前有效的文档 + 归档目录（见下�
 | [`docs/PRIVACY.md`](docs/PRIVACY.md) | 隐私声明：读什么、存哪里、出网点清单、如何关闭出网 |
 | [`docs/API.md`](docs/API.md) | Remote 接口参考（由 `gateway*.ts` 的 `@Remote` 自动生成，`npm run docs:api` 刷新） |
 | [`docs/WECHAT-NATIVE-OCR.md`](docs/WECHAT-NATIVE-OCR.md) | 微信 4.x 原生 OCR：隔离进程、AI JSON 独立入口、打包路径、隐私边界与许可证风险 |
-| [`docs/FEATHER-INTEGRATION.md`](docs/FEATHER-INTEGRATION.md) | Feather（“大肥鱼”）发送端：安装配置、Webhook 协议、AI 回复主链路、跨机附件 spool 与验收边界 |
+| [`docs/FEATHER-INTEGRATION.md`](docs/FEATHER-INTEGRATION.md) | Feather 发送端：安装配置、Webhook 协议、AI 回复主链路、跨机附件 spool 与验收边界 |
 | [`docs/TASK-CENTER.md`](docs/TASK-CENTER.md) | 任务信息：关键词触发任务的界面、状态机、扫描与回调链路、权限边界、已知风险与代码地图 |
+| [`docs/REPLY-PUBLIC-TOOLS.md`](docs/REPLY-PUBLIC-TOOLS.md) | AI 回复可调用的公开工具：六个工具的入参、出网边界、失败语义与「哪些内容会被送出去」 |
 | [`docs/RPA-VENDOR-TRIGGERS.md`](docs/RPA-VENDOR-TRIGGERS.md) | 多 RPA 厂商触发（已实现，8 个适配器）：八爪鱼（开放 API / MCP）、影刀、实在、来也、UiPath、阿里云的触发参数与鉴权、描述符注册表与扩展机制、来源/版本/核对时间与风险清单 |
 | [`docs/BOOTSTRAP-RESPONSIVE.md`](docs/BOOTSTRAP-RESPONSIVE.md) | 响应式与 Bootstrap 适配：npm 引入方式、栅格/断点规约、五类组件策略、验收清单与审计门禁 |
 | [`docs/UI-DENSITY.md`](docs/UI-DENSITY.md) | UI 密度规范：固定内容/空白率指标与目标、卡片与组件紧凑化规则、实施分层与验收清单 |

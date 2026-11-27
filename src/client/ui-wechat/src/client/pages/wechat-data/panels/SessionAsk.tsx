@@ -171,10 +171,7 @@ function SessionIntro({ targetName, onPick }: {
           <path d="M8.5 11.5h.01M12 11.5h.01M15.5 11.5h.01" />
         </svg>
       </div>
-      <div className={css.introTitle}>想从聊天里了解什么？</div>
-      <div className={css.introSub}>
-        查找消息、梳理进展、或继续追问。<br />检索范围限定为当前会话「{targetName}」，回答会附上原文出处。
-      </div>
+      <div className={css.introTitle}>{targetName}</div>
       <div className={css.sugList}>
         {SUGGESTIONS.map(s => (
           <button key={s} type="button" className={css.sugCard} onClick={() => { onPick(s) }}>

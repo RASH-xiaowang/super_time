@@ -444,7 +444,7 @@ try {
   await vendorSelect.waitFor({ state: 'visible' })
   const vendorOptions = await vendorSelect.locator('option').allTextContents()
   check(
-    vendorOptions.includes('Webhook') && vendorOptions.includes('八爪鱼 RPA') && vendorOptions.includes('影刀 RPA'),
+    vendorOptions.includes('Webhook') && vendorOptions.includes('八爪鱼 RPA') && !vendorOptions.includes('影刀 RPA'),
     '触发方式选择器按厂商目录渲染',
     vendorOptions.join(' / '),
   )
@@ -544,56 +544,7 @@ try {
     'API Key 原文不出现在任务列表返回值里',
   )
 
-  // ②d 影刀：切到「影刀 RPA」后出现目录声明的动态字段（账号与鉴权 / 流程与参数 / 高级）。
-  await vendorSelect.selectOption({ label: '影刀 RPA' })
-  const accessKeyIdField = editDrawer.getByLabel(/AccessKeyId/)
-  const accessKeySecretField = editDrawer.getByLabel(/AccessKeySecret/)
-  const robotUuidField = editDrawer.getByLabel(/应用 UUID/)
-  await accessKeyIdField.waitFor({ state: 'visible' })
-  await accessKeySecretField.waitFor({ state: 'visible' })
-  await robotUuidField.waitFor({ state: 'visible' })
-  check(
-    (await accessKeySecretField.getAttribute('type')) === 'password',
-    '影刀 AccessKeySecret 为 password（凭据不回显）',
-  )
-  check(
-    await editDrawer.getByText('账号与鉴权', { exact: true }).count() >= 1
-      && await editDrawer.getByText('流程与参数', { exact: true }).count() >= 1,
-    '影刀动态字段按描述符分组渲染（账号与鉴权 / 流程与参数）',
-  )
-  await accessKeyIdField.fill('e2e-yingdao-ak-id')
-  await accessKeySecretField.fill('e2e-yingdao-ak-secret')
-  await robotUuidField.fill('73d9a119-7ec7-4226-b679-506afefae667')
-  await editDrawer.getByRole('button', { name: '保存', exact: true }).click()
-  const yingdaoDeadline = Date.now() + 20_000
-  let tasksAfterYingdao = await remote(win, 'listTaskInfos', [])
-  let savedYingdaoTask = tasksAfterYingdao.items?.find((task) => task.id === taskA.id)
-  while (
-    !(savedYingdaoTask?.triggerMethod === 'yingdao'
-      && savedYingdaoTask?.triggerConfig?.robotUuid === '73d9a119-7ec7-4226-b679-506afefae667'
-      && savedYingdaoTask?.triggerSecretSet?.accessKeyId === true)
-    && Date.now() < yingdaoDeadline
-  ) {
-    await sleep(250)
-    tasksAfterYingdao = await remote(win, 'listTaskInfos', [])
-    savedYingdaoTask = tasksAfterYingdao.items?.find((task) => task.id === taskA.id)
-  }
-  check(
-    savedYingdaoTask?.triggerMethod === 'yingdao'
-      && savedYingdaoTask?.triggerConfig?.robotUuid === '73d9a119-7ec7-4226-b679-506afefae667'
-      && savedYingdaoTask?.triggerSecretSet?.accessKeyId === true
-      && savedYingdaoTask?.triggerSecretSet?.accessKeySecret === true,
-    '影刀触发方式经真实后端读回 triggerConfig/triggerSecretSet',
-    `method=${savedYingdaoTask?.triggerMethod} robot=${savedYingdaoTask?.triggerConfig?.robotUuid} ak=${savedYingdaoTask?.triggerSecretSet?.accessKeyId}`,
-  )
-  check(
-    !JSON.stringify(tasksAfterYingdao).includes('e2e-yingdao-ak-secret'),
-    '影刀凭据原文不出现在任务列表返回值里',
-  )
-
-  // ②e 切回「八爪鱼 RPA」：配置读回上次填的（切换厂商不清空 config），但凭据按安全语义
-  // **不跟随厂商切换**（后端 methodChanged 会新建凭据集，避免把八爪鱼的 Key 带给影刀）；
-  // 所以这里要像真实用户一样重新填一次 API Key，再验证「眼睛」能查看保存后的原文。
+  // ②e 仍停在八爪鱼：FlowId 与附加参数还在，再保存一次确认凭据眼睛可用。
   await vendorSelect.selectOption({ label: '八爪鱼 RPA' })
   const flowIdAgain = editDrawer.getByLabel('八爪鱼 FlowId', { exact: true })
   await flowIdAgain.waitFor({ state: 'visible' })

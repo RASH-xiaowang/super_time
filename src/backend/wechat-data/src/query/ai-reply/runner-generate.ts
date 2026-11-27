@@ -11,7 +11,7 @@ import {
 } from './context.ts'
 import type { ChatAiReplyContextImage } from './context.ts'
 import { buildChatAiReplySystemPrompt } from './persona.ts'
-import { memoryPromptBlock } from '../agent/store.ts'
+import { decideChatAiReplySafety } from './safety.ts'
 import { errorText } from './runner-recovery.ts'
 import type { ChatAiReplyRunRef } from './runner-state.ts'
 import type {
@@ -166,19 +166,39 @@ export async function generateChatAiReply(
         + (stats.shortened > 0 ? ' shortened=' + String(stats.shortened) : ''))
   }
   const kb = await collectKbSnippetsForState(deps, state, context)
+  const safetyInput = {
+    latestPeer: context.latestPeer,
+    kbEnabled: state.kbEnabled,
+    kbSnippets: kb ?? [],
+    allowedText: context.lines.join('\n'),
+    handoff: state.safetyHandoff,
+    blocked: state.safetyBlocked,
+  }
+  const blockedBefore = decideChatAiReplySafety(safetyInput)
+  if (blockedBefore !== null) {
+    deps.writeTrace?.({
+      recordId: run.recordId ?? 0,
+      sourceRef: run.sourceRef,
+      accountKey: state.accountKey,
+      chatUsername: state.chatUsername,
+      output: blockedBefore.text,
+      stage: { name: 'generated', at: Date.now(), detail: 'safety=' + blockedBefore.reason },
+    })
+    return { text: blockedBefore.text, canceled: false }
+  }
   const prompt = images.length > 0
     ? buildChatAiReplyPrompt(context.lines, images.length, scopeOfChat(state.chatUsername))
     : context.prompt
-  const memory = memoryPromptBlock(deps.decryptedDir(), state.accountKey, state.chatUsername)
   const systemPrompt = [
     buildChatAiReplySystemPrompt({
       name: state.personaName,
       prompt: state.personaPrompt,
     }, {
       splitReply: state.splitReply,
+      handoff: state.safetyHandoff,
+      blocked: state.safetyBlocked,
       ...(kb === undefined ? {} : { kbRequested: true, kbSnippets: kb }),
     }),
-    memory,
   ].filter((part) => part.trim() !== '').join('\n\n')
   const [gatedSystem, gatedPrompt] = deps.gate(
     'ai_reply_analyze',
@@ -216,6 +236,7 @@ export async function generateChatAiReply(
   try {
     generated = await deps.generate({
       system: sentSystem,
+      publicText: context.latestPeer,
       prompt: sentPrompt,
       ...(images.length > 0 ? { images } : {}),
       accountKey: state.accountKey,
@@ -259,15 +280,28 @@ export async function generateChatAiReply(
     })
     throw new Error(error)
   }
-  const text = generated.text.trim()
+  const rawText = generated.text.trim()
+  const blockedAfter = decideChatAiReplySafety({ ...safetyInput, reply: rawText })
+  const text = blockedAfter?.text ?? rawText
+  const toolCalls = generated.toolCalls ?? []
   deps.writeTrace?.({
     recordId: run.recordId ?? 0,
     ...(generated.model === undefined ? {} : { model: generated.model }),
     output: text,
+    ...(toolCalls.length === 0 ? {} : {
+      tools: toolCalls.map(tool => ({
+        name: tool.name,
+        ok: tool.ok,
+        ...(tool.code === undefined ? {} : { code: tool.code }),
+        elapsedMs: tool.elapsedMs,
+      })),
+    }),
     stage: {
       name: 'generated',
       at: Date.now(),
-      detail: 'chars=' + String(text.length) + ' elapsed=' + String(Date.now() - generateAt) + 'ms',
+      detail: 'chars=' + String(text.length) + ' elapsed=' + String(Date.now() - generateAt) + 'ms'
+        + (blockedAfter === null ? '' : ' safety=' + blockedAfter.reason)
+        + (toolCalls.length ? ' tools=' + toolCalls.map(t => t.name + ':' + (t.ok ? 'ok' : t.code ?? 'unavailable')).join(',') : ''),
     },
   })
   return { text, canceled: false }

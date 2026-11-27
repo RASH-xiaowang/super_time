@@ -30,10 +30,16 @@ export function toolHintsFor(kind: AnswerIntentKind, ctx: ToolHintContext): stri
       if (ENTITY_ATTR_RE.test(ctx.q) || /联系人|好友|微信号/.test(ctx.q)) out.unshift('search_contacts')
       return unique(out)
     }
-    case 'aggregate':
-      return ['aggregate_messages', 'get_funds_summary', 'get_call_history', 'search_messages']
+    case 'aggregate': {
+      const out = ['aggregate_messages', 'search_messages']
+      if (/朋友圈|动态|说说/.test(ctx.q)) out.unshift('get_moments_stats')
+      if (/转账|红包|账单|收支/.test(ctx.q)) out.unshift('get_funds_summary')
+      if (/通话|未接|拨打|接听/.test(ctx.q)) out.unshift('get_call_history')
+      return unique(out)
+    }
     case 'relation':
       return unique([
+        'get_social_summary',
         'search_contacts',
         'aggregate_messages',
         'get_group_detail',

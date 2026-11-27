@@ -10,10 +10,10 @@ import { describe, expect, it } from 'vitest'
 import type { GroupMember } from '@deepseek-ai/dsh-wechat-data/types'
 import {
   DEFAULT_PHOTO_LIMIT, GROUP_TARGET_REQUIRED, KEYWORD_MAX_COUNT, KEYWORD_MAX_LEN, MEMBER_RENDER_LIMIT,
-  PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN, TASK_NAME_MAX_LEN, addKeywordBatch, buildTaskInfoInput,
-  buildTaskInfoInputs, chatTypeLabel, clampPhotoLimit, defaultTaskName, initialTaskCreateForm,
-  isValidPhotoLimit, parseKeywordInput, photoHint, pickMembers, removeKeyword, removeTaskTarget,
-  toggleTaskTarget, validateTaskCreate, type TaskCreateSession, type TaskCreateTarget,
+  PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN, TASK_NAME_MAX_LEN, TEXT_LIMIT_MAX, addKeywordBatch, buildTaskInfoInput,
+  buildTaskInfoInputs, chatTypeLabel, clampPhotoLimit, clampTextLimit, defaultTaskName, initialTaskCreateForm,
+  isValidPhotoLimit, isValidTextLimit, parseKeywordInput, photoHint, pickMembers, removeKeyword, removeTaskTarget,
+  textHint, toggleTaskTarget, validateTaskCreate, type TaskCreateSession, type TaskCreateTarget,
 } from './task-create.ts'
 
 const PRIVATE: TaskCreateSession = { username: 'wxid_a', displayName: '张三', type: 'private' }
@@ -105,10 +105,20 @@ describe('照片数量（2026-10-19：档位 → 可输入）', () => {
     expect(photoHint(5)).toBe('触发时取该对象最近 5 张图片')
     expect(photoHint(9)).toBe('触发时取该对象最近 9 张图片')
   })
+
+  it('文本条数：夹取 0–9，文案说清只算触发人发的', () => {
+    expect(clampTextLimit(-3)).toBe(0)
+    expect(clampTextLimit(1.7)).toBe(1)
+    expect(clampTextLimit(99)).toBe(9)
+    expect(clampTextLimit(Number.NaN)).toBe(0)
+    expect(textHint(0)).toContain('只带触发的那条消息')
+    expect(textHint(4)).toContain('最近 4 条文本')
+    expect(textHint(4)).toContain('触发人')
+  })
 })
 
 describe('提交前校验', () => {
-  const base = { chatType: 'private' as const, targetCount: 1, keywords: ['报价'], photoLimit: 3 }
+  const base = { chatType: 'private' as const, targetCount: 1, keywords: ['报价'], photoLimit: 3, textLimit: 0 }
 
   it('单聊不需要目标用户；合法表单没有错误', () => {
     expect(validateTaskCreate(base)).toBeNull()
@@ -129,6 +139,20 @@ describe('提交前校验', () => {
     expect(validateTaskCreate({ ...base, photoLimit: 100 })).toContain('0–9')
     expect(validateTaskCreate({ ...base, photoLimit: -1 })).toContain('0–9')
     expect(validateTaskCreate({ ...base, photoLimit: 1.5 })).toContain('整数')
+  })
+
+  it('文本条数越界 / 非整数就拒绝', () => {
+    expect(validateTaskCreate({ ...base, textLimit: TEXT_LIMIT_MAX + 1 })).toContain('文本条数')
+    expect(validateTaskCreate({ ...base, textLimit: -1 })).toContain('文本条数')
+    expect(validateTaskCreate({ ...base, textLimit: 1.5 })).toContain('整数')
+    expect(isValidTextLimit(0)).toBe(true)
+    expect(isValidTextLimit(TEXT_LIMIT_MAX)).toBe(true)
+  })
+
+  it('写接口入参带上文本条数（触发人最近 N 条）', () => {
+    const input = buildTaskInfoInput({ chat: PRIVATE, target: null, keywords: ['报价'], photoLimit: 0, textLimit: 4 })
+    expect(input.textLimit).toBe(4)
+    expect(buildTaskInfoInput({ chat: PRIVATE, keywords: ['报价'], photoLimit: 0 }).textLimit).toBe(0)
   })
 })
 
@@ -342,6 +366,7 @@ describe('表单初值', () => {
       keywords: [],
       keywordDraft: '',
       photoLimit: 3,
+      textLimit: 0,
       mentionMeOnly: false,
       name: '',
       targets: [],

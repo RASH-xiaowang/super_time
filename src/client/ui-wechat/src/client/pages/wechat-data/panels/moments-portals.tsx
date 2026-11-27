@@ -221,7 +221,7 @@ export interface MomentsImageViewerProps {
   curImg: ViewerImage | undefined
   snsImgs: Record<string, string>
   snsOriginals: ReadonlySet<string>
-  resolveSnsOriginal: (im: ViewerImage) => Promise<string>
+  resolveSnsOriginal: (im: ViewerImage, options?: { retry?: boolean }) => Promise<string>
   copyCurrentLink: () => void
   viewRotate: number
   setViewRotate: React.Dispatch<React.SetStateAction<number>>
@@ -327,7 +327,7 @@ export function MomentsImageViewer({
       downloadDisabled: desktopAction(),
       downloadDisabledReason: '朋友圈原图保存仅支持电脑端',
       // 本地有缩略图也继续回源；是否已确认原图由媒体层判断。
-      load: async (): Promise<string> => resolveSnsOriginal(im),
+      load: async (options): Promise<string> => resolveSnsOriginal(im, options),
     }
   }), [viewerImages, viewer?.index, viewer?.author, liveActive, liveSrc, activeLiveKey, liveSave.save, imageSave.save, onLiveVideoSaved, onImageSaved, resolveSnsOriginal])
 

@@ -26,6 +26,8 @@ import { loadAdaptedWeights } from '../query/retrieval/feedback.ts'
 import { runRetrievalPipeline, type PipelineOutput } from '../query/retrieval/pipeline.ts'
 import type { RerankWeights } from '../query/retrieval/types.ts'
 import { buildTools } from '../query/tools/registry.ts'
+import { readToolConfig } from '../query/tool-config-store.ts'
+import { buildCustomTools, keepCustomToolsForDataBoundary } from '../query/custom-tools.ts'
 import type {
   HybridSearchExecution, HybridSearchExecutor, HybridSearchFact, HybridSearchRequest,
 } from '../query/tools/search-hybrid-tool.ts'
@@ -371,7 +373,7 @@ export function buildAskTools(input: AskRetrievalInput): RetrievalTool[] {
    *     （后者内部还会再校验 wechatDataEnabled）。
    */
   const hasKb = input.kbId !== undefined && input.kbId > 0
-  return tools.filter(tool => {
+  const kept = tools.filter(tool => {
     if (tool.name === 'search_kb') return hasKb
     if (tool.name === 'search_semantic') return embedFn !== undefined
     if (input.wechatDataEnabled === false) {
@@ -381,6 +383,17 @@ export function buildAskTools(input: AskRetrievalInput): RetrievalTool[] {
     }
     return true
   })
+  /*
+   * 工具注册表（2026-11-24）：这里是「前端改完立即生效」的关键一环 ——
+   * 每次装配都**现读**本机注册表，所以停用的内置工具当场消失、新建的自定义工具
+   * 当场可用，不需要重启，也没有第二份缓存在别处。
+   */
+  const config = readToolConfig(input.decryptedDir)
+  const enabledBuiltins = kept.filter(tool => config.overrides.get(tool.name)?.enabled !== false)
+  return [
+    ...enabledBuiltins,
+    ...keepCustomToolsForDataBoundary(buildCustomTools(config.custom), input.wechatDataEnabled !== false),
+  ]
 }
 
 /**

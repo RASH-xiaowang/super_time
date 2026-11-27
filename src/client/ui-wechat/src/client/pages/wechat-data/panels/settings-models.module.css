@@ -375,9 +375,10 @@
 }
 .voiceStatValue {
   color: var(--nm-text-1);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 700;
-  white-space: nowrap;
+  line-height: 1.4;
+  white-space: normal;
 }
 .voiceStatOk { color: var(--nm-success); }
 .voiceStatWarn { color: var(--nm-amber); }
@@ -428,6 +429,7 @@
 .voiceRuntimeHead {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
   padding-bottom: 8px;
@@ -441,29 +443,33 @@
 .voiceRuntimeBadge {
   margin-left: auto;
   color: var(--nm-text-2);
-  font-size: 10px;
-  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: normal;
 }
 .voiceEngineState {
   display: flex;
-  align-items: center;
-  gap: var(--nm-s-2, 8px);
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
   min-width: 0;
 }
 .voiceEngineName {
   color: var(--nm-text-1);
-  font-size: 11.5px;
+  font-size: 12px;
   font-weight: 600;
-  white-space: nowrap;
+  line-height: 1.45;
+  white-space: normal;
 }
 .voiceEnginePath {
+  flex: 1 0 100%;
   min-width: 0;
-  overflow: hidden;
   color: var(--nm-text-2);
   font-family: var(--nm-font-mono, monospace);
-  font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 .voiceControlRow {
   display: flex;

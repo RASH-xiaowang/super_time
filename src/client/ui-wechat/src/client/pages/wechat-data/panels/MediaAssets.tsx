@@ -42,7 +42,6 @@ export function MediaAssetsPanel({ onNavigate }: { onNavigate?: (tab: string) =>
     <div className={kitCss.panelShell}>
       <PanelHeader
         title="媒体"
-        desc="图片 / 文件 / 视频规模 · 重复资产清单 · 本地离线盘点"
         actions={(
           <>
             <PanelAction onClick={() => { void reload() }} disabled={loading}>{loading ? '盘点中…' : '刷新'}</PanelAction>
@@ -95,7 +94,6 @@ export function MediaAssetsPanel({ onNavigate }: { onNavigate?: (tab: string) =>
             )}
           </Card>
 
-          <p className={css.footnote}>去重 / 清理动作与离线原图关联为后续项；本页先做只读盘点，文件明细见「文件」分段。</p>
         </div>
       )}
     </div>

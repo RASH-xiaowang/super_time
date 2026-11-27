@@ -3,15 +3,17 @@
  * 红包手气、异常清单，支持 CSV 导出。金额来自本机消息解析，全部本地计算。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ListSentinel, ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
+import { ListSkeleton, useElapsedSeconds, useProgressiveList, useTransientNotice, useWechatDataUpdated } from './hooks.tsx'
 import { apiGetLedger, readRenderCache, writeRenderCache } from '../api.ts'
 import type { LedgerSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
-import { CellPrimary, DataTable, LinkButton, Mono, MonthField, PanelHeader } from '../ui/kit.tsx'
+import { CellPrimary, LinkButton, Mono, MonthField, PanelHeader } from '../ui/kit.tsx'
 import type { DataColumn } from '../ui/kit.tsx'
 import { CACHE_LEDGER } from './overview-cache-keys.ts'
 import { AssetKpiBar, AssetMoreMenu } from './files-cell.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './ledger.module.css'
+import { LedgerChartBoard } from './ledger-charts.tsx'
+import { LedgerDetailCards } from './ledger-detail-cards.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import { IdentityName } from './identity.tsx'
 import { useKeepAliveActive } from './keep-alive.tsx'
@@ -23,9 +25,6 @@ const DIR_LABEL: Record<'in' | 'out' | 'unknown', string> = {
   out: '发出',
   unknown: '未知',
 }
-
-/** Keep a malformed snapshot from turning the warning rail into an unbounded DOM tree. */
-const WARNING_RENDER_LIMIT = 24
 
 /**
  * 总览已经把「全部月份」的账本快照算过一次并缓存在 localStorage 里
@@ -50,18 +49,12 @@ function fmtMoney(n: number): string {
   return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function fmtKnownMoney(n: number, unknownCount: number): string {
-  if (n === 0 && unknownCount > 0) return `金额未知（${unknownCount} 笔未计入）`
-  const known = `¥ ${fmtMoney(n)}`
-  return unknownCount > 0 ? `${known}（另 ${unknownCount} 笔金额未知）` : known
-}
-
 /**
  * Render the funds ledger panel.
  * @param props - optional chat navigation callback.
  * @returns the ledger element tree.
  */
-export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) => void } = {}): React.JSX.Element {
+export function LedgerPanel({ onOpenChat, onOpenRecords }: { onOpenChat?: (username: string) => void; onOpenRecords?: () => void } = {}): React.JSX.Element {
   const [month, setMonth] = useState('')
   const [data, setData] = useState<LedgerSnapshot | null>(null)
   const [loading, setLoading] = useState(false)
@@ -102,7 +95,6 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
   }, [active, month, load])
 
   useEffect(() => () => { requestSeqRef.current += 1 }, [])
-
 
   const exportCsv = useCallback(async (): Promise<void> => {
     if (!data || exportTask.running) return
@@ -173,20 +165,15 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
     },
   ]
 
-  /*
-   * 2026-10-18 布局重设计（用户：「固定的内容不要占用太多空间」）。
-   * 2026-10-19 微信化：汇总数字从「6 项」收成「收入 / 支出 / 净额」3 项内联 KPI 条；
-   * 转账笔数移到「红包手气」卡头；页头动作只留月份选择 + 更多（全部月份 / 导出 CSV）。
-   */
   return (
     <div className={css.root}>
       {/* 页头紧凑化：选择器见 ledger.module.css 的 `.root > div:first-child`，
           不额外包一层（作用域内收 h2/p 外边距）。 */}
       <PanelHeader
         title="资金往来"
-        desc="基于微信 general.db 资金表 · 金额按真实卡片解析 · 状态仅在本地证据充分时展示"
         actions={(
           <>
+            <button type="button" className={css.detailOpen} onClick={() => { onOpenRecords?.() }}>逐笔明细</button>
             <MonthField
               value={month}
               onChange={setMonth}
@@ -231,79 +218,14 @@ export function LedgerPanel({ onOpenChat }: { onOpenChat?: (username: string) =>
               另有 {data.summary.amountUnknownCount} 笔资金记录已核实存在，但本地卡片没有可解析的人民币金额，未计入以上合计。
             </div>
           )}
-
-          <div className={css.body}>
-            <section className={css.rankCard}>
-              <div className={css.cardHd}>
-                <span>联系人资金排行</span>
-                <span className={css.cardMeta}>Top {data.byContact.length}</span>
-              </div>
-              {data.byContact.length === 0 ? (
-                <div className={kitCss.emptyInline}>暂无转账/红包资金往来</div>
-              ) : (
-                <div className={css.rankScroll}>
-                  <DataTable
-                    columns={contactCols}
-                    rows={data.byContact.slice(0, contactCount)}
-                    getRowId={(r, i) => `${r.username}:${r.direction}:${i}`}
-                    /* 单一滚动容器：本卡片自己滚，表格不再套 62vh 的第二层滚动条。 */
-                    scroll={false}
-                    minWidth={520}
-                  />
-                  {data.byContact.length > contactCount && <ListSentinel refFn={sentinelRef} />}
-                </div>
-              )}
-            </section>
-
-            <div className={css.rail}>
-              <section className={css.miniCard}>
-                <div className={css.cardHd}>
-                  <span>红包手气</span>
-                  <span className={css.cardMeta}>转账 {data.summary.transfers} 笔</span>
-                </div>
-                <div className={css.rpGrid}>
-                  <div className={css.rpItem}><span>有领取证据</span><b>{data.redpacket.receivedCount} 个</b></div>
-                  <div className={css.rpItem}><span>已知领取金额</span><b>{fmtKnownMoney(data.redpacket.receivedAmount, data.redpacket.amountUnknownCount ?? 0)}</b></div>
-                  <div className={css.rpItem}><span>最佳手气</span><b>{data.redpacket.amountUnknownCount && data.redpacket.bestAmount === 0 ? '金额未知' : `¥ ${fmtMoney(data.redpacket.bestAmount)}`}</b></div>
-                  <div className={css.rpItem}><span>平均每个</span><b>{data.redpacket.amountUnknownCount && data.redpacket.avgAmount === 0 ? '金额未知' : `¥ ${fmtMoney(data.redpacket.avgAmount)}`}</b></div>
-                  <div className={css.rpItem}><span>状态待核实</span><b>{data.redpacket.statusUnknownCount ?? 0} 个</b></div>
-                  <div className={css.rpItem}><span>发出</span><b>{data.redpacket.sentCount} 个</b></div>
-                  <div className={css.rpItem}><span>已知发出金额</span><b>{fmtKnownMoney(data.redpacket.sentAmount, data.redpacket.amountUnknownCount ?? 0)}</b></div>
-                </div>
-              </section>
-
-              <section className={`${css.miniCard} ${css.warnCard}`}>
-                <div className={css.cardHd}>
-                  <span>异常提醒</span>
-                  <span className={css.cardMeta}>{data.warnings.length}</span>
-                </div>
-                {data.warnings.length === 0 ? (
-                  <div className={kitCss.emptyInline}>暂无本地证据明确的红包退回异常</div>
-                ) : (
-                  <div className={css.warnList}>
-                    {data.warnings.slice(0, WARNING_RENDER_LIMIT).map((w, i) => (
-                      <div key={`${w.kind}:${i}`} className={css.warn}>
-                        <span className={css.warnDot} aria-hidden="true" />
-                        <div className={css.warnBody}>
-                          <div className={css.warnTitle}>
-                            <IdentityName name={w.name || w.username || '—'} username={w.username || ''} size={18}>
-                              {w.label} · {withEnterprise(w.name || w.username || '—', w.enterpriseName)}
-                            </IdentityName>
-                          </div>
-                          <div className={css.warnMeta}>{w.amount === undefined ? '金额未知' : `¥ ${fmtMoney(w.amount)}`}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {data.warnings.length > WARNING_RENDER_LIMIT && (
-                      <div className={kitCss.emptyInline}>
-                        还有 {data.warnings.length - WARNING_RENDER_LIMIT} 条异常未展开，避免一次性渲染过大。
-                      </div>
-                    )}
-                  </div>
-                )}
-              </section>
-            </div>
-          </div>
+          <LedgerChartBoard data={data}>
+            <LedgerDetailCards
+              data={data}
+              columns={contactCols}
+              visibleCount={contactCount}
+              sentinelRef={sentinelRef}
+            />
+          </LedgerChartBoard>
         </>
       )}
     </div>

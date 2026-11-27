@@ -98,11 +98,12 @@ describe('全局搜索：命中跳转带关键词', () => {
   const resultsSrc = read(GLOBAL_RESULTS)
 
   it('四个面板都收到 seedQuery', () => {
-    // 注意：这些 JSX 的行里带 `=>`，`[^>]*` 跨不过去 —— 所以按行判断而不是整段正则。
-    const lines = panelSrc.split('\n')
+    // 2026-11-24：资金账本并成 `FundsView` 一页后，`RecordsPanel` 的挂载点在 `FundsView.tsx`
+    // （抽屉里），不再是主容器 —— 判据按「这两个文件里任意一处」找。
+    // 用「标签开头到参数」的短窗口而不是按行：`<RecordsPanel` 与 `seedQuery=` 常常不在同一行。
+    const haystack = panelSrc + '\n' + panel('FundsView.tsx')
     for (const name of ['FilesPanel', 'FavoritesPanel', 'RecordsPanel', 'ContactsPanel']) {
-      const hit = lines.filter(l => l.includes('<' + name) && l.includes('seedQuery='))
-      expect(hit.length, name + ' 没有收到 seedQuery').toBeGreaterThan(0)
+      expect(haystack, name + ' 没有收到 seedQuery').toMatch(new RegExp(`<${name}[\\s\\S]{0,400}?seedQuery=`))
     }
   })
 

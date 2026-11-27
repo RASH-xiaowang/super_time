@@ -72,6 +72,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
   const [error, setError] = useState<string | null>(null)
   const [replies, setReplies] = useState<string[]>([])
   const [basis, setBasis] = useState<{ messages: number; kb: number; degraded?: string } | null>(null)
+  const [toolInfo, setToolInfo] = useState<Pick<ReplyTrace, 'toolCalls' | 'toolSources' | 'toolDegraded'>>({})
   const [copied, setCopied] = useState<number | null>(null)
   const [copyFailed, setCopyFailed] = useState(false)
 
@@ -127,6 +128,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
     setError(null)
     setCopied(null)
     setCopyFailed(false)
+    setToolInfo({})
     void apiSuggestReplies({
       username: target.username,
       kbId,
@@ -137,6 +139,7 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
         if (seq !== seqRef.current) return
         // 留痕随每次结果上报：详情视图要能解释「这批候选怎么来的」。
         onTraceRef.current?.(r.trace)
+        setToolInfo({ toolCalls: r.trace?.toolCalls, toolSources: r.trace?.toolSources, toolDegraded: r.trace?.toolDegraded })
         if (!r.ok) {
           setReplies([])
           setBasis(null)
@@ -238,6 +241,13 @@ export function ReplySuggest(props: ReplySuggestProps): React.JSX.Element {
             {copyFailed && (
               <ErrorState message="复制失败：剪贴板没有被写入，请手动选中文字后复制" />
             )}
+            {(toolInfo.toolCalls?.length ?? 0) > 0 && <div className={css.introSub} aria-label="回复工具状态">
+              {toolInfo.toolCalls?.map((t, i) => <div key={i}>{t.name} · {t.ok ? '成功' : t.code ?? '不可用'}</div>)}
+            </div>}
+            {toolInfo.toolDegraded && <div className={css.introSub}>工具不可用：{toolInfo.toolDegraded}</div>}
+            {toolInfo.toolSources?.slice(0, 3).map((s, i) => <div key={i} className={css.introSub} aria-label="回复公开来源">
+              {s.title} · {s.date ?? ''} {s.timezone ?? ''} · {s.url} · {s.fetchedAt}
+            </div>)}
             <div className={css.introSub}>
               {basis?.degraded ? `${basis.degraded}。` : ''}
               本应用只读，不会替你发消息 —— 复制后到微信里粘贴。

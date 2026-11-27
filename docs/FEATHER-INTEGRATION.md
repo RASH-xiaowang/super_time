@@ -1,4 +1,4 @@
-# Feather（“大肥鱼”）发送端接入
+# Feather 发送端接入
 
 > 适用版本：Super Time 1.1.0，Feather 1.6.4  
 > 核对日期：2026-10-29  
@@ -7,9 +7,9 @@
 ## 1. 调研结论
 
 “Feather”是纯 Win32 的 Windows 微信本地自动化发送程序，部署目录常以“轻羽”界面
-出现，社区里也会用“大肥鱼”称呼同类 AI 微信桥接方案。它不是 Super Time 内置插件。
-公开网络上被称作“大肥鱼”的 `doyokol/dsh-wechat-bridge` 是一个新兴、小众项目：
-公开仓库核对时为 0 star / 0 fork，且“大肥鱼”只是默认唤醒词，不是项目名；其公开代码
+出现。它不是 Super Time 内置插件。
+公开网络上的 `doyokol/dsh-wechat-bridge` 是一个新兴、小众项目：
+公开仓库核对时为 0 star / 0 fork，默认唤醒词不是项目名；其公开代码
 使用 `/send/text`，没有 Feather 的 `/webhook/<token>` 协议。公开仓库也未提供可直接
 复现安装所需的 Hook 产物和指定微信版本，因此不能把它当作 Feather 的官方安装包。
 
@@ -181,7 +181,7 @@ Content-Type: application/json
 首次开启只建立消息水位，不会把历史消息全部回复一遍。
 
 旁边紧邻的「AI回复设置」按钮（齿轮图标，**只在已开启时出现**）打开同一个弹窗，
-还可以保存当前账号、当前会话的 **默认大肥鱼 Webhook**。
+还可以保存当前账号、当前会话的 **默认 Webhook**。
 完整地址只写入本机任务库，界面只回显 `http://<host>:<port>/webhook/***` 形式的脱敏
 端点；只接受 Feather 的 `/webhook/<token>` 路径。
 更换 token 时重新输入完整地址即可，留空或保留 `***` 不会覆盖旧凭据。
@@ -365,7 +365,7 @@ Feather 侧资源同样默认保留 7 天，只清理未被任务引用的文件
 | UI | `src/client/ui-wechat/src/client/pages/wechat-data/panels/chats-head-actions.tsx` | 「更多」菜单装配与人格弹窗宿主 |
 | UI 菜单 | `src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-ai-reply-menu.tsx` | AI 回复开关、设置入口、立即检查动作组 |
 | UI 人格 | `src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-ai-reply-settings-dialog.tsx` | 会话级人格、回复风格与长回复分段策略编辑 |
-| UI Webhook | `src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-ai-reply-settings-dialog.tsx` | 默认大肥鱼 Webhook 的脱敏读取与保存 |
+| UI Webhook | `src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-ai-reply-settings-dialog.tsx` | 默认 Webhook 的脱敏读取与保存 |
 | UI 状态 | `src/client/ui-wechat/src/client/pages/wechat-data/panels/use-chat-ai-reply.ts` | 会话切换竞态防护、开关与扫描编排 |
 | UI 人格动作 | `src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-ai-reply-persona-action.ts` | revision、会话身份与异步回写校验 |
 | UI 附件 | `src/client/ui-wechat/src/client/pages/wechat-data/panels/use-message-list-actions.ts` | 桌面选文件、暂存、最多 9 件 |

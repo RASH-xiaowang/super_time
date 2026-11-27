@@ -2,39 +2,25 @@
  * 客户画像与标签主页面。
  *
  * 页面分三层：左侧客户目录负责找人和切换；右侧上方「客户画像」解释身份、关系与
- * 互动事实；右侧下方「客户标签」展示规则标签及其依据。客户 360 只对当前选中项
- * 按需读取，目录本身由好友、企业微信、群成员三个分类一次合并，避免 N+1 请求。
+ * 互动事实；右侧下方「客户标签」展示规则标签及其依据。客户 360 只对当前选中的好友
+ * 按需读取。目录只收通讯录好友，不分析企业微信联系人和群成员。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { apiGetContacts } from '../api.ts'
+import { apiGetContacts, apiGetPortraitVolumes, type PortraitVolume } from '../api.ts'
 import { EmptyState, ErrorState, LoadingState, PanelHeader, SearchInput } from '../ui/kit.tsx'
 import { LazyMount, ListSentinel, ProgressiveListSpacer, useProgressiveList, useWechatDataUpdated } from './hooks.tsx'
 import { Avatar } from './chats-support.tsx'
 import { CustomerPortraitView } from './CustomerPortraitView.tsx'
 import { withEnterprise } from './enterprise-identity.ts'
 import {
-  CUSTOMER_CATEGORY_KEYS,
   CUSTOMER_RELATION_LABELS,
   customerIdentityOf,
   customerRelation,
   mergeCustomerCandidates,
-  type CustomerCategory,
   type CustomerRecord,
 } from './customer-profile.ts'
 import { useCustomer360 } from './use-customer-360.ts'
 import css from './portraits.module.css'
-
-const CATEGORY_LABELS: Readonly<Record<CustomerCategory, string>> = {
-  friend: '联系人',
-  enterprise: '企业微信',
-  member: '群成员',
-}
-
-type CategoryFilter = 'all' | CustomerCategory
-
-function categoryFilterMatches(customer: CustomerRecord, filter: CategoryFilter): boolean {
-  return filter === 'all' || customer.categories.includes(filter)
-}
 
 function customerSearchText(customer: CustomerRecord): string {
   return [
@@ -70,27 +56,28 @@ function DetailPlaceholder({
   return (
     <EmptyState
       icon="👤"
-      title={hasAnyCustomer ? '选择一个客户' : '暂无可生成画像的客户'}
-      desc={hasAnyCustomer
-        ? '从左侧目录选择联系人，查看画像、互动事实和可核验标签。'
-        : '客户目录由好友、企业微信联系人和群成员组成；群聊、公众号与服务号不会作为客户出现。'}
+      title={hasAnyCustomer ? '选择一位好友' : '暂无可生成画像的好友'}
     />
   )
 }
 
 export interface PortraitsPanelProps {
   onOpenChat?: ((username: string) => void) | undefined
+  /** 从社交图谱点进来时，直接选中这位好友。 */
+  focusUsername?: string | null
 }
 
 /** 客户画像与标签页面。 */
-export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.Element {
+export function PortraitsPanel({ onOpenChat, focusUsername = null }: PortraitsPanelProps): React.JSX.Element {
   const [customers, setCustomers] = useState<CustomerRecord[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [search, setSearch] = useState('')
-  const [filter, setFilter] = useState<CategoryFilter>('all')
   const [selectedUsername, setSelectedUsername] = useState<string | null>(null)
+  const [volumes, setVolumes] = useState<ReadonlyMap<string, PortraitVolume>>(() => new Map())
+  const [ranked, setRanked] = useState(false)
+  const [picked, setPicked] = useState(false)
   const loadSequence = useRef(0)
 
   const loadCustomers = useCallback(async (silent = false): Promise<void> => {
@@ -98,8 +85,7 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
     if (!silent) setLoading(true)
     setError(null)
     try {
-      // 三类一次查出。worker 单线程，原先三次 getContacts 只是排队扫三遍。
-      const env = await apiGetContacts({ categories: [...CUSTOMER_CATEGORY_KEYS] })
+      const env = await apiGetContacts({ categories: ['friend'] })
       if (sequence !== loadSequence.current) return
       setCustomers(mergeCustomerCandidates([env.contacts]))
       setWarnings([])
@@ -119,10 +105,28 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
   useWechatDataUpdated(() => { void loadCustomers(true) })
 
   useEffect(() => {
-    setSelectedUsername((current) => {
-      if (current !== null && customers.some((customer) => customer.username === current)) return current
-      return customers[0]?.username ?? null
-    })
+    const username = focusUsername?.trim() ?? ''
+    if (username === '') return
+    setPicked(true)
+    setSelectedUsername(username)
+  }, [focusUsername])
+
+  useEffect(() => {
+    if (customers.length === 0) {
+      setVolumes(new Map())
+      setRanked(true)
+      return
+    }
+    setRanked(false)
+    let alive = true
+    void apiGetPortraitVolumes(customers.map((customer) => customer.username))
+      .then((rows) => {
+        if (!alive) return
+        setVolumes(new Map(rows.map((row) => [row.username, row])))
+      })
+      .catch(() => { /* 统计失败时目录仍按姓名排列 */ })
+      .finally(() => { if (alive) setRanked(true) })
+    return () => { alive = false }
   }, [customers])
 
   const selected = useMemo(
@@ -133,11 +137,35 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
 
   const filtered = useMemo(() => {
     const query = search.trim().toLocaleLowerCase()
-    return customers.filter((customer) => {
-      if (!categoryFilterMatches(customer, filter)) return false
-      return query === '' || customerSearchText(customer).includes(query)
-    })
-  }, [customers, filter, search])
+    const score = (username: string): number => {
+      const row = volumes.get(username)
+      if (row === undefined) return 0
+      return row.messages + row.images + row.moments
+    }
+    return customers
+      .filter((customer) => query === '' || customerSearchText(customer).includes(query))
+      .sort((a, b) => {
+        const diff = score(b.username) - score(a.username)
+        if (diff !== 0) return diff
+        return (a.displayName || a.username).localeCompare(b.displayName || b.username, 'zh-Hans-CN')
+      })
+  }, [customers, search, volumes])
+
+  useEffect(() => {
+    if (!ranked) return
+    const focus = focusUsername?.trim() ?? ''
+    if (picked) {
+      setSelectedUsername((current) => {
+        if (current !== null && customers.some((customer) => customer.username === current)) return current
+        if (focus !== '' && customers.some((customer) => customer.username === focus)) return focus
+        return filtered[0]?.username ?? null
+      })
+      return
+    }
+    if (focus !== '') return
+    setSelectedUsername(filtered[0]?.username ?? null)
+  }, [ranked, picked, filtered, customers, focusUsername])
+
   const directoryListRef = useRef<HTMLDivElement | null>(null)
   const {
     start: visibleStart,
@@ -147,7 +175,7 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
     topSentinelRef,
   } = useProgressiveList(filtered.length, 120, {
     maxCount: 300,
-    resetKey: `${filter}\u0000${search}`,
+    resetKey: `${search}\u0000${filtered[0]?.username ?? ''}`,
     listRef: directoryListRef,
   })
   const shownCustomers = filtered.slice(visibleStart, visibleCount)
@@ -158,38 +186,23 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
     <div className={css.panel}>
       <PanelHeader
         title="客户画像与标签"
-        desc="从本机微信数据汇总客户身份、互动事实与可核验标签；不做意向或购买力推断。"
-        actions={<span className={css.ruleBadge}>{customers.length.toLocaleString()} 位客户</span>}
+        actions={<span className={css.ruleBadge}>{customers.length.toLocaleString()} 位好友</span>}
       />
 
       <div className={css.workspace}>
         <aside className={css.directory} aria-label="客户目录">
           <div className={css.directoryHeader}>
-            <span className={css.directoryTitle}>客户目录</span>
+            <span className={css.directoryTitle}>好友目录</span>
             <span className={css.directoryCount}>{filtered.length.toLocaleString()} / {customers.length.toLocaleString()}</span>
           </div>
           <div className={css.directoryTools}>
             <SearchInput
               value={search}
               onChange={setSearch}
-              placeholder="搜索备注 / 昵称 / 微信号 / 企业名称"
-              ariaLabel="搜索客户"
+              placeholder="搜索备注 / 昵称 / 微信号"
+              ariaLabel="搜索好友"
               className={css.directorySearch}
             />
-            <div className={css.filters} role="group" aria-label="客户分类筛选">
-              {(['all', ...CUSTOMER_CATEGORY_KEYS] as CategoryFilter[]).map((key) => (
-                <button
-                  key={key}
-                  type="button"
-                  className={css.filterChip}
-                  data-active={filter === key || undefined}
-                  aria-pressed={filter === key}
-                  onClick={() => { setFilter(key) }}
-                >
-                  {key === 'all' ? '全部' : CATEGORY_LABELS[key]}
-                </button>
-              ))}
-            </div>
           </div>
 
           {warnings.map((warning) => (
@@ -197,15 +210,15 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
           ))}
 
           <div ref={directoryListRef} className={css.directoryList}>
-            {loading && customers.length === 0 && <LoadingState label="正在读取客户…" />}
+            {loading && customers.length === 0 && <LoadingState label="正在读取好友…" />}
             {!loading && error && customers.length === 0 && (
               <ErrorState message="客户目录读取失败" detail={error} onRetry={() => { void loadCustomers() }} />
             )}
             {!loading && !error && filtered.length === 0 && (
               <EmptyState
                 icon="🔎"
-                title={search.trim() === '' ? '当前分类暂无客户' : '未找到匹配客户'}
-                desc={search.trim() === '' ? '切换分类或等待本机数据同步完成。' : '试试备注、昵称或微信号的其它片段。'}
+                title={search.trim() === '' ? '暂无好友' : '未找到匹配好友'}
+                desc={search.trim() === '' ? '等待本机通讯录同步完成后再看。' : '试试备注、昵称或微信号的其它片段。'}
               />
             )}
             <ProgressiveListSpacer height={visibleBeforeHeight} topSentinelRef={topSentinelRef} />
@@ -213,6 +226,11 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
               const name = customer.displayName || customer.remark || customer.nickName || customer.username
               const identity = withEnterprise(name, customer.enterpriseName)
               const groups = customer.groupUsernames?.length ?? 0
+              const volume = volumes.get(customer.username)
+              const volumeTotal = volume === undefined ? null : volume.messages + volume.images + volume.moments
+              const volumeTitle = volume === undefined
+                ? '正在统计聊天、图片和朋友圈'
+                : `聊天 ${volume.messages.toLocaleString()} · 图片 ${volume.images.toLocaleString()} · 朋友圈 ${volume.moments.toLocaleString()}`
               return (
                 <button
                   key={customer.username}
@@ -220,7 +238,7 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
                   className={css.customerRow}
                   data-progressive-item={visibleStart + idx}
                   data-active={selectedUsername === customer.username || undefined}
-                  onClick={() => { setSelectedUsername(customer.username) }}
+                  onClick={() => { setPicked(true); setSelectedUsername(customer.username) }}
                   aria-pressed={selectedUsername === customer.username}
                 >
                   <LazyMount
@@ -236,14 +254,13 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
                       {groups > 0 ? ` · ${groups} 个群` : ''}
                     </span>
                   </span>
-                  <span className={css.rowRelation}>{rowRelation(customer)}</span>
+                  <span className={css.rowRelation} title={volumeTitle}>
+                    {volumeTotal === null ? rowRelation(customer) : volumeTotal.toLocaleString()}
+                  </span>
                 </button>
               )
             })}
             {filtered.length > visibleCount && <ListSentinel refFn={sentinelRef} />}
-          </div>
-          <div className={css.directoryFooter}>
-            目录来自好友、企业微信联系人和群成员；群聊、公众号、服务号与已删除联系人已排除。
           </div>
         </aside>
 
@@ -251,7 +268,7 @@ export function PortraitsPanel({ onOpenChat }: PortraitsPanelProps): React.JSX.E
           {selectedIdentity === null ? (
             <div className={css.detailEmpty}>
               <DetailPlaceholder
-                loading={loading}
+                loading={loading || (customers.length > 0 && !ranked)}
                 error={error}
                 hasAnyCustomer={customers.length > 0}
                 onRetry={() => { void loadCustomers() }}

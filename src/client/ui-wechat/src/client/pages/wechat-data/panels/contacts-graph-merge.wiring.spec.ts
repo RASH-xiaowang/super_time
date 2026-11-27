@@ -97,8 +97,10 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     // 2026-10-19：新增「任务信息」可见入口（14 → 15）。
     // 2026-10-29：新增「群聊分析」「消息列表」两个可见入口（15 → 17）。
     // 2026-10-31：退役一个可见入口（17 → 16）。
-    expect([...inGroups].sort()).toEqual(['overview', 'ask', 'dailysummary', 'kb', 'chats', 'groupinsights', 'contacts', 'portraits', 'moments', 'favorites', 'files', 'ledger', 'tasks', 'taskinfo', 'agentdesk', 'messagelist', 'oplog'].sort())
-    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(17)
+    // 2026-11-24：新增「本地工具」（16 → 17）。
+    // 2026-11-24：新增「应用托管」（17 → 18）。
+    expect([...inGroups].sort()).toEqual(['overview', 'ask', 'dailysummary', 'kb', 'chats', 'groupinsights', 'contacts', 'portraits', 'moments', 'favorites', 'files', 'ledger', 'tasks', 'taskinfo', 'messagelist', 'oplog', 'localtools', 'apps'].sort())
+    expect(inGroups.length, '侧栏分组内可见条目数变了 —— 请同步 README 与 OnboardingShell 的 MODULES').toBe(18)
     expect(visible, '「设置」仍应作为底部入口留在 NAV_GROUPS 里（图标来源）').toContain('settings')
   })
 
@@ -120,8 +122,8 @@ describe('导航项：通讯录是唯一入口，社交图谱转为可路由的�
     expect(item('knowledge')?.hidden, 'knowledge 应标 hidden：已并入知识库').toBe(true)
     expect(item('knowledge')?.label).toBe('知识图谱')
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'knowledge'))
-    // 2026-09-30 IA 合并：知识库/文件/知识图谱随「概览 · 问答 · 总结」组（用户要求移出社交组）
-    expect(group?.label, 'knowledge 被挪到别的分组了').toBe('概览 · 问答 · 总结')
+    // 知识库/文件/知识图谱随「概览」组（服务问答，不跟通讯录走）
+    expect(group?.label, 'knowledge 被挪到别的分组了').toBe('概览')
     expect(mergedBranch(), "knowledge 被并进了通讯录分段").not.toContain("case 'knowledge'")
   })
 })
@@ -196,7 +198,7 @@ describe('无功能丢失：通讯录原有的四个 props 全部透传', () => 
     //
     // 2026-10-16：右侧控制栏抽成了 `GraphRail.tsx`（`GraphPanel` 撞 250 行函数棘轮），
     // 所以「最亲近 · 消息量」这个锚点改到新文件里查 —— 它仍在，只是换了住处。
-    for (const anchor of ['<GraphCanvas', 'legendLineBlueDash', 'doExportPoster', 'doExportSvg', 'KnowledgeNoteEditor', '<GraphRail']) {
+    for (const anchor of ['<GraphCanvas', '金字塔', 'doExportPoster', 'doExportSvg', 'KnowledgeNoteEditor', '<GraphRail']) {
       expect(graphPanel, `Graph.tsx 少了 ${anchor}`).toContain(anchor)
     }
     const rail = readFileSync(join(HERE, 'GraphRail.tsx'), 'utf8')
@@ -314,9 +316,11 @@ describe('用户可见的计数声明不再静默漂移（这次迁移会改到�
     // → 2026-10-17 朋友圈洞察 / 通话记录 / 隐私体检 三块并入别的入口后 **14**
     // → 2026-10-19 新增「任务信息」后 **15**
     // → 2026-10-29 新增「群聊分析」「消息列表」后 **17**。
-    // → 2026-10-31 退役一个可见入口后 16；新增桌面 AI 队友后 **17**。
+    // → 2026-10-31 退役一个可见入口后 16。
+    // → 2026-11-24 新增「本地工具」后 **17**。
+    // → 2026-11-24 新增「应用托管」后 **18**。
     // 写成精确值而不是范围 —— 范围断言正是这个数字上次能长期漂着的原因。
-    expect(renderedInGroups.length).toBe(17)
+    expect(renderedInGroups.length).toBe(18)
     for (const t of ['graph', 'knowledge'] as const) {
       expect(renderedInGroups, `${t} 不该再出现在侧栏分组里`).not.toContain(t)
       // 但两者必须仍是**合法 tab** —— 这是深链与段条第二段的前提

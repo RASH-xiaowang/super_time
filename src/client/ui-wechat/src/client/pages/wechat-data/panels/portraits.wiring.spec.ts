@@ -17,6 +17,7 @@ const SHELL = readStripped(join(DATA, 'WechatDataPanel.tsx'))
 const MOBILE = readStripped(join(DATA, 'ui', 'mobile-nav.tsx'))
 const PAGE = readStripped(join(PANELS, 'Portraits.tsx'))
 const VIEW = readStripped(join(PANELS, 'CustomerPortraitView.tsx'))
+const FEED = readStripped(join(PANELS, 'customer-portrait-feed.tsx'))
 const DIALOG = readStripped(join(PANELS, 'CustomerPortraitDialog.tsx'))
 const SINGLE = readStripped(join(PANELS, 'chats-contact-info-view.tsx'))
 const GROUP = readStripped(join(PANELS, 'chats-group-info-view.tsx'))
@@ -24,8 +25,8 @@ const HOOK = readStripped(join(PANELS, 'use-customer-360.ts'))
 const CSS = readStripped(join(PANELS, 'portraits.module.css'))
 
 describe('客户画像与标签：导航与主页面', () => {
-  it('导航项放在「关系与社交」组，并保持可见', () => {
-    const group = sliceBetween(NAV, "label: '关系与社交'", "label: '资产与资金'", '关系与社交分组')
+  it('导航项放在「联系人」组，并保持可见', () => {
+    const group = sliceBetween(NAV, "label: '联系人'", "label: '资产'", '联系人分组')
     expect(group).toContain("tab: 'portraits'")
     expect(group).toContain("label: '客户画像与标签'")
     expect(group).not.toMatch(/tab: 'portraits'[^}]*hidden: true/)
@@ -34,7 +35,7 @@ describe('客户画像与标签：导航与主页面', () => {
   it('懒加载、renderTab 和手机白名单三条路径都存在', () => {
     expect(LOADERS).toContain("export const PortraitsPanel = lazy(() => import('./panels/Portraits.tsx')")
     const render = sliceBetween(SHELL, 'function renderTab(', '\nconst DIALOG_SECTION_OF:', 'renderTab')
-    expect(render).toContain("case 'portraits': return <PortraitsPanel onOpenChat={onOpenChat} />")
+    expect(render).toContain("case 'portraits': return <PortraitsPanel onOpenChat={onOpenChat} focusUsername={portraitFocus} />")
     expect(MOBILE).toContain("'portraits'")
     const keepAt = MOBILE.indexOf('const PHONE_KEEP')
     expect(keepAt, '找不到手机白名单').toBeGreaterThan(-1)
@@ -42,16 +43,30 @@ describe('客户画像与标签：导航与主页面', () => {
     expect(keep).toContain("'portraits'")
   })
 
-  it('目录一次读取三个真实分类并合并，360 只对当前选中客户按需加载', () => {
-    expect(PAGE).toContain('apiGetContacts({ categories: [...CUSTOMER_CATEGORY_KEYS] })')
+  it('目录只读取好友，360 只对当前选中好友按需加载', () => {
+    expect(PAGE).toContain("apiGetContacts({ categories: ['friend'] })")
+    expect(PAGE).not.toContain('CUSTOMER_CATEGORY_KEYS')
     expect(PAGE).toContain('mergeCustomerCandidates([env.contacts])')
     expect(PAGE).toContain('useCustomer360(selected?.username ?? null)')
+    expect(PAGE).toContain('apiGetPortraitVolumes')
+    expect(PAGE).toContain('filtered[0]?.username')
+    expect(PAGE).toContain('row.messages + row.images + row.moments')
     expect(PAGE, '目录不能逐行请求 getContact360').not.toContain('filtered.map((customer) => apiGetContact360')
   })
 
-  it('页面至少明确包含客户画像、客户标签两个板块', () => {
-    expect(VIEW).toContain('>客户画像</h3>')
-    expect(VIEW).toContain('>客户标签</h3>')
+  it('页面至少明确包含客户画像、客户标签，以及聊天/图片/朋友圈内容', () => {
+    expect(VIEW).toContain('title="客户画像"')
+    expect(VIEW).toContain('title="客户标签"')
+    expect(VIEW).toContain('scope="portrait"')
+    expect(VIEW).toContain('<CustomerContentFeed')
+    expect(FEED).not.toContain('aria-expanded')
+    expect(FEED).not.toContain('feedToggle')
+    expect(FEED).toContain('title="对方发出的图片"')
+    expect(FEED).toContain('title="聊天记录"')
+    expect(FEED).toContain('title="朋友圈"')
+    expect(FEED).toContain('title="人物性格"')
+    expect(FEED).toContain('startPersona()')
+    expect(FEED).toContain('apiAnalyzePortraitPersonality')
     expect(VIEW).toContain('selected.evidence')
     expect(VIEW).toContain('本机规则自动生成')
   })
@@ -69,8 +84,9 @@ describe('客户画像与标签：导航与主页面', () => {
 })
 
 describe('聊天会话中的画像入口', () => {
-  it('单聊「聊天信息」抽屉提供入口，并复用同一个画像抽屉', () => {
+  it('单聊「聊天信息」抽屉提供入口，企业微信联系人不打开画像', () => {
     expect(SINGLE).toContain('客户画像与标签')
+    expect(SINGLE).toContain('!isEnterpriseWechatUser(session.username) && enterpriseName === \'\'')
     expect(SINGLE).toContain('<CustomerPortraitDialog')
     expect(SINGLE).toContain("context={{ source: 'session' }}")
     const entryAt = SINGLE.indexOf('data-st-portrait-entry')
@@ -79,12 +95,9 @@ describe('聊天会话中的画像入口', () => {
     expect(entryAt, '画像入口必须在加载/错误分支之外，统计失败时仍可打开').toBeLessThan(loadingAt)
   })
 
-  it('群成员卡点击打开完整画像，群主与本人上下文随成员传入', () => {
-    expect(GROUP).toContain('<CustomerPortraitDialog')
-    expect(GROUP).toContain('setPortraitMember(m)')
-    expect(GROUP).toContain("source: 'group-member'")
-    expect(GROUP).toContain('isGroupOwner: portraitMember !== null && groupInfo?.owner === portraitMember.username')
-    expect(GROUP).toContain('isSelf: portraitMember?.isSelf === true')
+  it('群成员不再打开客户画像，悬浮资料卡仍保留', () => {
+    expect(GROUP).not.toContain('<CustomerPortraitDialog')
+    expect(GROUP).not.toContain('setPortraitMember')
     expect(GROUP, '轻量悬浮资料卡应继续保留').toContain('onMouseEnter=')
   })
 
@@ -111,7 +124,9 @@ describe('响应式与现有界面风格', () => {
   it('纵向目录中的搜索框不继承横排工具栏的 320px flex-basis', () => {
     const block = sliceBetween(CSS, '.directorySearch {', '}', 'directorySearch')
     expect(block, '搜索框未覆盖 flex-basis，会变成 320px 高').toContain('flex: 0 0 auto')
-    expect(CSS).toContain('grid-template-columns: minmax(0, 1.42fr) minmax(250px, 0.9fr)')
+    expect(VIEW).toContain('<CardCanvas')
+    expect(CSS).not.toContain('.feedToggle')
+    expect(CSS).not.toContain('.feedChevron')
   })
 
   it('几何与颜色使用既有 --nm-* 令牌，不引入新的圆角字面量', () => {

@@ -262,6 +262,20 @@ export interface MessageListRuleInput {
     /** 规则说明。 */
     note?: string;
     enabled?: boolean;
+    /**
+     * 地址来自哪个托管应用实例（`apps.superlanguage` 的实例 id）；空串 = 手填地址。
+     *
+     * 只用于「实例端口变了之后自动改地址」与界面标记，不参与匹配：
+     * 投递仍然只认 `webhook_url` 快照。
+     */
+    appInstanceId?: string;
+    /**
+     * 保留原有的 `managed_by` 标记（内部同步地址时用）。
+     *
+     * 普通保存会把 `managed_by` 清空（人工规则不再跟随默认地址）；同步托管实例
+     * 地址时若也清空，那条 AI 默认规则下次就不会再跟随会话级默认地址了。
+     */
+    keepManagedBy?: boolean;
 }
 /** 一条规则。 */
 export interface MessageListRule {
@@ -272,6 +286,8 @@ export interface MessageListRule {
     greetingText: string;
     note: string;
     enabled: boolean;
+    /** 地址由哪个托管实例提供；空串 = 手填。 */
+    appInstanceId: string;
     createdAt: number;
     updatedAt: number;
 }
@@ -286,6 +302,8 @@ export interface MessageListMutationResult {
     ok: boolean;
     id?: number;
     error?: string;
+    /** 本次写规则顺带回填地址的记录数；有值说明这些记录已可投递。 */
+    backfilled?: number;
 }
 /** 插入/重发后返回最新记录。 */
 export interface MessageListRecordResult extends MessageListMutationResult {

@@ -56,21 +56,25 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-11-13（知识库修复轮）：文件列表与三条告警分别搬成 `KbFileList` / `KbPanelAlerts`
   // （都在 `kb-files-support.tsx`）⇒ 665 → 662。本轮新增的「加载更多 / 索引进度 / 停止」
   // 只在面板里留状态接线，展示体都已出函数。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  662',
+  // 2026-11-22（GB18 门禁台账同步，t190u）：按当前既有 WIP 以同一套 AST 口径现场实测，
+  // KbFilesPanel 662 → 603。本轮只收紧该条登记数字，未改知识库业务源、LIMIT=250、排除规则或检测器逻辑。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-files-panel.tsx  KbFilesPanel  602',
   // 2026-10-16：右侧控制栏抽成 `GraphRail.tsx`（它自己又拆出 `GraphSelectionDetail.tsx`），
   // 725 → 513；同日补上「始终可见的折叠按钮」（浮层收起后唯一的入口）⇒ 513 → 523；
   // 同日小地图让位（浮层展开时隐藏，`hideMinimap={railOpen}`）⇒ 523 → 524；
   // 同日把按钮/浮层移进 `.stage`（absolute 缺定位祖先会飘到视口顶部、压住手机档搜索条）
   // + 跨断点同步展开态 ⇒ 524 → 541。棘轮只许变小，拆完要回来改数字。
   // 2026-10-27：节点搜索浮层抽成 GraphSearchBox，身份行改动不再计入面板函数 ⇒ 497 → 476。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  543',
+  // 2026-11-25：选中边与核心圈说明抽到面板外 ⇒ 543 → 540。
+  // 同日群名参数并进已有属性行 ⇒ 540 → 539。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Graph.tsx  GraphPanel  462',
   // 2026-10-17：`reportIndexAction` / `resolveSystemPrompt` 抽成模块级（系统提示词覆盖 +
   // 索引日志），`emptyAnswerText` / `describeScope` / `normalizeKbId` 同批 ⇒ 519 → 516。
   // 棘轮只许变小，成果要记账。
   // 2026-10-22：问答主链路收敛到统一 answer runtime，`createAskDeepRemotes` 已低于
   // 250 行阈值，按棘轮规则从台账移除；若以后再次越线，必须重新登记并先拆分。
   // 2026-10-27：会话/成员标签映射与加载、排行与会话身份行搬到模块级 ⇒ 588 → 564。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx  DailySummaryPanel  564',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/DailySummary.tsx  DailySummaryPanel  563',
   // 2026-10-29：AI 模型设置重设计后，主组件收敛为状态与编排，视图拆到
   // overview / profiles / editor / advanced / save-bar ⇒ AiModelConfig 已低于 250 行阈值。
   // 2026-10-16：引用改成正文角标 + 右侧滑出详情（`AnswerBody` / `CiteDetailPanel` /
@@ -81,7 +85,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 输入面抽成 AskComposer，375 → 325。棘轮只许变小。
   // 2026-10-26：线程滚动策略抽成共享 useAskThreadAutoScroll，325 → 319。成果记账。
   // 2026-10-27：问答范围企业名解析抽成共享展示助手 ⇒ 319 → 317。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  312',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Ask.tsx  AskPanel  311',
   // 2026-10-17：`openFile` 抽成模块级 `openExportFile`（顺带修「openPath 失败静默」的 bug）
   // ⇒ 461 → 456。棘轮只许变小，成果要记账。
   // 2026-11-13：修复轮删掉重复的路径拆分逻辑（复用 `splitReplayPath`）⇒ 493 → 491。
@@ -99,7 +103,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 若后续再次逼近 250 行，要重新登记并继续拆小。
   // 2026-11-13（知识库修复轮）：来源行抽成模块级 `NoteSource`、选中项失效的判据去掉重复
   // 分支 ⇒ 384 → 380。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  380',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/KnowledgeBase.tsx  KnowledgeBasePanel  378',
   // 2026-10-16：资产类面板（文件/收藏/表情/媒体/公众号）重做时把列表筛选与操作按钮
   // 抽进 `asset-ui.tsx`，`FilesPanel` 364 → 359。棘轮只许变小，成果要记账。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Files.tsx  FilesPanel  313',
@@ -122,7 +126,8 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // 2026-10-19：319 → 317。头像归档逻辑搬到模块级 `avatarWithArchive` /
   // `avatarsLocalWithArchive`，方法体退回「签名 + 一行转发」。
   // 2026-10-22：消息文件解析转发搬到模块级 `messageFileDataUrl` ⇒ 302 → 297。
-  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  407',
+  // 2026-11-24：表情批量转发收成一行（带 localOnly）⇒ 407 → 402。
+  'src/backend/wechat-data/src/remotes/media.ts  createMediaRemotes  402',
   // 2026-10-14（M9）：`SettingsPanel` 改成「桌面/浏览器」分派器（浏览器态整面板降级，见
   // `settings-browser.tsx`），原来那份三百多行的实现改名 `SettingsDesktopPanel`。
   // 这是**改名不是变胖**：行数一字未动，仍记 328。想降就得把某几节真搬出去。
@@ -134,9 +139,11 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   // ⚠️ 这是**按实测重登记**，不是放宽阈值（LIMIT 仍 250，且该函数仍在台账内、只许再变小）：
   // 设置面板的拆分欠账没消失，下一位改到这里应先抽 `AdvancedSection` 之外的卡片再回头改数字。
   // 2026-10-23：导航与页面上下文抽到 settings-workspace.tsx ⇒ 299 → 284。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsDesktopPanel  286',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Settings.tsx  SettingsDesktopPanel  285',
   // 2026-10-27：图谱输入类型移出函数签名 ⇒ 307 → 293。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  660',
+  // 2026-11-25：和我的连线改回按消息量写依据，调用压回同一行 ⇒ 660 → 656。
+  // 同日小组两两相连的调用收到函数外 ⇒ 656 → 655。
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/graph-model.ts  buildGraph  655',
   // 2026-09-30：给年报加「资金 / 撤回 / 群聊」三个字段时，先把 noteEmoji 与页脚首尾两条
   // 抽成模块级函数腾预算，assemble 308 → 306。棘轮只许变小，拆小了要回来改数字。
   // 2026-10-27：按当前工作树实测重新记账 ⇒ 306 → 274。
@@ -148,7 +155,7 @@ const KNOWN_BIG: ReadonlyArray<string> = [
   'src/backend/wechat-data/src/query/ask.ts  retrieveAskCitations  284',
   // 2026-09-29：合并两个 Toolbar 为一行 + 注释精简 ⇒ 279（成果记账，数字改小；只许再变小）
   // 2026-10-18：筛选区拆成两排（分类段条搬成 RecordKindTabs）⇒ 276。棘轮只许变小，成果要记账。
-  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  302',
+  'src/client/ui-wechat/src/client/pages/wechat-data/panels/Records.tsx  RecordsPanel  298',
   // 2026-10-21：收藏功能线与性能分支合并后，FavoritesPanel 实测 257 行（两只详情子视图已抽出）。
   // 仍高于 250 阈值 ⇒ 重新登记为「只许变小」；下一次再长必须先拆。
   'src/client/ui-wechat/src/client/pages/wechat-data/panels/Favorites.tsx  FavoritesPanel  274',

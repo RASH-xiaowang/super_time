@@ -493,7 +493,15 @@
 /* 双类名提权，稳过 kit 的 `.dialog { width: min(520px, 92vw) }`：
    编辑长消息时 520px 太窄，正文频繁折行。 */
 .editDialog.editDialog {
-  width: min(760px, 92vw);
+  box-sizing: border-box;
+  width: min(760px, 92vw, calc(78vh * 1.6));
+  min-width: min(480px, 92vw);
+  max-width: min(760px, 92vw);
+  aspect-ratio: 16 / 10;
+  height: min(475px, 78vh, calc(92vw * 0.625));
+  min-height: min(360px, 78vh);
+  max-height: min(475px, 78vh);
+  overflow: hidden;
 }
 .editHint {
   margin: 0 0 10px;
@@ -587,7 +595,12 @@
 @media (max-width: 560px) {
   .editDialog.editDialog {
     width: 100%;
+    min-width: 0;
     max-width: 100%;
+    height: 82dvh;
+    min-height: 0;
+    max-height: 82dvh;
+    aspect-ratio: auto;
   }
 }
 .exportSectionTitle { font-size: 13px; font-weight: 600; color: var(--nm-text-1); }

@@ -43,12 +43,17 @@ import type {
   TaskInfo,
   TaskTriggerCallbackStatus,
   TaskTriggerRecord,
+  TaskTriggerText,
 } from '../types.ts'
 
 /** 投递失败原因落库上限。 */
 const CALLBACK_ERROR_MAX = 500
-/** 一批待投递记录的上限（定时器每拍只处理这么多，避免一次拍住事件循环太久）。 */
+/** 一批待投递记录的上限（定时器每拍先捞这么多）。 */
 const PENDING_DISPATCH_LIMIT = 10
+/** 同一批里同时在途的投递数。网络等待重叠，认领失败仍由各条自己的租约挡住。 */
+const DISPATCH_CONCURRENCY = 4
+/** 成功写满一批就立刻再捞，避免突发命中要等下一拍扫描才继续投。 */
+const DISPATCH_DRAIN_ROUNDS = 4
 /**
  * 单条投递租约。租约由心跳持续续期，因此它只需要覆盖“一次续期失败到下一个 owner
  * 可接管”的窗口，而不是覆盖整个网络请求。
@@ -148,6 +153,30 @@ interface DispatchTarget {
  * @param triggerId - 触发记录 id。
  * @returns 记录 / 所属任务 / 凭据原文；找不到的部分缺省。
  */
+/** 把签好的局域网地址写回触发记录，源码模式才能看到 images.url。失败不影响投递。 */
+function rememberImageUrls(
+  file: string,
+  triggerId: number,
+  images: TaskTriggerRecord['images'],
+  links: RpaImageLink[],
+): void {
+  let changed = false
+  const next = images.map((image, index) => {
+    const url = links[index]?.url
+    if (typeof url !== 'string' || url === '' || image.url === url) return image
+    changed = true
+    return { ...image, url }
+  })
+  if (!changed) return
+  try {
+    withWritableDb(file, (db) => {
+      db.prepare('UPDATE task_triggers SET images = ? WHERE id = ?').run(JSON.stringify(next), triggerId)
+    })
+  } catch {
+    // 地址没写进记录不影响这次出网；下次打开源码仍会按落盘文件现签。
+  }
+}
+
 function readDispatchTarget(file: string, triggerId: number, decryptedDir: string): DispatchTarget {
   return withWritableDb(file, (db) => {
     const triggerRow = db.prepare('SELECT * FROM task_triggers WHERE id = ?').get(triggerId) as Record<string, unknown> | undefined
@@ -510,7 +539,12 @@ async function persistClaimedResult(
  * @param text - 已过隐私闸的触发文本。
  * @returns 记录快照。
  */
-function buildRecordContext(task: TaskInfo, record: TaskTriggerRecord, text: string): RpaRecordContext {
+function buildRecordContext(
+  task: TaskInfo,
+  record: TaskTriggerRecord,
+  text: string,
+  texts: readonly TaskTriggerText[] = record.texts ?? [],
+): RpaRecordContext {
   return {
     username: record.chatUsername,
     chatName: record.chatName,
@@ -521,6 +555,7 @@ function buildRecordContext(task: TaskInfo, record: TaskTriggerRecord, text: str
     keyword: record.keyword,
     triggeredAt: record.triggeredAt,
     images: record.images,
+    texts: [...texts],
   }
 }
 
@@ -682,18 +717,26 @@ async function dispatchTaskCallbackInternal(
 
   let ctx: RpaInvocationContext
   try {
-    // 所有厂商都发过闸文本；`contentOutbound=false` 的厂商拿空串（当前没有这种厂商）。
-    const gated = deps.gate('task_callback', { sessions: 1, messages: 1 }, [record.text])
-    const gatedText = Array.isArray(gated) && gated.length > 0 ? taskCellStr(gated[0]) : record.text
-    const text = adapter.descriptor.governance.contentOutbound ? gatedText : ''
-    const recordContext = buildRecordContext(task, record, text)
-    const imageLinks = usesImageParamSources(adapter.descriptor, task.triggerConfig)
+    // 所有要出网的文本**一次**过闸：触发文本 + 携带的历史文本逐条替换，
+    // 少闸一条就等于多出一条未脱敏的原文（隐私闸按条返回，不能用同一个结果铺开）。
+    const sourceTexts = [record.text, ...(record.texts ?? []).map((item) => item.text)]
+    const gated = deps.gate('task_callback', { sessions: 1, messages: sourceTexts.length }, sourceTexts)
+    const gatedList = Array.isArray(gated) ? gated.map((value) => taskCellStr(value)) : []
+    const outbound = adapter.descriptor.governance.contentOutbound
+    const text = outbound ? (gatedList[0] ?? record.text) : ''
+    const texts = outbound
+      ? (record.texts ?? []).map((item, index) => ({ ...item, text: gatedList[index + 1] ?? item.text }))
+      : []
+    const recordContext = buildRecordContext(task, record, text, texts)
+    const webhookHasImages = task.triggerMethod === 'webhook' && record.images.length > 0
+    const imageLinks = usesImageParamSources(adapter.descriptor, task.triggerConfig) || webhookHasImages
       ? await buildRpaImageLinks(
         recordContext,
         { decodedDir, decodeImage: deps.decodeImage },
         deps.mediaLinks?.(record.id),
       )
       : []
+    if (webhookHasImages) rememberImageUrls(file, record.id, record.images, imageLinks)
     ctx = buildInvocationContext(task, record, target.secrets ?? {}, recordContext, imageLinks)
   } catch (e) {
     return finishSkipped('投递准备失败：' + taskErrorText(e))
@@ -757,14 +800,14 @@ export async function dispatchTaskCallback(
 /**
  * 投递一批 `pending` 记录。
  *
- * 只按「记录 pending + 所属任务 ready」捞（**不再按厂商列过滤**）：逐条在 JS 里用注册表
- * 判配置后投递，未配置/厂商下线的记录会被 skipped 并写明原因（**落库为 skipped**，否则
- * 同一批 pending 会每拍重复占用名额、队头阻塞）。单条失败不连坐（错误只收集前 10 条）；
- * 成功/失败/skipped 都算处理过，下一拍不会重复捞。
+ * 只按「记录 pending + 所属任务 ready」捞（**不再按厂商列过滤**）：同一批里最多
+ * {@link DISPATCH_CONCURRENCY} 条同时出网。未配置/厂商下线的记录会被 skipped 并写明原因
+ * （**落库为 skipped**，否则同一批 pending 会每拍重复占用名额、队头阻塞）。单条失败不连坐
+ * （错误只收集前 10 条）；这一批成功写满上限时立刻再捞，最多 {@link DISPATCH_DRAIN_ROUNDS} 轮。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根。
  * @param deps - 解码 / 隐私闸 / fetch 注入。
- * @param limit - 本次最多投几条（默认 10）。
+ * @param limit - 每一轮最多捞几条（默认 10）。写满且这一轮有成功时会再捞，最多 4 轮。
  * @returns 成功/失败计数与失败原因。
  */
 export async function dispatchPendingTaskCallbacks(
@@ -795,22 +838,77 @@ export async function dispatchPendingTaskCallbacks(
   let dispatched = 0
   let failed = 0
   const errors: string[] = []
-  for (const id of ids) {
-    try {
-      const entry = await dispatchTaskCallbackInternal(decryptedDir, decodedDir, id, deps, {
-        mode: 'automatic',
-      })
-      if (!entry.handled) continue
-      const r = entry.result
-      if (r.ok) dispatched += 1
-      else {
-        failed += 1
-        if (errors.length < 10) errors.push('记录 ' + String(id) + '：' + (r.error ?? r.status))
+  for (let round = 0; round < DISPATCH_DRAIN_ROUNDS; round += 1) {
+    let roundIds = ids
+    if (round > 0) {
+      try {
+        roundIds = readPendingTriggerIds(decryptedDir, cap)
+      } catch {
+        break
       }
-    } catch (e) {
-      failed += 1
-      if (errors.length < 10) errors.push('记录 ' + String(id) + '：' + taskErrorText(e))
     }
+    if (roundIds.length === 0) break
+    const roundDispatched = await dispatchTriggerIds(decryptedDir, decodedDir, roundIds, deps, errors, (ok) => {
+      if (ok) dispatched += 1
+      else failed += 1
+    })
+    if (roundIds.length < cap || roundDispatched === 0) break
   }
   return errors.length > 0 ? { dispatched, failed, errors } : { dispatched, failed }
+}
+
+/** 捞下一批仍可认领的 pending 记录 id。读失败时按空批次处理，由调用方结束这一拍。 */
+function readPendingTriggerIds(decryptedDir: string, cap: number): number[] {
+  const now = Date.now()
+  return withWritableDb(taskDbPath(decryptedDir), (db) => {
+    ensureTaskSchema(db)
+    const rows = db.prepare(`SELECT t.id AS id FROM task_triggers t
+      JOIN task_info i ON i.id = t.task_id
+      WHERE t.callback_status = 'pending'
+        AND i.status = 'ready'
+        AND t.callback_lease_until <= ?
+      ORDER BY t.triggered_at ASC, t.id ASC LIMIT ?`).all(now, cap) as Array<{ id?: unknown }>
+    return rows.map((row) => taskCellNum(row.id))
+  })
+}
+
+/**
+ * 重叠投递一批记录。认领与落库仍按记录隔离，网络等待最多 {@link DISPATCH_CONCURRENCY} 路同时进行。
+ * @returns 这一批里成功发出的条数。
+ */
+async function dispatchTriggerIds(
+  decryptedDir: string,
+  decodedDir: string,
+  ids: readonly number[],
+  deps: TaskDispatchDeps,
+  errors: string[],
+  count: (ok: boolean) => void,
+): Promise<number> {
+  let cursor = 0
+  let sent = 0
+  const workers = Array.from({ length: Math.min(DISPATCH_CONCURRENCY, ids.length) }, async () => {
+    while (cursor < ids.length) {
+      const index = cursor
+      cursor += 1
+      const id = ids[index]
+      if (id === undefined) return
+      try {
+        const entry = await dispatchTaskCallbackInternal(decryptedDir, decodedDir, id, deps, {
+          mode: 'automatic',
+        })
+        if (!entry.handled) continue
+        const ok = entry.result.ok
+        if (ok) sent += 1
+        count(ok)
+        if (!ok && errors.length < 10) {
+          errors.push('记录 ' + String(id) + '：' + (entry.result.error ?? entry.result.status))
+        }
+      } catch (e) {
+        count(false)
+        if (errors.length < 10) errors.push('记录 ' + String(id) + '：' + taskErrorText(e))
+      }
+    }
+  })
+  await Promise.all(workers)
+  return sent
 }

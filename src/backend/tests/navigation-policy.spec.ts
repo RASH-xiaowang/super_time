@@ -176,7 +176,11 @@ describe('主进程接线：每个导航入口都真的挂了守卫', () => {
     expect(miscSrc.slice(at, at + 200)).toContain('installWebContentsGuards(contents)')
     // ③ main.js 把这个入口交给 ipc-misc
     expect(miscSrc).toContain('installWebContentsGuards')
-    expect(mainSrc.slice(mainSrc.indexOf('registerMiscIpc'), mainSrc.indexOf('registerMiscIpc') + 1500))
+    // 从**调用点**起算（`registerMiscIpc({`）：从 require 行起算会随启动期新增的
+    // 依赖漂出窗口 —— 那条断言本该钉「调用时传了守卫」，不是「require 后 1500 字内」。
+    const callAt = mainSrc.indexOf('registerMiscIpc({')
+    expect(callAt, 'main.js 找不到 registerMiscIpc({…} 调用点').toBeGreaterThan(-1)
+    expect(mainSrc.slice(callAt, callAt + 1500))
       .toContain('installWebContentsGuards')
   })
 })

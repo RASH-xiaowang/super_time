@@ -132,6 +132,18 @@ describe('消息列表：未配置投递地址的 AI 回复', () => {
     expect(html).toContain('disabled=""')
   })
 
+  it('规则已匹配时显示待发送，不再报待配置也不再催配置', () => {
+    const html = renderRecords([aiRecord()], {}, { hasRuleFor: () => true })
+
+    expect(html).toContain('待发送')
+    expect(html).toContain('规则已匹配')
+    expect(html).not.toContain('正文已保存在消息列表')
+    expect(html).not.toContain('去配置规则')
+    expect(html).not.toContain('data-configure-rule')
+    // 规则已就绪，重发按钮不再以「待配置」为由禁用（这里只校验提示语）。
+    expect(html).toContain('规则已匹配，会自动按序投递')
+  })
+
   it('空白预约显示生成中，不再声称正文已保存或待配置', () => {
     const now = Date.now()
     const html = renderRecords([aiRecord({

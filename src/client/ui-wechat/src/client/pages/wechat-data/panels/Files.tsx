@@ -107,8 +107,15 @@ function FilesLightbox({
   onSaved: (path: string) => void
 }): React.JSX.Element {
   const mediaSave = useMediaSaveTask()
+  // 缩略图是一张张回来的。每次回来都新建 load，查看器会当成换了资源，清掉原图再载一次，灯箱就一直闪。
+  const loadersRef = useRef(new Map<string, () => Promise<string>>())
   const sources = useMemo(() => imageItems.map((f) => {
     const key = fileKey(f)
+    let load = loadersRef.current.get(key)
+    if (!load) {
+      load = () => fetchFileFullUrl(key)
+      loadersRef.current.set(key, load)
+    }
     const caption = [CAT_LABEL[f.category] || f.category, fmtBytes(f.fileSize || 0), fmtMonthDaySec(f.modifyTime)]
     if (fileSource(f)) caption.push(`来源 ${fileSource(f)}`)
     return {
@@ -116,7 +123,7 @@ function FilesLightbox({
       thumb: fileImgs[key],
       title: fileDisplayName(f),
       subtitle: caption.join(' · '),
-      load: () => fetchFileFullUrl(key),
+      load,
       onDownload: async () => {
         const outcome = await mediaSave.save<MediaOriginalExportResult>({
           idPrefix: 'files-original',

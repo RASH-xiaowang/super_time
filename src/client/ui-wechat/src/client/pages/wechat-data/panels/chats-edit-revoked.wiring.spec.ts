@@ -97,8 +97,8 @@ describe('编辑消息弹窗', () => {
   it('双类名宽度是 min(760px, 92vw)，不是 kit 的 520px', () => {
     const rule = ruleOf(CARDS_CSS, '.editDialog.editDialog')
     expect(rule, '编辑框宽度又退回 520px').not.toContain('520px')
-    expect(rule, '编辑框宽度必须是 760px 与 92vw 的较小值').toMatch(
-      /width:\s*min\(760px,\s*92vw\);/,
+    expect(rule, '编辑框宽度必须是 760px、92vw 与 16:10 高度上限的较小值').toMatch(
+      /width:\s*min\(760px,\s*92vw,\s*calc\(78vh \* 1\.6\)\);/,
     )
     expect(rule, '双类名规则不应再写死单一像素宽度').not.toMatch(/width:\s*\d+px;/)
   })

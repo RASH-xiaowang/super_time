@@ -66,6 +66,11 @@ const {
   featureLabel,
 } = require(path.join(repoRoot, 'src', 'license', 'schema'))
 const {
+  APP_CAPABILITIES,
+  DEFAULT_APP_CAPABILITIES,
+  DEFAULT_APP_MAX_JOBS_PER_HOUR,
+} = require(path.join(repoRoot, 'src', 'license', 'features'))
+const {
   resolvePrivateKeyPath,
   describeKeyFailure,
   ENV_KEY,
@@ -134,6 +139,11 @@ function readKeys() {
   }
   const matchClient = !!(publicKeyPem && clientPublicKeyPem && publicKeyPem.trim() === clientPublicKeyPem.trim())
   const matchPrivate = !!(derivedFromPrivate && publicKeyPem && derivedFromPrivate.trim() === publicKeyPem.trim())
+  // 真正决定「签出来的证能不能被主程序验过」的是**客户端内嵌公钥**与私钥是否同源；
+  // vendor-keys 只是厂商侧的留档。缺 vendor 文件时这条仍能给出一致的结论。
+  const matchDerivedClient = !!(
+    derivedFromPrivate && clientPublicKeyPem && derivedFromPrivate.trim() === clientPublicKeyPem.trim()
+  )
   return {
     hasPrivate,
     hasPublic,
@@ -145,6 +155,7 @@ function readKeys() {
     clientPublicPath: clientPubPath,
     matchClient,
     matchPrivate,
+    matchDerivedClient,
   }
 }
 
@@ -171,6 +182,11 @@ function cmdMeta() {
     requiredFeatures: REQUIRED_FEATURES,
     featureCatalog: FEATURE_CATALOG,
     featureGroups: FEATURE_GROUPS,
+    appCapabilities: APP_CAPABILITIES,
+    // 界面默认值：签发台打开「应用托管额度」时直接取这两个数，
+    // 不在 C++ 里重复写一份 120 / 全开，避免两边漂。
+    defaultAppCapabilities: DEFAULT_APP_CAPABILITIES,
+    defaultAppMaxJobsPerHour: DEFAULT_APP_MAX_JOBS_PER_HOUR,
     editions: [
       { value: 'pro', label: '专业版' },
       { value: 'standard', label: '标准版' },
@@ -253,6 +269,9 @@ function buildPayload(form) {
     ? new Date(now.getTime() + days * 24 * 3600 * 1000).toISOString()
     : null
 
+  const apps = buildAppsSection(form, features, seats)
+  if (apps.error) return { error: apps.error }
+
   const hostname = String(form?.hostname || '').trim()
   const payload = {
     product: PRODUCT_ID,
@@ -273,6 +292,7 @@ function buildPayload(form) {
     features,
     featureSchemaVersion: FEATURE_SCHEMA_VERSION,
     seats,
+    ...(apps.value === undefined ? {} : { apps: apps.value }),
     appVersionMin: String(form?.appVersionMin || '1.0.0'),
     notes: String(form?.notes || ''),
   }
@@ -280,6 +300,47 @@ function buildPayload(form) {
   const struct = validatePayload(payload)
   if (!struct.ok) return { error: struct.reason }
   return { payload }
+}
+
+/**
+ * 组装应用托管段。
+ *
+ * 只有勾了 `apps-superlanguage` 才写 `apps`（没开通就不留半截额度，避免被误读）。
+ * 实例数缺省沿用表单的「席位数」—— Super Time 自身按设备指纹绑定，`seats`
+ * 目前没有被占用，把它解释成「可绑定的应用实例数」对客户最直观。
+ * @param {object} form - 签发表单。
+ * @param {string[]} features - 已选功能位（含必选项）。
+ * @param {number} seats - 表单席位数。
+ * @returns {{ value?: object, error?: string }}
+ */
+function buildAppsSection(form, features, seats) {
+  if (!features.includes('apps-superlanguage')) {
+    if (form?.apps != null) return { error: '未勾选「SuperLanguage 应用托管」，不能填写应用额度' }
+    return {}
+  }
+  const raw = form?.apps && typeof form.apps === 'object' ? form.apps : {}
+  const known = new Set(APP_CAPABILITIES.map((item) => item.id))
+  const rawCaps = Array.isArray(raw.caps) ? raw.caps.map(String) : [...DEFAULT_APP_CAPABILITIES]
+  const caps = [...new Set(rawCaps)]
+  const unknown = caps.filter((cap) => !known.has(cap))
+  if (unknown.length > 0) return { error: `未知应用能力：${unknown.join('、')}` }
+  if (caps.length === 0) return { error: '应用能力至少选择一项' }
+  const maxInstances = Number.isInteger(raw.maxInstances) && raw.maxInstances >= 1
+    ? raw.maxInstances
+    : seats
+  const maxJobsPerHour = Number.isInteger(raw.maxJobsPerHour) && raw.maxJobsPerHour >= 1
+    ? raw.maxJobsPerHour
+    : DEFAULT_APP_MAX_JOBS_PER_HOUR
+  return {
+    value: {
+      superlanguage: {
+        maxInstances,
+        caps,
+        maxJobsPerHour,
+        standalone: raw.standalone === true,
+      },
+    },
+  }
 }
 
 function loadPrivatePem() {

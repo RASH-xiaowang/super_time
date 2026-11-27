@@ -24,12 +24,13 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DatabaseSync } from '../query/db-open.ts'
 import type { ReplyTrace } from '../types-analysis.ts'
+import { replyDate } from './reply-tools/local.ts'
 
 /**
  * 提示词版本：改了 `buildReplyPrompt` 的措辞或输出格式时**必须**递增，
  * 否则旧候选会以新界面呈现，表现为「明明改了却看不到差别」。
  */
-export const REPLY_SUGGEST_PROMPT_VERSION = 1
+export const REPLY_SUGGEST_PROMPT_VERSION = 3
 
 /** 缓存库路径：`decrypted` 的兄弟文件。 */
 export function replySuggestCachePath(decryptedDir: string): string {
@@ -95,9 +96,11 @@ export function readReplySuggestCache(
   try {
     db = openStore(decryptedDir)
     const row = db.prepare(
-      'SELECT replies_json, trace_json FROM reply_suggest WHERE cache_key = ?',
-    ).get(cacheKey) as { replies_json: string; trace_json: string } | undefined
+      'SELECT replies_json, trace_json, created_at FROM reply_suggest WHERE cache_key = ?',
+    ).get(cacheKey) as { replies_json: string; trace_json: string; created_at: number } | undefined
     if (row === undefined) return undefined
+    // Reply-capable tool results may contain realtime data, including date boundaries.
+    if (Date.now() / 1000 - Number(row.created_at) > 300 || Number(row.created_at) > Date.now() / 1000 + 5) return undefined
     const replies = JSON.parse(row.replies_json) as unknown
     if (!Array.isArray(replies) || replies.length === 0) return undefined
     const out: string[] = []
@@ -112,6 +115,10 @@ export function readReplySuggestCache(
         if (typeof parsed === 'object' && parsed !== null) trace = parsed
       } catch { /* 留痕坏掉不影响候选 */ }
     }
+    if (trace?.toolSources?.some(source => {
+      if (!source.timezone) return false
+      try { return replyDate(new Date(source.fetchedAt), source.timezone) !== replyDate(new Date(), source.timezone) } catch { return true }
+    })) return undefined
     return { replies: out, ...(trace === undefined ? {} : { trace }) }
   } catch {
     return undefined

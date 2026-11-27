@@ -1,7 +1,7 @@
 /**
  * 微信数据面板 — 主容器。分组导航见 `nav-config.ts` 的 `NAV_GROUPS`：
- * **5 组**（概览 · 问答 · 总结 / 会话与消息 / 关系与社交 / 资产与资金 / 行动与维护），
- * 侧栏可见 **17** 项 + 底栏独立渲染的 `settings` 与「Bug 反馈」入口，可路由页签共 **41**（其余 23 项 `hidden`，
+ * **6 组**（概览 / 消息 / 联系人 / 资产 / 任务 / 系统），
+ * 侧栏可见 **18** 项 + 底栏独立渲染的 `settings` 与「Bug 反馈」入口，可路由页签共 **42**（其余 23 项 `hidden`，
  * 靠「详情 →」或合并组段条进入）。
  *
  * ⚠️ 本段历史上写成「8 组 / 32 页签」，漏了「报告与总结」与「资金」两组。
@@ -30,10 +30,12 @@ import {
   EmoticonsPanel,
   FavoritesPanel,
   FilesPanel,
+  FundsView,
   GraphPanel,
   GroupInsightsPanel,
   KbShell,
-  LedgerPanel,
+  LocalToolsPanel,
+  AppsHostPanel,
   MediaAssetsPanel,
   MessageListPanel,
   MomentsInsightsPanel,
@@ -43,12 +45,10 @@ import {
   OperationLogPanel,
   OverviewPanel,
   PortraitsPanel,
-  RecordsPanel,
   RevokedPanel,
   SettingsPanelGate,
   StoragePanel,
   SummaryWorkbench,
-  AgentDeskPanel,
   TaskCenterPanel,
   TasksPanel,
 } from './panel-loaders.tsx'
@@ -225,6 +225,8 @@ function renderTab(
   seed: SearchSeed | null,
   onOpenKbFile: (kbId: number, fileId: number) => void,
   kbFocus: { fileId: number; nonce: number } | null,
+  onOpenPortrait: (username: string) => void,
+  portraitFocus: string | null,
 ): React.JSX.Element {
   const chatViews: Partial<Record<string, ChatView>> = {
     chats: 'chats', bizchats: 'bizchats', servicechats: 'servicechats', kefu: 'kefu',
@@ -245,14 +247,14 @@ function renderTab(
         ariaLabel="消息视图"
         initial={tab === 'revoked' ? 'revoked' : tab === 'calls' ? 'calls' : 'chats'}
         sections={[
-          { key: 'chats', label: '消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} onInitialTargetHandled={onChatTargetHandled} /> },
+          { key: 'chats', label: '消息', render: () => <ChatsPanel initialView={chatViews[tab] ?? 'chats'} initialTarget={chatTarget} onInitialTargetHandled={onChatTargetHandled} onOpenMoments={onOpenMoments} /> },
           { key: 'calls', label: '通话', render: () => <CallsPanel onOpenChat={onOpenChat} /> },
           { key: 'revoked', label: '撤回', render: () => <RevokedPanel onOpenSettings={onOpenSettings} /> },
         ]}
       />
     )
     // 通讯录与社交图谱是**同一批人的两种看法**（联系人列表 / 关系图）：2026-09-17 起
-    // 收进同一个导航项，由面板顶部段条切换。目前**共 9 组**合并视图走同一个外壳
+    // 收进同一个导航项，由面板顶部段条切换。目前**共 8 组**合并视图走同一个外壳
     // （MergedSections：本文件 8 处 + KbShell.tsx 1 处 = 9）。
     // ⚠️ 组数以 `grep -c "<MergedSections"` 为准 —— 这里曾写「六组」，与实际差两组；
     // 由 panels/merged-sections.wiring.spec.ts 守着，改组数会在这里转红。
@@ -267,11 +269,11 @@ function renderTab(
         initial={tab}
         sections={[
           { key: 'contacts', label: '通讯录', render: () => <ContactsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} onOpenChat={onOpenChat} onOpenMoments={onOpenMoments} seedQuery={seed?.tab === 'contacts' ? seed : undefined} /> },
-          { key: 'graph', label: '社交图谱', render: () => <GraphPanel variant="social" onOpenChat={onOpenChat} /> },
+          { key: 'graph', label: '社交图谱', render: () => <GraphPanel variant="social" onOpenChat={onOpenChat} onOpenPortrait={onOpenPortrait} /> },
         ]}
       />
     )
-    case 'portraits': return <PortraitsPanel onOpenChat={onOpenChat} />
+    case 'portraits': return <PortraitsPanel onOpenChat={onOpenChat} focusUsername={portraitFocus} />
     // 知识图谱与知识库是**同一批笔记的两种看法**（同一个 `wechat_notes.db` 的 notes 表）：
     // 图谱把笔记当「网」看（力导向画布 / [[链接]] 边 / 待补节点），知识库把它当「文档」看
     // （列表 / 详情 / 新建编辑 / 标签 / 关键词搜索）。2026-09-18 起收进同一个导航项，
@@ -318,9 +320,9 @@ function renderTab(
         ariaLabel="收藏与表情视图"
         initial={tab}
         sections={[
-          { key: 'favorites', label: '收藏', render: () => <FavoritesPanel seedQuery={seed?.tab === 'favorites' ? seed : undefined} /> },
-          { key: 'emoticons', label: '表情', render: () => <EmoticonsPanel /> },
-          { key: 'assetinsights', label: '统计', render: () => <AssetInsightsPanel /> },
+          { key: 'favorites', label: '收藏', keepAlive: false, render: () => <FavoritesPanel seedQuery={seed?.tab === 'favorites' ? seed : undefined} /> },
+          { key: 'emoticons', label: '表情', keepAlive: false, render: () => <EmoticonsPanel /> },
+          { key: 'assetinsights', label: '统计', keepAlive: false, render: () => <AssetInsightsPanel /> },
         ]}
       />
     )
@@ -332,29 +334,30 @@ function renderTab(
         ariaLabel="文件与存储视图"
         initial={tab}
         sections={[
-          { key: 'files', label: '文件', render: () => <FilesPanel seedQuery={seed?.tab === 'files' ? seed : undefined} /> },
-          { key: 'mediaassets', label: '媒体', render: () => <MediaAssetsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
-          { key: 'storage', label: '存储', render: () => <StoragePanel onOpenChat={onOpenChat} /> },
-          { key: 'officialassets', label: '公众号', render: () => <OfficialAssetsPanel onOpenChat={onOpenChat} /> },
+          { key: 'files', label: '文件', keepAlive: false, render: () => <FilesPanel seedQuery={seed?.tab === 'files' ? seed : undefined} /> },
+          { key: 'mediaassets', label: '媒体', keepAlive: false, render: () => <MediaAssetsPanel onNavigate={(t) =>{  onNavigate(t as WechatTab) }} /> },
+          { key: 'storage', label: '存储', keepAlive: false, render: () => <StoragePanel onOpenChat={onOpenChat} /> },
+          { key: 'officialassets', label: '公众号', keepAlive: false, render: () => <OfficialAssetsPanel onOpenChat={onOpenChat} /> },
         ]}
       />
     )
     case 'records':
     case 'ledger': return (
-      <MergedSections
-        ariaLabel="资金往来视图"
-        initial={tab}
-        sections={[
-          { key: 'ledger', label: '汇总', keepAlive: false, render: () => <LedgerPanel onOpenChat={onOpenChat} /> },
-          { key: 'records', label: '明细', keepAlive: false, render: () => <RecordsPanel onOpenChat={onOpenChat} seedQuery={seed?.tab === 'records' ? seed : undefined} /> },
-        ]}
+      <FundsView
+        onOpenChat={onOpenChat}
+        seedQuery={seed?.tab === 'records' ? seed : undefined}
       />
     )
     case 'tasks': return <TasksPanel onOpenChat={onOpenChat} />
+    // 本地工具（2026-11-24）：本项目所有可调用工具的清单（问答检索 / AI 回复 / 出网触发 /
+    // 本机能力）。清单由后端从各注册表现算，这里只负责卡片展示。
+    case 'localtools': return <LocalToolsPanel />
+    // 应用托管（2026-11-24）：SuperLanguage 实例的席位、部署与运行态。
+    // 授权主机在主进程；面板只读摘要，写操作全部由主进程过功能位。
+    case 'apps': return <AppsHostPanel />
     // 任务信息（2026-10-19）：关键词触发式任务 + 触发记录（双栏）。与「待办日程」是两件事：
     // 待办从聊天文本里提取 TODO，这里的任务是用户显式创建的监听任务（命中关键词 → 记录 → 回调）。
     case 'taskinfo': return <TaskCenterPanel />
-    case 'agentdesk': return <AgentDeskPanel />
     case 'messagelist': return <MessageListPanel />
     case 'groupinsights':
     case 'monitor': return (
@@ -784,6 +787,7 @@ export function WechatDataPanel(): React.JSX.Element {
     }
   }, [updateNavMore, navOpen])
   const [chatTarget, setChatTarget] = useState<ChatTarget | null>(null)
+  const [portraitFocus, setPortraitFocus] = useState<string | null>(null)
   const chatTargetNonceRef = useRef(0)
   const [momentAuthor, setMomentAuthor] = useState<string | null>(null)
   useReleaseImagesOnTab(active, chatTarget?.username) // W3-10.1：切页签释放看不见的图片槽（语义表见 use-release-images-on-tab.ts）
@@ -821,6 +825,10 @@ export function WechatDataPanel(): React.JSX.Element {
     if (localId !== undefined && Number.isFinite(localId)) target.localId = localId
     setChatTarget(target)
     setActive('chats')
+  }, [])
+  const openPortrait = useCallback((username: string): void => {
+    const normalized = username.trim()
+    if (normalized) { setPortraitFocus(normalized); setActive('portraits') }
   }, [])
   /** 外部跳转意图已经被消息面板消费，清掉它，避免分段切换重挂时再次打开旧会话。 */
   const onChatTargetHandled = useCallback((nonce: number): void => {
@@ -885,8 +893,8 @@ export function WechatDataPanel(): React.JSX.Element {
   }, [])
 
   const activePanel = useMemo(
-    () => renderTab(active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings, seed, openKbFile, kbFocus),
-    [active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, openSettings, seed, openKbFile, kbFocus],
+    () => renderTab(active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, () => { setMomentAuthor(null) }, openSettings, seed, openKbFile, kbFocus, openPortrait, portraitFocus),
+    [active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, openSettings, seed, openKbFile, kbFocus, openPortrait, portraitFocus],
   )
   const keepAlivePanel = useKeepAlivePanel(active, activePanel)
 

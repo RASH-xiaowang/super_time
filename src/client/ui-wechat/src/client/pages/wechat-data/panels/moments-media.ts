@@ -41,8 +41,11 @@ import {
   snsMediaCacheGetMany,
   snsMediaCacheSet,
 } from '../api.ts'
+import { getDataIdentitySnapshot } from '../cache.ts'
+import { drainSnsWorkPool, createSnsRequestJoiner } from './moments-media-scheduler.ts'
 import { capRecord } from '../utils/misc.ts'
 import { ARTICLE_COVER_CACHE_MAX, SNS_IMG_CACHE_MAX, imgKey } from './moments-support.tsx'
+import type { MomentRow } from './moments-rows.ts'
 
 /**
  * 取图失败的重试状态（2026-09-29 修「有的图片加载不出来」）。
@@ -66,6 +69,14 @@ const MEDIA_RETRY_DELAY_MS = 1500
 export const MOMENTS_MEDIA_KEY_CACHE_MAX = 4000
 /** 待解密队列与媒体键表同界；超出的远端项撤回去重标记，等再次进入视口再排。 */
 export const MOMENTS_MEDIA_QUEUE_MAX = MOMENTS_MEDIA_KEY_CACHE_MAX
+/**
+ * 视口下方提前取图的动态条数。
+ *
+ * 虚拟列表只挂视口附近几行，IntersectionObserver 看不见还没挂上的卡片。
+ * 用户一划，新卡片才开始取图，于是停在「正在取原图」。这里按数据把窗口后面
+ * 这些条的图片先放进同一条队列（排在视口内图片后面），滚到时多半已经在缓存里。
+ */
+export const MOMENTS_PREFETCH_AHEAD = 16
 /** 公众号链接只重试 3 次；持久失败链接的尝试表同样必须有界。 */
 export const MOMENTS_COVER_ATTEMPT_MAX = 500
 /** 失败原因记录跟随图片缓存上界，不能比实际可见资源保留更久。 */
@@ -179,9 +190,19 @@ export interface SnsImageRequestOptions {
 export interface SnsImageEntry {
   url: string
   original: boolean
+  quality?: string
 }
 
 export type SnsImageEntries = Record<string, SnsImageEntry>
+
+/** Quality requirements are namespaced independently from media identity; never persist URL tokens in keys. */
+export function snsImageQuality(source: SnsImageSource): string {
+  return JSON.stringify([positiveCount(source.originalWidth) ?? 0, positiveCount(source.originalHeight) ?? 0,
+    positiveCount(source.originalBytes) ?? 0, Boolean(nonEmpty(source.uhdUrl))])
+}
+function snsStorageKey(scope: string, key: string, source: SnsImageSource): string {
+  return scope + ':' + key + ':q' + snsImageQuality(source)
+}
 
 function nonEmpty(value: unknown): string | undefined {
   return typeof value === 'string' && value !== '' ? value : undefined
@@ -446,7 +467,7 @@ export function pendingCovers(
 function sweepSnsKeys(ob: IntersectionObserver, fetched: Set<string>): void {
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-sns-key]'))) {
     const key = el.dataset.snsKey || ''
-    if (key !== '' && !fetched.has(key)) ob.observe(el)
+    if (key !== '') ob.observe(el) // fetched history is not residency; enqueue applies the failure gate
   }
 }
 
@@ -487,6 +508,17 @@ function isInViewport(el: HTMLElement, root: HTMLElement | null): boolean {
  * @param root - 滚动容器。
  * @returns 是否真的入队了（调用方据此决定要不要触发 drain）。
  */
+/** Keep the queue's display key distinct from the image encryption-key alias. */
+function queueMediaSpec(key: string, spec: MediaKeySpec): { key: string } & MediaKeySpec {
+  const { key: alias, ...rest } = spec
+  const seed = nonEmpty(spec.seed) ?? nonEmpty(alias)
+  return { ...rest, ...(seed ? { seed } : {}), key }
+}
+function gridSource(item: { key: string } & MediaKeySpec): MediaKeySpec {
+  const { key: _queueKey, ...source } = item
+  return source
+}
+
 export function enqueueIntersecting(
   entries: readonly IntersectionObserverEntry[],
   specOf: Map<string, MediaKeySpec>,
@@ -494,6 +526,7 @@ export function enqueueIntersecting(
   active: Set<string>,
   queue: React.MutableRefObject<Array<{ key: string } & MediaKeySpec>>,
   root: HTMLElement | null,
+  canRestore?: (key: string) => boolean,
 ): boolean {
   const urgent: Array<{ key: string } & MediaKeySpec> = []
   const lazy: Array<{ key: string } & MediaKeySpec> = []
@@ -501,12 +534,12 @@ export function enqueueIntersecting(
     if (!e.isIntersecting) continue
     const el = e.target as HTMLElement
     const key = el.dataset.snsKey || ''
-    if (!key || active.has(key) || fetched.has(key)) continue
+    if (!key || active.has(key) || (canRestore ? !canRestore(key) : fetched.has(key))) continue
     const spec = specOf.get(key)
     if (!spec) continue
     active.add(key)
     fetched.add(key)
-    ;(isInViewport(el, root) ? urgent : lazy).push({ key, ...spec })
+    ;(isInViewport(el, root) ? urgent : lazy).push(queueMediaSpec(key, spec))
   }
   if (urgent.length === 0 && lazy.length === 0) return false
   // `unshift(...urgent)` 保持 urgent 内部顺序（DOM 顺序 = 用户从上往下看的顺序）。
@@ -514,6 +547,53 @@ export function enqueueIntersecting(
   if (lazy.length > 0) queue.current.push(...lazy)
   // 队列与 spec 表保持同一上界。被挤掉的是最远的预取项：撤回去重标记，
   // 下次滚到它时还会重新入队，而不是永久记为「已取过」。
+  if (queue.current.length > MOMENTS_MEDIA_QUEUE_MAX) {
+    for (const dropped of queue.current.splice(MOMENTS_MEDIA_QUEUE_MAX)) {
+      active.delete(dropped.key)
+      fetched.delete(dropped.key)
+    }
+  }
+  return true
+}
+
+/**
+ * 把虚拟窗口**下方**若干条动态的图片放进预取队列。
+ *
+ * 不插到队首：用户正在看的格子仍由 {@link enqueueIntersecting} 插队。
+ * 已经在队列、请求中或缓存里的键跳过，避免和观察器各打一遍后端。
+ * @param rows - 摊平后的时间线行。
+ * @param windowEnd - 当前虚拟窗口最后一行的下标；还没有窗口时传 -1，从列表开头预取。
+ * @returns 是否新入队。
+ */
+export function enqueueMomentsAhead(
+  rows: readonly MomentRow[],
+  windowEnd: number,
+  specOf: Map<string, MediaKeySpec>,
+  fetched: Set<string>,
+  active: Set<string>,
+  queue: React.MutableRefObject<Array<{ key: string } & MediaKeySpec>>,
+  canRestore?: (key: string) => boolean,
+): boolean {
+  const start = windowEnd < 0 ? 0 : windowEnd + 1
+  const lazy: Array<{ key: string } & MediaKeySpec> = []
+  let posts = 0
+  for (let i = start; i < rows.length && posts < MOMENTS_PREFETCH_AHEAD; i += 1) {
+    const row = rows[i]
+    if (!row || row.kind !== 'moment') continue
+    posts += 1
+    for (const im of momentGridImages(row.m)) {
+      const key = imgKey(im)
+      const spec = momentImageSpec(im)
+      if (!key || !spec || active.has(key)) continue
+      if (canRestore ? !canRestore(key) : fetched.has(key)) continue
+      specOf.set(key, spec)
+      active.add(key)
+      fetched.add(key)
+      lazy.push(queueMediaSpec(key, spec))
+    }
+  }
+  if (lazy.length === 0) return false
+  queue.current.push(...lazy)
   if (queue.current.length > MOMENTS_MEDIA_QUEUE_MAX) {
     for (const dropped of queue.current.splice(MOMENTS_MEDIA_QUEUE_MAX)) {
       active.delete(dropped.key)
@@ -602,6 +682,14 @@ export interface MomentsMediaInput {
    * 所以改成一个只要变化就能代表"DOM 换了一批元素"的键（面板传 `首下标-尾下标`）。
    */
   renderKey: string
+  /**
+   * 摊平后的时间线。预取用它在卡片挂上之前就把后面的图片放进队列。
+   */
+  rows: readonly MomentRow[]
+  /**
+   * 当前虚拟窗口最后一行的下标。`-1` 表示窗口还没量出来，从列表开头预取。
+   */
+  windowEnd: number
 }
 
 /**
@@ -650,21 +738,60 @@ function isOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false
 }
 
-function mergeSnsImageEntries(current: SnsImageEntries, incoming: SnsImageEntries): SnsImageEntries {
+/** Conservative UTF-16 URL residency estimate, not decoded/GPU memory. One oversized newest image may stand alone. */
+export const SNS_RESIDENT_ESTIMATED_BYTES = 64 * 1024 * 1024
+type SnsQuality = [number, number, number, boolean]
+function readSnsQuality(value: string | undefined): SnsQuality | undefined {
+  if (value === undefined) return undefined
+  try {
+    const parsed: unknown = JSON.parse(value)
+    if (!Array.isArray(parsed) || parsed.length !== 4 || typeof parsed[3] !== 'boolean') return undefined
+    if (!parsed.slice(0, 3).every((n: unknown) => typeof n === 'number' && Number.isFinite(n) && Number.isInteger(n) && n >= 0)) return undefined
+    return parsed as SnsQuality
+  } catch { return undefined }
+}
+/** Requirements form a partial order, not a guessed pixel/byte/UHD score. */
+function snsQualitySatisfies(actual: string | undefined, required: string | undefined): boolean {
+  const need = readSnsQuality(required)
+  if (!need) return false
+  // Legacy unlabelled originals may serve only an unconstrained request; never relabel them.
+  if (actual === undefined) return need[0] === 0 && need[1] === 0 && need[2] === 0 && !need[3]
+  const have = readSnsQuality(actual)
+  return have !== undefined && have[0] >= need[0] && have[1] >= need[1] && have[2] >= need[2] && (!need[3] || have[3])
+}
+export function mergeSnsImageEntries(current: SnsImageEntries, incoming: SnsImageEntries, pinned: ReadonlySet<string> = new Set()): SnsImageEntries {
   let next = current
   let changed = false
   for (const [key, entry] of Object.entries(incoming)) {
     const previous = next[key]
     // 原图不能被迟到的缩略图降级；这是网格与灯箱并发回包时最容易出现的覆盖。
     if (previous?.original === true && !entry.original) continue
-    if (previous?.url === entry.url && previous.original === entry.original) continue
+    // Reject weaker/incomparable or unlabelled arrivals; validated requirements may replace unknown provenance.
+    if (previous?.original === true && entry.original) {
+      if (!readSnsQuality(entry.quality)) continue
+      if (readSnsQuality(previous.quality) && !snsQualitySatisfies(entry.quality, previous.quality)) continue
+    }
+    if (previous?.url === entry.url && previous.original === entry.original && previous.quality === entry.quality) continue
     if (!changed) {
       next = { ...current }
       changed = true
     }
+    delete next[key]
     next[key] = entry
   }
-  return changed ? capRecord(next, SNS_IMG_CACHE_MAX) : current
+  if (!changed) return current
+  const entries = Object.entries(next)
+  let bytes = entries.reduce((sum, [, entry]) => sum + entry.url.length * 2, 0)
+  const newest = entries[entries.length - 1]?.[0]
+  // Prefer to evict offscreen items, but keep a hard aggregate budget except for one oversized image.
+  const victims = [...entries.filter(([key]) => !pinned.has(key)), ...entries.filter(([key]) => pinned.has(key))]
+  for (const [key, entry] of victims) {
+    if ((bytes <= SNS_RESIDENT_ESTIMATED_BYTES && Object.keys(next).length <= SNS_IMG_CACHE_MAX) || Object.keys(next).length <= 1) break
+    if (key === newest) continue
+    delete next[key]
+    bytes -= entry.url.length * 2
+  }
+  return next
 }
 
 function imageUrlsOf(entries: SnsImageEntries): Record<string, string> {
@@ -679,9 +806,11 @@ function originalKeysOf(entries: SnsImageEntries): ReadonlySet<string> {
 
 interface SnsOriginalResolverDeps {
   current: (key: string) => SnsImageEntry | undefined
-  commit: (key: string, url: string, original: boolean) => void
+  commit: (key: string, url: string, original: boolean, quality?: string) => void
   alive: () => boolean
   runHeavy: <T>(task: () => Promise<T>) => Promise<T>
+  epoch?: () => number
+  request?: typeof apiGetSnsImageDataUrl
 }
 
 /**
@@ -715,21 +844,30 @@ function snsOriginalAttemptKey(image: ViewerImage): string {
  */
 export function createSnsOriginalResolver(
   deps: SnsOriginalResolverDeps,
-): (image: ViewerImage) => Promise<string> {
+): (image: ViewerImage, options?: { retry?: boolean }) => Promise<string> {
   // 用户可能看很多张；失败闸门跟媒体键表同界，避免长时间浏览后无界增长。
   const attempted = new BoundedMediaSet<string>(MOMENTS_MEDIA_KEY_CACHE_MAX)
   const inflight = new Map<string, Promise<string>>()
   // 只回退已经解出来的本地图；`image.thumb` 是 CDN 密文地址，不能交给灯箱渲染。
   const fallbackOf = (key: string): string => deps.current(key)?.url ?? ''
 
-  return async (image: ViewerImage): Promise<string> => {
+  return async (image: ViewerImage, options?: { retry?: boolean }): Promise<string> => {
+    if (!deps.alive()) throw new Error('朋友圈媒体请求已取消')
     const key = imgKey(image)
     if (key === '') throw new Error('缺少朋友圈图片标识，无法取原图')
-    const known = deps.current(key)
-    if (known?.original === true) return known.url
-    const attemptKey = snsOriginalAttemptKey(image)
+    const scope = getDataIdentitySnapshot()
+    const quality = snsImageQuality(image)
+    const storageKey = snsStorageKey(scope, key, image)
+    const epoch = deps.epoch?.()
+    const alive = (): boolean => deps.alive() && deps.epoch?.() === epoch && getDataIdentitySnapshot() === scope
+    const offlineAtEntry = isOffline()
+    const attemptKey = JSON.stringify([scope, epoch, offlineAtEntry, snsOriginalAttemptKey(image)])
     const pending = inflight.get(attemptKey)
     if (pending !== undefined) return pending
+    const retry = options?.retry === true
+    const known = deps.current(key)
+    if (!retry && known?.original === true && snsQualitySatisfies(known.quality, quality)) return known.url
+    if (retry) attempted.delete(attemptKey)
     const fallback = fallbackOf(key)
     if (attempted.has(attemptKey)) {
       if (fallback !== '') return fallback
@@ -738,15 +876,19 @@ export function createSnsOriginalResolver(
     attempted.add(attemptKey)
 
     const task = (async (): Promise<string> => {
-      const cached = await snsMediaCacheGet(key, true)
+      const cached = retry ? null : await snsMediaCacheGet(storageKey, true)
       if (cached !== null) {
-        if (!deps.alive()) throw new Error('朋友圈媒体请求已取消')
-        deps.commit(key, cached, true)
-        return cached
+        if (!alive()) throw new Error('朋友圈媒体请求已取消')
+        deps.commit(key, cached, true, quality)
+        attempted.delete(attemptKey)
+        const best = deps.current(key)
+        return best?.original === true && snsQualitySatisfies(best.quality, quality) ? best.url : cached
       }
-      const offline = isOffline()
+      const offline = offlineAtEntry || isOffline()
+      // A request tightened during IDB lookup must no longer occupy the online pending/failure slot.
+      if (offline && !offlineAtEntry) { inflight.delete(attemptKey); attempted.delete(attemptKey) }
       const options = buildSnsImageRequestOptions(image, offline)
-      const request = (): ReturnType<typeof apiGetSnsImageDataUrl> => apiGetSnsImageDataUrl(options)
+      const request = (): ReturnType<typeof apiGetSnsImageDataUrl> => (deps.request ?? apiGetSnsImageDataUrl)(options)
       const spec: MediaKeySpec = {
         md5: options.md5,
         kind: 'img',
@@ -754,23 +896,28 @@ export function createSnsOriginalResolver(
         ...(options.token !== undefined ? { token: options.token } : {}),
         ...(options.seed !== undefined ? { seed: options.seed } : {}),
       }
-      const result = needsHeavyRpcLane(spec, offline)
+      const result = deps.request ? await request() : needsHeavyRpcLane(spec, offline)
         ? await deps.runHeavy(request)
         : await request()
-      if (!deps.alive()) throw new Error('朋友圈媒体请求已取消')
+      if (!alive()) throw new Error('朋友圈媒体请求已取消')
       if (!result.url) throw new Error(result.error ?? '后端未返回原图')
       const original = result.thumb !== true
-      deps.commit(key, result.url, original)
-      void snsMediaCacheSet(key, result.url, !original)
-      if (original) return result.url
+      deps.commit(key, result.url, original, quality)
+      void snsMediaCacheSet(storageKey, result.url, !original)
+      if (original) {
+        attempted.delete(attemptKey)
+        const best = deps.current(key)
+        return best?.original === true && snsQualitySatisfies(best.quality, quality) ? best.url : result.url
+      }
       const best = deps.current(key)
       return best?.original === true ? best.url : result.url
     })().catch((error: unknown): string => {
+      if (!alive()) throw error
       const fallback = fallbackOf(key)
       if (fallback !== '') return fallback
       throw error
     }).finally(() => {
-      inflight.delete(attemptKey)
+      if (inflight.get(attemptKey) === task) inflight.delete(attemptKey)
     })
     inflight.set(attemptKey, task)
     return task
@@ -858,22 +1005,58 @@ function useRestoreCachedSnsImages(
   moments: readonly MomentItem[],
   snsFetched: React.MutableRefObject<Set<string>>,
   commit: (entries: SnsImageEntries) => void,
+  storageKey: (key: string) => string,
+  qualityOf: (key: string) => string,
 ): void {
   useEffect(() => {
+    const scope = getDataIdentitySnapshot()
     const keys = collectMediaKeys(moments)
       .filter((k) => !snsFetched.current.has(k))
       .slice(0, SNS_IMG_RESTORE_MAX)
     if (keys.length === 0) return
     let cancelled = false
-    void snsMediaCacheGetMany(keys, true).then((cached) => {
-      if (cancelled) return
+    const names = new Map(keys.map((key) => [storageKey(key), key]))
+    // Freeze the requirements together with the persistent names, before any asynchronous read.
+    const qualities = new Map(keys.map((key) => [key, qualityOf(key)]))
+    void snsMediaCacheGetMany([...names.keys()], true).then((stored) => {
+      const cached = Object.fromEntries(Object.entries(stored).flatMap(([name, url]) => {
+        const key = names.get(name)
+        return key === undefined ? [] : [[key, url]]
+      }))
+      if (cancelled || getDataIdentitySnapshot() !== scope) return
       const found = Object.keys(cached)
       if (found.length === 0) return
       for (const k of found) snsFetched.current.add(k)
-      commit(Object.fromEntries(found.map((key) => [key, { url: cached[key] as string, original: true }])))
+      commit(Object.fromEntries(found.map((key) => [key, { url: cached[key] as string, original: true, quality: qualities.get(key) }])))
     }).catch(() => undefined)
     return () => { cancelled = true }
   }, [moments, snsFetched, commit])
+}
+
+
+/** One grid task, separate from queue/retry ownership. Local original remains the first choice. */
+async function loadSnsMediaItem(
+  item: { key: string } & MediaKeySpec, scope: string,
+  request: (options: SnsImageRequestOptions) => ReturnType<typeof apiGetSnsImageDataUrl>,
+  runHeavy: SnsOriginalResolverDeps['runHeavy'], stale: () => boolean,
+): Promise<{ entry: SnsImageEntry; storageKey: string; fromCache: boolean } | undefined> {
+  if (stale()) return undefined
+  const storageKey = snsStorageKey(scope, item.key, item)
+  const quality = snsImageQuality(item)
+  const cached = await snsMediaCacheGet(storageKey, true)
+  if (stale()) return undefined
+  if (cached) return { entry: { url: cached, original: true, quality }, storageKey, fromCache: true }
+  const offline = isOffline()
+  const rpc = () => item.kind === 'video'
+    ? apiGetSnsVideoCoverDataUrl({ md5: item.md5,
+      ...(item.timelineId ? { timelineId: item.timelineId } : {}),
+      ...(item.mediaId ? { mediaId: item.mediaId } : {}),
+      ...(item.seed ? { key: item.seed } : {}), ...(item.thumb ? { thumb: item.thumb } : {}), offline })
+    : request(buildSnsImageRequestOptions(gridSource(item), offline))
+  const result = item.kind === 'video' && needsHeavyRpcLane(item, offline) ? await runHeavy(rpc) : await rpc()
+  if (stale()) return undefined
+  if (!result.url) throw new Error(result.error ?? '后端未返回图片地址')
+  return { entry: { url: result.url, original: result.thumb !== true, quality }, storageKey, fromCache: false }
 }
 
 /**
@@ -890,9 +1073,12 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   /** 取图**失败**的原因（key → 后端给的原因）。空对象 = 没有失败。 */
   snsErrs: Record<string, string>
   /** 灯箱专用：按原图语义取图；失败时返回当前缩略图。 */
-  resolveSnsOriginal: (image: ViewerImage) => Promise<string>
+  resolveSnsOriginal: (image: ViewerImage, options?: { retry?: boolean }) => Promise<string>
 } {
-  const { moments, viewer, scrollRef, groups, renderKey, detailKey } = input
+  const { moments, viewer, scrollRef, groups, renderKey, detailKey, rows, windowEnd } = input
+  const prefetchRows = useRef(rows); const prefetchEnd = useRef(windowEnd)
+  prefetchRows.current = rows; prefetchEnd.current = windowEnd
+  const dataScope = useRef(getDataIdentitySnapshot()).current
   const [snsImageEntries, setSnsImageEntries] = useState<SnsImageEntries>({})
   const snsImageEntriesRef = useRef(snsImageEntries)
   snsImageEntriesRef.current = snsImageEntries
@@ -908,6 +1094,11 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const mediaKeySpec = useRef<Map<string, MediaKeySpec>>(new BoundedMediaMap(MOMENTS_MEDIA_KEY_CACHE_MAX))
   const mediaQueue = useRef<Array<{ key: string } & MediaKeySpec>>([])
   const mediaFetching = useRef(false)
+  // Terminal failure history is independent of resident URLs and of requests in flight.
+  const mediaFailed = useRef(new BoundedMediaMap<string, string>(MOMENTS_MEDIA_KEY_CACHE_MAX))
+  const mediaEpoch = useRef(0)
+  const drainEpoch = useRef(-1)
+  const poolWake = useRef<(() => void) | undefined>(undefined)
   const mediaObserved = useRef<IntersectionObserver | null>(null)
   /** 只属于当前挂载实例的重试计数；与媒体键表同界，卸载即释放。 */
   const mediaRetryCount = useRef<Map<string, number>>(new BoundedMediaMap(MOMENTS_MEDIA_KEY_CACHE_MAX))
@@ -917,78 +1108,63 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const mediaUnmounted = useRef(false)
   /** 重活 RPC 串行链：一次只发一个，且卸载后跳过尚未开始的排队任务。 */
   const runHeavyRpc = useRef(createCancellableHeavyRpcLane(() => mediaUnmounted.current)).current
+  const requestImage = useRef(createSnsRequestJoiner((options: SnsImageRequestOptions) => {
+    const epoch = mediaEpoch.current
+    const request = (): ReturnType<typeof apiGetSnsImageDataUrl> => {
+      if (mediaUnmounted.current || mediaEpoch.current !== epoch || getDataIdentitySnapshot() !== dataScope) return Promise.reject(new Error('朋友圈媒体请求已取消'))
+      return apiGetSnsImageDataUrl(options)
+    }
+    return options.offline ? runHeavyRpc(request) : request()
+  }, () => mediaEpoch.current)).current
   const commitSnsImages = useCallback((incoming: SnsImageEntries): void => {
-    const next = mergeSnsImageEntries(snsImageEntriesRef.current, incoming)
+    if (getDataIdentitySnapshot() !== dataScope) return
+    const root = scrollRef.current
+    const pinned = new Set(Array.from(root?.querySelectorAll<HTMLElement>('[data-sns-key]') ?? [])
+      .filter((el) => isInViewport(el, root)).map((el) => el.dataset.snsKey ?? ''))
+    const next = mergeSnsImageEntries(snsImageEntriesRef.current, incoming, pinned)
     if (next === snsImageEntriesRef.current) return
     snsImageEntriesRef.current = next
     setSnsImageEntries(next)
   }, [])
   const resolveSnsOriginal = useRef(createSnsOriginalResolver({
     current: (key) => snsImageEntriesRef.current[key],
-    commit: (key, url, original) => { commitSnsImages({ [key]: { url, original } }) },
-    alive: () => !mediaUnmounted.current,
+    commit: (key, url, original, quality) => { mediaFailed.current.delete(key); commitSnsImages({ [key]: { url, original, ...(quality === undefined ? {} : { quality }) } }) },
+    alive: () => !mediaUnmounted.current && getDataIdentitySnapshot() === dataScope,
     runHeavy: runHeavyRpc,
+    epoch: () => mediaEpoch.current,
+    request: requestImage,
   })).current
   const articleCovers = useArticleCoverFallback(moments, snsImgs, mediaUnmounted)
-  useRestoreCachedSnsImages(moments, snsFetched, commitSnsImages)
+  useRestoreCachedSnsImages(moments, snsFetched, commitSnsImages,
+    (key) => snsStorageKey(dataScope, key, mediaKeySpec.current.get(key) ?? {}),
+    (key) => snsImageQuality(mediaKeySpec.current.get(key) ?? {}))
 
+  const canQueueMedia = (key: string): boolean => {
+    const spec = mediaKeySpec.current.get(key)
+    if (!spec || mediaFailed.current.get(key) === snsOriginalAttemptKey(spec)) return false
+    const resident = snsImageEntriesRef.current[key]
+    return !resident || !snsQualitySatisfies(resident.quality, snsImageQuality(spec))
+  }
   const drainMedia = async (): Promise<void> => {
-    if (mediaFetching.current) return
+    const epoch = mediaEpoch.current
+    if (mediaFetching.current && drainEpoch.current === epoch) { poolWake.current?.(); return }
+    drainEpoch.current = epoch
     mediaFetching.current = true
+    const stale = (): boolean => mediaUnmounted.current || mediaEpoch.current !== epoch || getDataIdentitySnapshot() !== dataScope
     try {
-      while (mediaQueue.current.length > 0) {
-        if (mediaUnmounted.current) return
-        const batch = mediaQueue.current.splice(0, MEDIA_BATCH)
-        const offline = isOffline()
-        await Promise.all(batch.map(async (it) => {
-          if (mediaUnmounted.current) return
-          const imageOpts = buildSnsImageRequestOptions(it, offline)
-          const videoOpts = {
-            md5: it.md5,
-            ...(it.timelineId ? { timelineId: it.timelineId } : {}),
-            ...(it.mediaId ? { mediaId: it.mediaId } : {}),
-            ...(it.seed ? { key: it.seed } : {}),
-            ...(it.thumb ? { thumb: it.thumb } : {}),
-            offline,
-          }
-          // 本地优先（2026-10-19 用户口径）：先查 IndexedDB 里的**原图**（`wantOriginal`
-          // 会把缩略图当未命中）。命中就直接显示、不再出网；只有本地确实没有原图才走
-          // 后端（后端同样先查长期归档/本机，最后才 CDN）。
+      await drainSnsWorkPool(mediaQueue.current, MEDIA_BATCH, stale, async (it) => {
           try {
-            const cached = await snsMediaCacheGet(it.key, true)
-            if (mediaUnmounted.current) return
-            if (cached) {
-              // 逐条上屏，不能等 `Promise.all` 全部结束：同一批里只要有一张 RPC 卡住，
-              // 其余几张**已经命中的本地原图**也会一起被压住（真机实测：IDB 里明明有
-              // 3 张，界面却一直显示「正在取原图」）。
-              commitSnsImages({ [it.key]: { url: cached, original: true } })
-              setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
-              mediaActive.current.delete(it.key)
-              mediaRetryCount.current.delete(it.key)
-              return
-            }
-            // 重活车道判定：视频恒重；图片只有「在线 + CDN 三件套齐」才走普通车道，其余串行。
-            const needsHeavyLane = needsHeavyRpcLane(it, offline)
-            const rpc = () => (it.kind === 'video'
-              ? apiGetSnsVideoCoverDataUrl(videoOpts)
-              : apiGetSnsImageDataUrl(imageOpts))
-            const r = needsHeavyLane ? await runHeavyRpc(rpc) : await rpc()
-            if (mediaUnmounted.current) return
-            if (r.url) {
-              const original = r.thumb !== true
-              commitSnsImages({ [it.key]: { url: r.url, original } })
-              setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
-              // 把「这次是不是缩略图」一起存下去：后端降级给缩略图时标上，
-              // 下一轮就能跳过它去换原图（而不是把缩略图当成最终结果永久缓存）。
-              void snsMediaCacheSet(it.key, r.url, !original)
-              mediaActive.current.delete(it.key)
-              mediaRetryCount.current.delete(it.key)
-            } else {
-              // 后端**给了原因**（`{ url?, error? }`），原实现把它丢掉了 ⇒ 这里带上原因再抛
-              throw new Error(r.error ?? '后端未返回图片地址')
-            }
+            const loaded = await loadSnsMediaItem(it, dataScope, requestImage, runHeavyRpc, stale)
+            if (!loaded || stale()) return
+            // Commit each completed image immediately, independently of slower workers.
+            commitSnsImages({ [it.key]: loaded.entry })
+            setSnsErrs(prev => { const next = { ...prev }; delete next[it.key]; return next })
+            if (!loaded.fromCache) void snsMediaCacheSet(loaded.storageKey, loaded.entry.url, !loaded.entry.original)
+            mediaActive.current.delete(it.key)
+            mediaFailed.current.delete(it.key)
+            mediaRetryCount.current.delete(it.key)
           } catch (e) {
-            if (mediaUnmounted.current) return
+            if (stale()) return
             /**
              * 不再静默：暂时性失败（文件正在写 / 刚建 hardlink / 这一次超时）**放回队列再试**，
              * 最多 `MEDIA_RETRY_MAX` 次；超限才记录**具体原因**。
@@ -1008,6 +1184,7 @@ export function useMomentsMedia(input: MomentsMediaInput): {
                 () => { void drainMedia() },
               )
             } else {
+              mediaFailed.current.set(it.key, snsOriginalAttemptKey(gridSource(it)))
               const reason = (e as Error).message
               // 永久失败也不保留计数：这一条不会再自动重试，留着只会随失败媒体数无界增长。
               mediaActive.current.delete(it.key)
@@ -1016,10 +1193,12 @@ export function useMomentsMedia(input: MomentsMediaInput): {
               setSnsErrs(prev => capRecord({ ...prev, [it.key]: reason }, SNS_ERR_CACHE_MAX))
             }
           }
-        }))
-      }
+        }, (wake) => { if (drainEpoch.current === epoch) poolWake.current = wake })
     } finally {
-      mediaFetching.current = false
+      if (drainEpoch.current === epoch) {
+        mediaFetching.current = false
+        if (mediaQueue.current.length && !stale()) void drainMedia()
+      }
     }
   }
 
@@ -1028,8 +1207,12 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   useEffect(() => {
     // StrictMode 会 effect → cleanup → effect；重新 setup 必须恢复可重试状态。
     mediaUnmounted.current = false
+    mediaEpoch.current += 1
     const cleanup = (): void => {
       mediaUnmounted.current = true
+      mediaEpoch.current += 1
+      mediaActive.current.clear()
+      mediaQueue.current.length = 0
       for (const timer of mediaRetryTimers.current) window.clearTimeout(timer)
       mediaRetryTimers.current.clear()
       mediaRetryCount.current.clear()
@@ -1039,10 +1222,10 @@ export function useMomentsMedia(input: MomentsMediaInput): {
       const all = Array.from(mediaKeySpec.current.entries())
       for (const [key, spec] of all) {
         if (mediaQueue.current.length >= MOMENTS_MEDIA_QUEUE_MAX) break
-        if (snsFetched.current.has(key) || mediaActive.current.has(key)) continue
+        if (!canQueueMedia(key) || mediaActive.current.has(key)) continue
         mediaActive.current.add(key)
         snsFetched.current.add(key)
-        mediaQueue.current.push({ key, ...spec })
+        mediaQueue.current.push(queueMediaSpec(key, spec))
       }
       void drainMedia()
       return cleanup
@@ -1056,10 +1239,11 @@ export function useMomentsMedia(input: MomentsMediaInput): {
         mediaActive.current,
         mediaQueue,
         scrollRef.current,
+        canQueueMedia,
       )) {
         void drainMedia()
       }
-    }, { root: scrollRef.current, rootMargin: '480px 0px' })
+    }, { root: scrollRef.current, rootMargin: '1400px 0px' })
     mediaObserved.current = ob
     return () => {
       ob.disconnect()
@@ -1089,6 +1273,7 @@ export function useMomentsMedia(input: MomentsMediaInput): {
     const cells = Array.from(root.querySelectorAll<HTMLElement>('[data-sns-key]'))
     ob.disconnect()
     for (const el of cells) ob.observe(el)
+    if (enqueueMomentsAhead(prefetchRows.current, prefetchEnd.current, mediaKeySpec.current, snsFetched.current, mediaActive.current, mediaQueue, canQueueMedia)) void drainMedia()
   }, [groups, renderKey])
 
   const viewerImage = viewer ? viewer.images[viewer.index] as ViewerImage | undefined : undefined
@@ -1113,6 +1298,7 @@ export function useMomentsMedia(input: MomentsMediaInput): {
   const viewerKey = viewerImage ? imgKey(viewerImage) : ''
   // 「有图」不等于「原图」：网格可能只写进了 thumb。只有原图确认表能阻止灯箱回源。
   const viewerResolved = viewerKey !== '' && snsOriginals.has(viewerKey)
+    && snsQualitySatisfies(snsImageEntries[viewerKey]?.quality, snsImageQuality(viewerImage ?? {}))
 
   // 灯箱当前图独立回源；网格的 snsFetched 只负责网格去重，不能挡住这里。
   useEffect(() => {

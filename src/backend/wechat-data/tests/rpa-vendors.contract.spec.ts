@@ -7,11 +7,7 @@
  * 所以这里把契约钉死：id 唯一/顺序、必填元数据、字段键唯一、必填字段有示例或默认值、
  * secret 字段声明、映射三键、请求/响应/重试/治理字段齐全、experimental 必须写清待联调、
  * 描述符必须可 JSON 序列化（没有 undefined/函数泄漏进 listRpaVendors）。
- *
- * 本文件同时单测阿里云 RPC 签名函数（`aliyunRpcSign`）：签名算法是官方原文口径，
- * 用独立实现的 HMAC-SHA1 重新算一遍，而不是只断言「字符串非空」。
  */
-import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
   RPA_REGISTRY_VERSION,
@@ -21,18 +17,20 @@ import {
   listVendorDescriptors,
 } from '../src/query/rpa/registry.ts'
 import type { RpaField, RpaVendorDescriptor } from '../src/types-rpa.ts'
-import { aliyunRpcSign, canonicalizedQuery, percentEncode } from '../src/query/rpa/vendors/aliyun-rpa.ts'
 
 /** 注册表内固定 id 与顺序（UI 顺序也依赖它）。 */
-const EXPECTED_IDS = ['webhook', 'bazhuayu', 'bazhuayu-mcp', 'yingdao', 'uipath', 'aliyun-rpa', 'laiye', 'shizai'] as const
+const EXPECTED_IDS = ['webhook', 'bazhuayu'] as const
 /** 参数核对日期（契约要求）。 */
 const VERIFIED_AT = '2026-10-21'
-/** 明确要求 experimental 的厂商（官方契约有缺失/待联调）。 */
-const EXPERIMENTAL_IDS = ['bazhuayu-mcp', 'aliyun-rpa', 'laiye', 'shizai']
+/** 明确要求 experimental 的厂商。当前只保留 Webhook 与八爪鱼，都是 stable。 */
+const EXPERIMENTAL_IDS: readonly string[] = []
 /** 附加参数允许的值来源（与 `types-rpa.ts` 的 RpaParamSource 同步）。 */
 const PARAM_SOURCE_SET = new Set([
   'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template',
+  'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl',
+  // 2026-11-24：触发人最近文本（与任务里的 `textLimit` 配套）。
+  'textsJson', 'textCount',
+  'fixed', 'template',
 ])
 
 /** 递归遍历描述符里的每个值，用于「不许有 undefined/函数」守卫。 */
@@ -64,7 +62,7 @@ describe('RPA 厂商注册表', () => {
 
   it('findVendor：命中注册表 / 未知 id 返回 undefined', () => {
     expect(findVendor('webhook')?.descriptor.id).toBe('webhook')
-    expect(findVendor('yingdao')?.descriptor.id).toBe('yingdao')
+    expect(findVendor('bazhuayu')?.descriptor.id).toBe('bazhuayu')
     expect(findVendor('')).toBeUndefined()
     expect(findVendor('vendor-that-does-not-exist')).toBeUndefined()
   })
@@ -177,7 +175,7 @@ describe('厂商描述符契约', () => {
         // 其余厂商必须有可选的鉴权模式声明。
         if (descriptor.auth.modes.length === 0) {
           // 这两家把凭据直接写进请求模板 header；bazhuayu-mcp 同理（X-API-Key）。
-          expect(['webhook', 'bazhuayu', 'bazhuayu-mcp']).toContain(descriptor.id)
+          expect(['webhook', 'bazhuayu']).toContain(descriptor.id)
         } else {
           expect(descriptor.auth.modes.length).toBeGreaterThan(0)
         }
@@ -306,7 +304,7 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     const delivery = descriptor.fields.find((field) => field.key === 'imageDelivery')
     expect(delivery?.type).toBe('select')
     expect(delivery?.defaultValue).toBe('dataUrl')
-    expect(delivery?.options?.map((option) => option.value)).toEqual(['dataUrl', 'multipart'])
+    expect(delivery?.options?.map((option) => option.value)).toEqual(['dataUrl', 'multipart', 'lanUrl'])
     expect(descriptor.fields.some((field) => field.key === 'paramMap')).toBe(false)
     expect(descriptor.mapping).toEqual({
       style: 'object',
@@ -343,133 +341,10 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
     expect(descriptor.response.externalTaskIdPath).toBe('flowProcessNo')
   })
 
-  it('bazhuayu-mcp：官方 MCP /mcp + X-API-Key + automation_call（2026-10-21 实测契约）', () => {
-    const adapter = byId.get('bazhuayu-mcp')
-    const descriptor = descriptorOf('bazhuayu-mcp')
-    // MCP 通道与开放 API 是两条链路：固定 MCP Server，JSON-RPC 调 automation_call。
-    expect(adapter?.buildRequest).toBeTypeOf('function')
-    expect(adapter?.parseResponse).toBeTypeOf('function')
-    expect(descriptor.request.url).toBe('https://mcp-rpa.bazhuayu.com/mcp')
-    expect(descriptor.request.headers?.['X-API-Key']).toBe('${secret.apiKey}')
-    expect(String(descriptor.request.headers?.['Accept'])).toContain('text/event-stream')
-    const automationField = descriptor.fields.find((field) => field.key === 'automationId')
-    expect(automationField?.required).toBe(true)
-    expect(automationField?.secret).toBeUndefined()
-    const apiKeyField = descriptor.fields.find((field) => field.key === 'apiKey')
-    expect(apiKeyField?.ariaLabel).toBe('八爪鱼 API Key')
-    expect(apiKeyField?.secret).toBe(true)
-    // 无内置语义参数：parameters 完全由附加参数组装（默认 {}）。
-    expect(descriptor.mapping.targets).toEqual([])
-    expect(descriptor.mapping.extrasField).toBe('extraParams')
-    // 无幂等键：只发一次。
-    expect(descriptor.retry.maxAttempts).toBe(1)
-    expect(descriptor.governance.hosts).toEqual([{ kind: 'exact', value: 'mcp-rpa.bazhuayu.com' }])
-  })
-
-  it('yingdao：AK/SK token-exchange + nameValueTypeArray 参数', () => {
-    const adapter = byId.get('yingdao')
-    const descriptor = descriptorOf('yingdao')
-    expect(typeof adapter?.buildRequest).toBe('function')
-    expect(descriptor.mapping.style).toBe('nameValueTypeArray')
-    expect(descriptor.capabilities.idempotency).toBe('vendor-key')
-    const mode = descriptor.auth.modes[0]
-    expect(mode?.strategy).toBe('token-exchange')
-    expect(mode?.exchange?.url).toBe('${config.baseUrl}/oapi/token/v2/token/create')
-    expect(mode?.exchange?.query?.['accessKeyId']).toBe('${secret.accessKeyId}')
-    expect(mode?.exchange?.query?.['accessKeySecret']).toBe('${secret.accessKeySecret}')
-    expect(mode?.exchange?.tokenPath).toBe('data.accessToken')
-    expect(mode?.exchange?.expiresInPath).toBe('expiresIn')
-    expect(descriptor.request.url).toBe('${config.baseUrl}/oapi/dispatch/v2/job/start')
-    expect(descriptor.response.okPath).toBe('code')
-    expect(descriptor.response.okValue).toBe(200)
-    expect(descriptor.response.externalTaskIdPath).toBe('data.jobUuid')
-    // 官方响应字段名推断必须在 notes 里写明待联调。
-    expect((descriptor.notes ?? []).join('\n')).toMatch(/accessToken|token 响应/)
-  })
-
-  it('uipath：PAT/OAuth 双模式 + X-UIPATH-FolderKey + Job 数组解析', () => {
-    const adapter = byId.get('uipath')
-    const descriptor = descriptorOf('uipath')
-    expect(descriptor.auth.modes).toHaveLength(2)
-    const pat = descriptor.auth.modes.find((mode) => mode.strategy === 'bearer')
-    const oauth = descriptor.auth.modes.find((mode) => mode.strategy === 'token-exchange')
-    expect(pat?.when).toEqual({ field: 'authMode', equals: ['pat'] })
-    expect(oauth?.when).toEqual({ field: 'authMode', equals: ['oauth'] })
-    expect(oauth?.exchange?.url).toBe('${config.baseUrl}/${config.organizationName}/identity_/connect/token')
-    expect(oauth?.exchange?.tokenPath).toBe('access_token')
-    expect(oauth?.exchange?.expiresInPath).toBe('expires_in')
-    const body = oauth?.exchange?.body as Record<string, unknown> | undefined
-    expect(body?.['grant_type']).toBe('client_credentials')
-    expect(body?.['client_id']).toBe('${secret.clientId}')
-    expect(body?.['client_secret']).toBe('${secret.clientSecret}')
-    expect(descriptor.request.headers?.['X-UIPATH-FolderKey']).toBe('${config.folderKey}')
-    expect(descriptor.mapping.style).toBe('jsonStringObject')
-    expect(descriptor.response.externalTaskIdPath).toBe('value[0].Key')
-    expect(descriptor.retry.maxAttempts).toBe(1)
-    expect(typeof adapter?.buildRequest).toBe('function')
-    expect(typeof adapter?.parseResponse).toBe('function')
-  })
-
-  it('aliyun-rpa：experimental + custom 签名 + 两套接口族', () => {
-    const adapter = byId.get('aliyun-rpa')
-    const descriptor = descriptorOf('aliyun-rpa')
-    expect(descriptor.status).toBe('experimental')
-    expect(typeof adapter?.buildRequest).toBe('function')
-    expect(typeof adapter?.signRequest).toBe('function')
-    const mode = descriptor.auth.modes[0]
-    expect(mode?.strategy).toBe('custom')
-    expect(mode?.custom).toBe('aliyun-rpc-hmac-sha1')
-    expect(mode?.fields.map((field) => field.key).sort()).toEqual(['accessKeyId', 'accessKeySecret'])
-    const family = descriptor.fields.find((field) => field.key === 'apiFamily')
-    expect(family?.options?.map((option) => option.value).sort()).toEqual(['local', 'service'])
-    expect(descriptor.mapping.style).toBe('nameValueArray')
-    expect(descriptor.capabilities.idempotency).toBe('vendor-key')
-    expect(descriptor.request.url).toBe('${config.baseUrl}/rpa/openapi/raas/task/CreateTask')
-    expect(descriptor.response.externalTaskIdPath).toBe('data.TaskId')
-  })
-
-  it('laiye：experimental + MCP JSON-RPC + bearer', () => {
-    const adapter = byId.get('laiye')
-    const descriptor = descriptorOf('laiye')
-    expect(descriptor.status).toBe('experimental')
-    expect(typeof adapter?.buildRequest).toBe('function')
-    expect(typeof adapter?.parseResponse).toBe('function')
-    expect(descriptor.auth.modes[0]?.strategy).toBe('bearer')
-    expect(descriptor.request.url).toBe('${config.baseUrl}/automation/mcp')
-    expect(descriptor.request.method).toBe('POST')
-    expect(descriptor.capabilities.completion).toBe('poll')
-    expect(descriptor.retry.maxAttempts).toBe(1)
-    expect(descriptor.mapping.style).toBe('object')
-    expect(descriptor.fields.some((field) => field.key === 'extraParams' && field.type === 'paramList')).toBe(true)
-  })
-
-  it('shizai：experimental + 用户配置鉴权 header 名 + 单次尝试', () => {
-    const adapter = byId.get('shizai')
-    const descriptor = descriptorOf('shizai')
-    expect(descriptor.status).toBe('experimental')
-    expect(typeof adapter?.buildRequest).toBe('function')
-    expect(typeof adapter?.signRequest).toBe('function')
-    expect(typeof adapter?.parseResponse).toBe('function')
-    expect(descriptor.auth.modes[0]?.strategy).toBe('custom')
-    expect(descriptor.request.url).toBe('${config.baseUrl}/openAPI/v2/job/operation')
-    const keyHeader = descriptor.fields.find((field) => field.key === 'keyHeader')
-    const secretHeader = descriptor.fields.find((field) => field.key === 'secretHeader')
-    expect(keyHeader?.defaultValue).toBe('')
-    expect(secretHeader?.defaultValue).toBe('')
-    expect(descriptor.retry.maxAttempts).toBe(1)
-    // 官方未公开 header 名：必须写进 notes/risks 提醒联调。
-    expect((descriptor.notes ?? []).join('\n')).toMatch(/header 名|header 字段名/)
-  })
-
   it('Webhook 与所有 RPA 厂商统一走 extraParams，不再声明内置三参数 mapField', () => {
     const expectedLegacy: Record<string, string | undefined> = {
       webhook: undefined,
       bazhuayu: 'paramMap',
-      yingdao: 'paramMap',
-      uipath: 'inputArgumentsMap',
-      'aliyun-rpa': 'appParamsMap',
-      laiye: 'parameterMap',
-      shizai: 'inputParamMap',
     }
     for (const descriptor of listVendorDescriptors()) {
       expect(descriptor.mapping.targets, descriptor.id).toEqual([])
@@ -480,53 +355,5 @@ describe('逐厂商关键契约（防止重构时悄悄改协议）', () => {
       expect(extras?.type, descriptor.id).toBe('paramList')
       expect(extras?.paramSources, descriptor.id).toEqual([...PARAM_SOURCE_SET])
     }
-  })
-})
-
-describe('阿里云 RPC 签名（官方 HTTP 调用说明口径）', () => {
-  /** 测试里独立实现一遍 RFC3986 编码，避免「用被测函数验证被测函数」。 */
-  function encodeRfc3986(text: string): string {
-    return encodeURIComponent(text).replace(/[!'()*]/g, (char) => '%' + char.charCodeAt(0).toString(16).toUpperCase())
-  }
-
-  /** 独立实现的规范化查询串：key 字典序 + RFC3986 编码。 */
-  function canonical(params: Record<string, string>): string {
-    return Object.keys(params)
-      .sort()
-      .map((key) => encodeRfc3986(key) + '=' + encodeRfc3986(params[key] ?? ''))
-      .join('&')
-  }
-
-  const params: Record<string, string> = {
-    AccessKeyId: 'ak-test',
-    SignatureMethod: 'HMAC-SHA1',
-    SignatureVersion: '1.0',
-    SignatureNonce: 'nonce-1',
-    Timestamp: '2020-01-01T00:00:00Z',
-    Version: '20200430',
-    Format: 'json',
-    AppId: '2e8e34bf-0000-0000-0000-e1d0add3d95e',
-    AppParams: '[{"name":"room_name","value":"测试 群"}]',
-    TaskPriority: '50',
-  }
-
-  it('percentEncode 按 RFC3986（空格 %20 / * 是 %2A / ~ 不编码）', () => {
-    expect(percentEncode('a b')).toBe('a%20b')
-    expect(percentEncode('a*b')).toBe('a%2Ab')
-    expect(percentEncode("a!'()~")).toBe('a%21%27%28%29~')
-  })
-
-  it('canonicalizedQuery 与独立实现一致（排序 + 编码）', () => {
-    expect(canonicalizedQuery(params)).toBe(canonical(params))
-  })
-
-  it('aliyunRpcSign 与独立 HMAC-SHA1 计算一致', () => {
-    const stringToSign = 'POST&' + encodeRfc3986('/') + '&' + encodeRfc3986(canonical(params))
-    const expected = createHmac('sha1', 'sk-test' + '&').update(stringToSign, 'utf8').digest('base64')
-    expect(aliyunRpcSign(params, 'sk-test')).toBe(expected)
-    // 不同 secret / 不同方法必须得到不同签名（防呆：签名没被写死）。
-    expect(aliyunRpcSign(params, 'sk-other')).not.toBe(expected)
-    expect(aliyunRpcSign(params, 'sk-test', 'GET')).not.toBe(expected)
-    expect(aliyunRpcSign({}, 'sk-test')).toMatch(/^[A-Za-z0-9+/]+=*$/)
   })
 })

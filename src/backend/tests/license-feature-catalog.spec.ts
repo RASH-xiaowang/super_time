@@ -29,6 +29,10 @@ type Service = {
   FEATURE_METHODS: Record<string, string[]>
   authorizeCall: (status: unknown, method: string) => { ok: boolean, code?: string, message?: string }
   authorizeFeature: (status: unknown, feature: string) => { ok: boolean, code?: string, message?: string }
+  getAppEntitlement: (status: unknown, appId?: string) => (
+    | { ok: true, maxInstances: number, caps: string[], maxJobsPerHour: number, standalone: boolean }
+    | { ok: false, code: string, message: string }
+  )
 }
 
 const features = requireCjs(join(ROOT, 'src', 'license', 'features.js')) as FeatureMeta
@@ -105,26 +109,62 @@ describe('License 功能授权目录', () => {
     expect(service.authorizeFeature(legacy, 'image-ai').ok, '旧证未兼容已有直连能力').toBe(true)
     expect(service.authorizeCall(legacy, 'createBackup').ok, '旧证的基础位越权开放了备份功能').toBe(false)
   })
-})
 
+  it('应用托管只认显式功能位，旧证不能白拿；实例数回落到席位数', () => {
+    const status = (payload: Record<string, unknown>) => ({ state: 'licensed', licensed: true, payload })
+    const v2 = features.FEATURE_SCHEMA_VERSION
 
-describe('Agent methods reuse existing feature boundaries', () => {
-  const controls = ['getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory', 'addAgentPromise', 'setAgentProposalStatus']
-  const sends = ['sendAgentDraft', 'sendAgentProposal']
-  function status(feature: string) {
-    return { state: 'licensed', payload: { features: ['wechat-data', feature], featureSchemaVersion: features.FEATURE_SCHEMA_VERSION } }
-  }
-  it('maps control and memory to AI reply, explicit send to message-list; never base access', () => {
-    for (const method of controls) {
-      expect(service.METHOD_FEATURE[method]).toBe('ai-reply')
-      expect(service.authorizeCall(status('ai-reply'), method).ok).toBe(true)
-      expect(service.authorizeCall(status('message-list'), method).ok).toBe(false)
+    // 新证：显式签了功能位但没有 apps 段 → 实例数取 seat
+    expect(service.getAppEntitlement(status({
+      features: ['wechat-data', 'apps-superlanguage'],
+      featureSchemaVersion: v2,
+      seats: 4,
+    }))).toMatchObject({ ok: true, maxInstances: 4, standalone: false })
+
+    // 新证：apps 段覆盖席位与能力，未知能力被剔除
+    expect(service.getAppEntitlement(status({
+      features: ['wechat-data', 'apps-superlanguage'],
+      featureSchemaVersion: v2,
+      seats: 9,
+      apps: { superlanguage: { maxInstances: 2, caps: ['send', 'nope'], maxJobsPerHour: 30 } },
+    }))).toMatchObject({ ok: true, maxInstances: 2, caps: ['send'], maxJobsPerHour: 30 })
+
+    // 只有 apps 段、没有功能位 → 拒绝（段不能代替功能位）
+    const noFeature = service.getAppEntitlement(status({
+      features: ['wechat-data'],
+      featureSchemaVersion: v2,
+      apps: { superlanguage: { maxInstances: 8 } },
+    }))
+    expect(noFeature.ok).toBe(false)
+    if (!noFeature.ok) expect(noFeature.code).toBe('FEATURE_DENIED')
+
+    // 旧证（无 featureSchemaVersion）即便带基础位也不能用应用托管
+    const legacy = service.getAppEntitlement(status({ features: ['wechat-data'] }))
+    expect(legacy.ok, '旧证不应兼容应用托管').toBe(false)
+  })
+
+  it('apps 段结构错误在签发前被校验拦下', () => {
+    const base = {
+      product: 'super-time-wechat',
+      licenseId: 'lic-1',
+      edition: 'pro',
+      issuedTo: { name: '客户' },
+      device: { fingerprint: 'a'.repeat(64) },
+      issuedAt: new Date().toISOString(),
+      features: ['wechat-data', 'apps-superlanguage'],
+      featureSchemaVersion: 2,
+      seats: 1,
     }
-    for (const method of sends) {
-      expect(service.METHOD_FEATURE[method]).toBe('message-list')
-      expect(service.authorizeCall(status('message-list'), method).ok).toBe(true)
-      expect(service.authorizeCall(status('ai-reply'), method).ok).toBe(false)
+    const { validatePayload } = requireCjs(join(ROOT, 'src', 'license', 'schema.js')) as {
+      validatePayload: (payload: unknown) => { ok: boolean, reason?: string }
     }
-    for (const method of [...controls, ...sends]) expect(service.authorizeCall(status('chats'), method).ok).toBe(false)
+    expect(validatePayload({ ...base, apps: { superlanguage: { maxInstances: 0 } } }).reason)
+      .toBe('bad_apps_seats')
+    expect(validatePayload({ ...base, apps: { superlanguage: { caps: [] } } }).reason)
+      .toBe('bad_apps_caps')
+    expect(validatePayload({ ...base, apps: { other: { maxInstances: 1 } } }).reason)
+      .toBe('unknown_app:other')
+    expect(validatePayload({ ...base, apps: { superlanguage: { maxInstances: 2, caps: ['send'] } } }).ok)
+      .toBe(true)
   })
 })

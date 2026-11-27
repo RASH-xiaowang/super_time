@@ -496,6 +496,7 @@ const _deepseek_ai_dsh_wechat_data_wechatData_getEmoticonDataUrls_parameter_0$sc
   'md5': z.string(),
   'emojiUrl': z.string().optional(),
 })),
+  'localOnly': z.boolean().optional(),
 })
 const _deepseek_ai_dsh_wechat_data_wechatData_getEmoticonDataUrls_result$schema = z.object({
   'items': z.array(z.object({
@@ -638,6 +639,7 @@ const _deepseek_ai_dsh_wechat_data_wechatData_getDecryptStatus_result$schema = z
 const _deepseek_ai_dsh_wechat_data_wechatData_getEmoticons_parameter_0$schema = z.union([z.undefined(), z.object({
   'limit': z.number().optional(),
   'offset': z.number().optional(),
+  'includeOthers': z.boolean().optional(),
 })])
 const _deepseek_ai_dsh_wechat_data_wechatData_getEmoticons_result$schema = z.object({
   'custom': z.array(z.object({
@@ -1442,6 +1444,7 @@ const _deepseek_ai_dsh_wechat_data_wechatData_getRecords_parameter_0$schema = z.
   'from': z.number().optional(),
   'to': z.number().optional(),
   'direction': z.union([z.literal("asc"), z.literal("desc")]).optional(),
+  'sort': z.union([z.literal("time"), z.literal("amount")]).optional(),
 })
 const _deepseek_ai_dsh_wechat_data_wechatData_getRecords_result$schema = z.object({
   'items': z.array(z.record(z.string(), z.union([z.literal(null), z.string(), z.number(), z.literal(false), z.literal(true)]))),
@@ -2193,6 +2196,7 @@ const _deepseek_ai_dsh_wechat_data_wechatData_taskInfoItem$schema = z.object({
   'targetName': z.string(),
   'keywords': z.array(z.string()),
   'photoLimit': z.number(),
+  'textLimit': z.number(),
   'callbackUrl': z.string(),
   'status': z.union([z.literal("incomplete"), z.literal("ready")]),
   'createdAt': z.number(),
@@ -2206,6 +2210,12 @@ const _deepseek_ai_dsh_wechat_data_wechatData_taskTriggerImage$schema = z.object
   'sender': z.string(),
   'md5': z.string().optional(),
 })
+const _deepseek_ai_dsh_wechat_data_wechatData_taskTriggerText$schema = z.object({
+  'localId': z.number(),
+  'createTime': z.number(),
+  'sender': z.string(),
+  'text': z.string(),
+})
 const _deepseek_ai_dsh_wechat_data_wechatData_taskTriggerRecord$schema = z.object({
   'id': z.number(),
   'taskId': z.number(),
@@ -2217,6 +2227,7 @@ const _deepseek_ai_dsh_wechat_data_wechatData_taskTriggerRecord$schema = z.objec
   'keyword': z.string(),
   'text': z.string(),
   'images': z.array(_deepseek_ai_dsh_wechat_data_wechatData_taskTriggerImage$schema),
+  'texts': z.array(_deepseek_ai_dsh_wechat_data_wechatData_taskTriggerText$schema),
   'messageLocalId': z.number(),
   'messageSortSeq': z.number(),
   'triggeredAt': z.number(),
@@ -2241,6 +2252,7 @@ const _deepseek_ai_dsh_wechat_data_wechatData_saveTaskInfo_parameter_0$schema = 
   'targetName': z.string().optional(),
   'keywords': z.array(z.string()),
   'photoLimit': z.number().optional(),
+  'textLimit': z.number().optional(),
   'callbackUrl': z.string().optional(),
   'status': _deepseek_ai_dsh_wechat_data_wechatData_taskInfoStatus$schema.optional(),
 })

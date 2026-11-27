@@ -120,6 +120,17 @@ const LEDGER: LedgerEntry[] = [
       + ' 的 http(s) 校验，且拒绝 URL 凭据与 query/hash；余额无 Key 时调用方直接不发请求。',
   },
   {
+    site: 'src/backend/app-host.js#callApi',
+    control: '本机实例只连 127.0.0.1；局域网实例只连用户登记的 IPv4（靠目标机防火墙按来源 IP 收口）',
+    anchor: 'src/backend/app-host.js', marker: 'instanceHost(instance)',
+    why: '应用托管代理 SuperLanguage 的本地/局域网 HTTP API（health/status/jobs/send/stop）。'
+      + '端口来自实例目录的 api-port.txt，令牌由 SuperTime 部署时预生成并写在同目录'
+      + '（api-token.txt，ACL 收紧）。本机实例强制 api-listen=loopback；局域网实例写 '
+      + 'api-listen=lan，地址只由用户在「新建实例」时填的目标 IPv4 决定（不接受任意 URL），'
+      + '并要求目标机防火墙按来源 IP 限定。发出去的内容是用户在该面板里显式触发的状态查询或'
+      + '（在功能位允许时）发送任务，以及每 5 分钟一次的运行票据；令牌不经过渲染层。',
+  },
+  {
     site: 'src/backend/wechat-data/src/query/rpa/dispatch.ts#sendRequest',
     control: '主机来自厂商描述符白名单（governance.hosts）；webhook 仅允许用户填写 http(s)',
     anchor: 'src/backend/wechat-data/src/query/rpa/dispatch.ts', marker: 'sendRequest',

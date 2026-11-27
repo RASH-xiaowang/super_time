@@ -1,7 +1,7 @@
 /**
  * 任务删除入口（任务行与编辑表单共用，2026-10-20）。
  *
- * 两处入口必须给出同一套语义：危险色、二次确认、保留历史记录、桌面端降级。
+ * 两处入口必须给出同一套语义：危险色、二次确认、连同触发记录一起删除、桌面端降级。
  * 把这段动作放在一个组件里，避免将来只改了行内按钮、表单按钮却还弹旧文案。
  *
  * 这个组件同时会被放进编辑表单的 `<form>` 里。按钮必须显式写 `type="button"`：
@@ -37,7 +37,7 @@ export interface TaskDeleteButtonProps {
 }
 
 /**
- * 删除任务配置（触发记录保留）。
+ * 删除任务，并一起删除它的触发记录。
  * @param props - 任务名、写入口、提示与展示选项（见 {@link TaskDeleteButtonProps}）。
  * @returns 危险按钮及可选错误提示。
  */
@@ -57,7 +57,7 @@ export function TaskDeleteButton({
   const remove = useCallback(async (): Promise<void> => {
     const ok = await confirm({
       title: `删除任务「${taskName}」？`,
-      message: '任务配置会被删除，之后不再触发；已产生的触发记录会保留（它们是历史事实，仍可在右栏回看）。',
+      message: '任务和它的全部触发记录都会删除，之后不再触发，右栏里也看不到这些记录。',
       tone: 'danger',
       confirmText: '删除任务',
     })

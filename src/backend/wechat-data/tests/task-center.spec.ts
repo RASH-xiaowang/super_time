@@ -37,6 +37,7 @@ import {
 import type { TaskDispatchDeps } from '../src/query/task-center.ts'
 import {
   listMessageListRecords,
+  listMessageListRules,
   saveMessageListRule,
 } from '../src/query/message-list-store.ts'
 import type { TaskInfoInput } from '../src/types.ts'
@@ -45,6 +46,7 @@ import {
   seedEnterpriseContact,
   seedMessages,
 } from './helpers/task-center-fixture.ts'
+import * as messageQuery from '../src/query/messages.ts'
 
 const SELF = 'wxid_self'
 const PRIVATE_TALKER = 'wxid_lisi'
@@ -81,6 +83,7 @@ function taskInput(overrides: Partial<TaskInfoInput> = {}): TaskInfoInput {
     targetName: '',
     keywords: ['发票'],
     photoLimit: 0,
+    textLimit: 0,
     callbackUrl: 'https://callback.example/hook',
     status: 'ready',
     ...overrides,
@@ -283,21 +286,20 @@ describe('任务配置 CRUD 与校验', () => {
     expect(listTaskTriggers(decrypted).items[0]?.messageLocalId).toBe(2)
   })
 
-  it('删除任务保留触发记录（记录里存了任务快照）', () => {
+  it('删除任务时一并删除它的触发记录', () => {
     seedMessages(PRIVATE_TALKER, [{ localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' }])
     const created = saveTaskInfo(decrypted, taskInput())
     const taskId = created.id ?? 0
     seedMessages(PRIVATE_TALKER, [{ localId: 2, sortSeq: 20, createTime: 200, sender: 'wxid_lisi', text: '带 发票' }])
     expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
     expect(deleteTaskInfo(decrypted, taskId).ok).toBe(true)
-    const triggers = listTaskTriggers(decrypted)
-    expect(triggers.items).toHaveLength(1)
-    expect(triggers.items[0]?.taskName).toBe('李四 · 发票')
+    expect(listTaskTriggers(decrypted).items).toEqual([])
+    expect(listTaskInfos(decrypted).items).toEqual([])
   })
 })
 
 describe('批量删除任务与触发记录', () => {
-  it('批量删除任务只删所选配置，历史触发记录仍保留', () => {
+  it('批量删除任务只删所选，并清掉这些任务的触发记录', () => {
     seedMessages(PRIVATE_TALKER, [{ localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史' }])
     const first = saveTaskInfo(decrypted, taskInput({ name: '任务一' }))
     const second = saveTaskInfo(decrypted, taskInput({ name: '任务二' }))
@@ -313,9 +315,7 @@ describe('批量删除任务与触发记录', () => {
     const result = deleteTaskInfos(decrypted, ids)
     expect(result).toEqual({ ok: true, removed: 2 })
     expect(listTaskInfos(decrypted).items.map((task) => task.id)).toEqual([second.id])
-    expect(listTaskTriggers(decrypted).total).toBe(3)
-    expect(listTaskTriggers(decrypted).items.map((record) => record.taskId).sort())
-      .toEqual([first.id, second.id, third.id].sort())
+    expect(listTaskTriggers(decrypted).items.map((record) => record.taskId)).toEqual([second.id])
   })
 
   it('批量删除触发记录只删所选，并重算任务触发次数与最近触发时间', () => {
@@ -424,17 +424,82 @@ describe('触发扫描：水位、命中与去重', () => {
     expect(listTaskTriggers(decrypted).items).toHaveLength(1)
   })
 
+  it('新建任务会按会话和触发对象补一条消息列表规则，已有规则不覆盖', () => {
+    expect(saveTaskInfo(decrypted, taskInput({ name: '带规则' })).ok).toBe(true)
+    const first = listMessageListRules(decrypted)
+    expect(first.items).toHaveLength(1)
+    expect(first.items[0]).toMatchObject({
+      chatName: '李四',
+      targetName: '李四',
+      enabled: true,
+      note: '随任务创建',
+    })
+    const ruleId = first.items[0]?.id
+    expect(saveMessageListRule(decrypted, {
+      id: ruleId,
+      chatName: '李四',
+      targetName: '李四',
+      webhookUrl: 'https://downstream.example/keep',
+      note: '手工改过',
+    }).ok).toBe(true)
+    expect(saveTaskInfo(decrypted, taskInput({
+      id: listTaskInfos(decrypted).items[0]?.id,
+      name: '带规则',
+    })).ok).toBe(true)
+    const again = listMessageListRules(decrypted)
+    expect(again.items).toHaveLength(1)
+    expect(again.items[0]?.webhookUrl).toBe('https://downstream.example/keep')
+    expect(again.items[0]?.note).toBe('手工改过')
+  })
+
+  it('未开启消息队列时，关键词命中不写入问候', () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 10, sender: 'wxid_lisi', text: '历史' },
+    ])
+    expect(saveTaskInfo(decrypted, taskInput({ name: '不写队列' })).ok).toBe(true)
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 20, sender: 'wxid_lisi', text: '发票 已发' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    expect(listMessageListRecords(decrypted).items).toEqual([])
+  })
+
+  it('同一会话、同一水位的两个任务只读一次新消息，并各自命中', () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 100, createTime: 1000, sender: 'wxid_lisi', text: '历史' },
+    ])
+    expect(saveTaskInfo(decrypted, taskInput({ name: '发票任务', keywords: ['发票'] })).ok).toBe(true)
+    expect(saveTaskInfo(decrypted, taskInput({ name: '报价任务', keywords: ['报价'] })).ok).toBe(true)
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 2, sortSeq: 200, createTime: 2000, sender: 'wxid_lisi', text: '发票 和 报价' },
+    ])
+    const spy = vi.spyOn(messageQuery, 'queryNewMessages')
+    const result = scanTaskTriggers(decrypted, { selfUsername: SELF })
+    expect(result.created).toBe(2)
+    expect(result.scanned).toBe(1)
+    expect(spy).toHaveBeenCalledTimes(1)
+    const keywords = listTaskTriggers(decrypted).items.map((item) => item.keyword)
+    expect(keywords).toHaveLength(2)
+    expect(keywords).toContain('发票')
+    expect(keywords).toContain('报价')
+  })
+
   it('任务首次触发后写入一条问候语，sourceRef 保证重复扫描不重复插入', () => {
     seedMessages(PRIVATE_TALKER, [
       { localId: 1, sortSeq: 10, createTime: 10, sender: 'wxid_lisi', text: '历史' },
     ])
-    const created = saveTaskInfo(decrypted, taskInput({ name: '问候任务' }))
+    const created = saveTaskInfo(decrypted, taskInput({
+      name: '问候任务',
+      greetingEnabled: true,
+      greetingText: '您好，已收到您的消息',
+    }))
     expect(created.ok).toBe(true)
+    expect(listTaskInfos(decrypted).items[0]?.greetingEnabled).toBe(true)
     expect(saveMessageListRule(decrypted, {
       chatName: '李四',
       targetName: '',
       webhookUrl: 'https://downstream.example/greeting',
-      greetingText: '您好，已收到您的消息',
+      greetingText: '规则里的旧问候',
     }).ok).toBe(true)
 
     seedMessages(PRIVATE_TALKER, [
@@ -723,6 +788,42 @@ describe('触发图片：按 photoLimit 取最近 N 张并按时间正序', () =
   })
 })
 
+describe('触发文本：按 textLimit 取触发人最近 N 条并按时间正序', () => {
+  it('textLimit=2 只手触发人发的文本（自己/图片不算），时间正序', () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '第一条 报价' },
+      { localId: 2, sortSeq: 20, createTime: 200, sender: 'self', text: '我自己说的不该带上' },
+      { localId: 3, sortSeq: 30, createTime: 300, sender: 'wxid_lisi', text: '第二条 报价' },
+      { localId: 4, sortSeq: 40, createTime: 400, sender: 'wxid_lisi', type: 3, md5: 'md5_img' },
+    ])
+    expect(saveTaskInfo(decrypted, taskInput({ textLimit: 2, photoLimit: 0 })).ok).toBe(true)
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 5, sortSeq: 50, createTime: 500, sender: 'wxid_lisi', text: '第三条 发票 命中' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const record = listTaskTriggers(decrypted).items[0]
+    expect(record?.texts).toHaveLength(2)
+    expect(record?.texts.map((item) => item.localId)).toEqual([1, 3])
+    expect(record?.texts.map((item) => item.text)).toEqual(['第一条 报价', '第二条 报价'])
+    expect(record?.texts.every((item) => item.sender !== '我')).toBe(true)
+  })
+
+  it('textLimit=0 ⇒ 不带文本；更新时缺省不覆盖已存的条数', () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '历史 发票' },
+    ])
+    const created = saveTaskInfo(decrypted, taskInput({ textLimit: 3 }))
+    expect(created.ok).toBe(true)
+    expect(listTaskInfos(decrypted).items[0]?.textLimit).toBe(3)
+    // 模拟编辑表单「保存」：只带用户改过的名字与关键词，不带 textLimit。
+    expect(saveTaskInfo(decrypted, {
+      id: created.id, chatUsername: PRIVATE_TALKER, chatName: '李四', chatType: 'private',
+      keywords: ['报销'], status: 'ready', callbackUrl: 'https://callback.example/hook',
+    }).ok).toBe(true)
+    expect(listTaskInfos(decrypted).items[0]?.textLimit, '缺省 textLimit 不该把已配的条数清零').toBe(3)
+  })
+})
+
 describe('回调投递：请求体、隐私闸与失败落库', () => {
   /** 造一个「已完善任务 + 一条带图触发记录」，返回记录 id。 */
   function fixtureWithPendingTrigger(): number {
@@ -736,6 +837,40 @@ describe('回调投递：请求体、隐私闸与失败落库', () => {
     expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
     return firstTriggerId()
   }
+
+  it('携带文本：只带触发人历史文本、逐条过隐私闸、按时间正序', async () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '秘密 历史一' },
+      { localId: 2, sortSeq: 20, createTime: 200, sender: 'self', text: '我自己发的不带' },
+      { localId: 3, sortSeq: 30, createTime: 300, sender: 'wxid_lisi', text: '秘密 历史二' },
+    ])
+    expect(saveTaskInfo(decrypted, taskInput({ textLimit: 2 })).ok).toBe(true)
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 4, sortSeq: 40, createTime: 400, sender: 'wxid_lisi', text: '秘密 发票 命中' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    const triggerId = firstTriggerId()
+    const calls: Array<{ init: RequestInit }> = []
+    const stats: Array<{ sessions: number; messages: number }> = []
+    const deps = dispatchDeps({
+      fetchImpl: async (_url: string, init?: RequestInit): Promise<Response> => {
+        calls.push({ init: init ?? {} })
+        return new Response('{"ok":true}', { status: 200 })
+      },
+      gate: (_feature, count, texts) => {
+        stats.push(count)
+        return texts.map((text) => text.replace('秘密', '***'))
+      },
+    })
+    expect((await dispatchTaskCallback(decrypted, decoded, triggerId, deps)).status).toBe('sent')
+    // 触发文本 + 两条历史文本一次过闸。
+    expect(stats).toEqual([{ sessions: 1, messages: 3 }])
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    const texts = body['texts'] as Array<Record<string, unknown>>
+    expect(texts.map((item) => item['localId'])).toEqual([1, 3])
+    expect(texts.map((item) => item['text'])).toEqual(['*** 历史一', '*** 历史二'])
+    expect(texts.every((item) => String(item['text']).includes('我自己') === false)).toBe(true)
+  })
 
   it('成功：POST JSON 字段正确、gate 脱敏生效、图片 dataUrl 带上、记录置 sent', async () => {
     const triggerId = fixtureWithPendingTrigger()
@@ -815,6 +950,43 @@ describe('回调投递：请求体、隐私闸与失败落库', () => {
     expect(String(failed?.['error'])).toContain('解码失败')
   })
 
+  it('局域网链接：请求体 images.url 指向本机监听面，不内嵌图片字节', async () => {
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', type: 3, md5: 'md5_lan' },
+    ])
+    expect(saveTaskInfo(decrypted, taskInput({
+      photoLimit: 1,
+      callbackUrl: undefined,
+      triggerConfig: { url: 'https://callback.example/hook', imageDelivery: 'lanUrl' },
+    })).ok).toBe(true)
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 2, sortSeq: 20, createTime: 2000, sender: 'wxid_lisi', text: '发票 带图' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(1)
+    mkdirSync(join(decoded, 'wxid_lisi'), { recursive: true })
+    writeFileSync(join(decoded, 'wxid_lisi', 'lan.jpg'), Buffer.from([0xff, 0xd8, 0xff, 0xd9]))
+    const calls: Array<{ init: RequestInit }> = []
+    const result = await dispatchTaskCallback(decrypted, decoded, firstTriggerId(), dispatchDeps({
+      fetchImpl: async (_url, init) => {
+        calls.push({ init: init ?? {} })
+        return new Response('ok', { status: 200 })
+      },
+      decodeImage: async () => ({ file: 'wxid_lisi/lan.jpg' }),
+      mediaLinks: () => (rel) => ({ url: 'http://192.168.1.8:8765/api/rpa-media/' + rel }),
+    }))
+    expect(result.ok).toBe(true)
+    const body = JSON.parse(String(calls[0]?.init.body)) as Record<string, unknown>
+    const images = body['images'] as Array<Record<string, unknown>>
+    expect(images).toHaveLength(1)
+    expect(images[0]?.['url']).toBe('http://192.168.1.8:8765/api/rpa-media/wxid_lisi/lan.jpg')
+    expect(listTaskTriggers(decrypted).items[0]?.images[0]?.url).toBe(
+      'http://192.168.1.8:8765/api/rpa-media/wxid_lisi/lan.jpg',
+    )
+    expect(images[0]?.['md5']).toBe('md5_lan')
+    expect(images[0]?.['dataUrl']).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('base64')
+  })
+
   it('失败：非 2xx / 网络错误 → status=failed 且 callback_error 落库', async () => {
     const triggerId = fixtureWithPendingTrigger()
     const deps = dispatchDeps({
@@ -860,6 +1032,33 @@ describe('回调投递：请求体、隐私闸与失败落库', () => {
     expect(statuses).toEqual(['sent', 'sent'])
     // 再跑一次没有 pending 可投
     expect((await dispatchPendingTaskCallbacks(decrypted, decoded, dispatchDeps())).dispatched).toBe(0)
+  })
+
+  it('同一批待投递记录的出网请求会重叠', async () => {
+    seedMessages(PRIVATE_TALKER, [])
+    expect(saveTaskInfo(decrypted, taskInput()).ok).toBe(true)
+    seedMessages(PRIVATE_TALKER, [
+      { localId: 1, sortSeq: 10, createTime: 100, sender: 'wxid_lisi', text: '第一条 发票' },
+      { localId: 2, sortSeq: 20, createTime: 200, sender: 'wxid_lisi', text: '第二条 发票' },
+    ])
+    expect(scanTaskTriggers(decrypted, { selfUsername: SELF }).created).toBe(2)
+    let active = 0
+    let maxActive = 0
+    const release: Array<() => void> = []
+    const pending = dispatchPendingTaskCallbacks(decrypted, decoded, dispatchDeps({
+      fetchImpl: () => new Promise((resolve) => {
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        release.push(() => {
+          active -= 1
+          resolve(new Response('ok', { status: 200 }))
+        })
+      }),
+    }))
+    await vi.waitFor(() => expect(release).toHaveLength(2))
+    expect(maxActive).toBe(2)
+    for (const done of release) done()
+    await expect(pending).resolves.toEqual({ dispatched: 2, failed: 0 })
   })
 })
 

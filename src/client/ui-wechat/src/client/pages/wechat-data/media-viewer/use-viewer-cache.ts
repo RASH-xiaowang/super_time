@@ -68,6 +68,7 @@ export function useViewerCache(
    */
   const inflight = useRef(new Map<string, number>())
   const order = useRef<string[]>([])
+  const userRetries = useRef(new Set<string>())
   /** 每次资源键序列变化或卸载都 +1，让上一批源的迟到回包失效。 */
   const generation = useRef(0)
   const mountedSignature = useRef<string | null>(null)
@@ -94,6 +95,7 @@ export function useViewerCache(
     return () => {
       if (generation.current === myGeneration) generation.current += 1
       inflight.current.clear()
+      userRetries.current.clear()
       order.current = []
     }
   }, [sourcesSignature])
@@ -140,7 +142,8 @@ export function useViewerCache(
     inflight.current.set(key, myGeneration)
     const task = (async (): Promise<void> => {
       try {
-        const url = await source.load()
+        const retry = userRetries.current.delete(key)
+        const url = await (retry ? source.load({ retry: true }) : source.load())
         if (typeof url !== 'string' || url === '') throw new Error('资源暂不可用')
         commit(key, { src: url }, myGeneration)
       } catch (err) {
@@ -169,6 +172,8 @@ export function useViewerCache(
   }, [commit])
 
   const retry = useCallback((key: string): void => {
+    if (inflight.current.has(key)) return
+    userRetries.current.add(key)
     setCache((prev) => {
       const next = { ...prev }
       delete next[key]

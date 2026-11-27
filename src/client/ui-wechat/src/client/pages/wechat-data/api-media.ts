@@ -375,7 +375,7 @@ export async function apiGetEmoticonDataUrl(options: { md5: string; emojiUrl?: s
  * @returns 与 `keys` 等长、顺序一致的结果数组。
  */
 const emoticonQueue = createImageLoadQueue<{ md5: string; emojiUrl?: string }, ImageDataUrlResult>({
-  chunkSize: 200,
+  chunkSize: 8,
   keyOf: (k) => k.md5 + '\u0000' + (k.emojiUrl ?? ''),
   onMissing: (k) => ({ error: '批量接口未返回该表情 (MD5=' + k.md5 + ')' }),
   flush: async (keys) => {
@@ -413,15 +413,41 @@ export async function apiGetEmoticonDataUrls(
   if (todo.length === 0) return out
   const r = await unwrap(await remote().getEmoticonDataUrls({ items: todo }))
   for (const it of r.items ?? []) {
-    const res: ImageDataUrlResult = it.dataUrl !== undefined
-      ? { url: it.dataUrl, ...(it.format !== undefined ? { format: it.format } : {}) }
-      : { ...(it.error !== undefined ? { error: it.error } : {}) }
+    const res: ImageDataUrlResult = it.file
+      ? preferMediaUrl({ file: it.file, ...(it.dataUrl !== undefined ? { url: it.dataUrl } : {}), ...(it.format !== undefined ? { format: it.format } : {}) }, useHttpMedia())
+      : it.dataUrl !== undefined
+        ? { url: it.dataUrl, ...(it.format !== undefined ? { format: it.format } : {}) }
+        : { ...(it.error !== undefined ? { error: it.error } : {}) }
     out[it.md5] = res
     // 成功的结果写进快照，下一次（含切换面板回来）直接命中 —— 失败**不写**：
     // 负缓存交给后端（那里知道「本机确实没有」这个事实），前端只缓存拿到的图。
-    if (it.dataUrl !== undefined) snapshotSet('emoticon:' + it.md5, res)
+    if (res.url !== undefined) snapshotSet('emoticon:' + it.md5, res)
   }
   return out
+}
+
+const emoticonFileQueue = createImageLoadQueue<string, ImageDataUrlResult>({
+  chunkSize: 80,
+  onMissing: () => ({ error: '尚未落盘' }),
+  flush: async (md5s) => {
+    const r = await unwrap(await remote().getEmoticonDataUrls({
+      items: md5s.map((md5) => ({ md5 })),
+      localOnly: true,
+    }))
+    const byMd5 = new Map((r.items ?? []).map((it) => [it.md5, it]))
+    return md5s.map((md5) => {
+      const it = byMd5.get(md5)
+      if (it?.file) return preferMediaUrl({ file: it.file, ...(it.format !== undefined ? { format: it.format } : {}) }, useHttpMedia())
+      return { error: '尚未落盘' }
+    })
+  },
+})
+
+/** 只查硬盘上已经存好的表情图，不下载、不把文件读成 base64。 */
+export function apiLookupEmoticonFile(md5: string): Promise<ImageDataUrlResult> {
+  const m = (md5 ?? '').trim().toLowerCase()
+  if (m === '') return Promise.resolve({ error: '缺少表情 MD5' })
+  return emoticonFileQueue.enqueue(m)
 }
 
 /**

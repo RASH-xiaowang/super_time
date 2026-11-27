@@ -474,7 +474,6 @@ export function DailySummaryPanel({ onOpenSettings }: { onOpenSettings?: (sectio
     <div className={css.panel}>
       <PanelHeader
         title="每日总结"
-        desc="定时总结任务 + 总结阅览（DSH LLM）"
         actions={(
           <>
             <Badge tone="cyan">{tasks.length} 任务</Badge>

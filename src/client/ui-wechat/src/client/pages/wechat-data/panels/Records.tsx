@@ -26,12 +26,12 @@ type Kind = 'revokes' | 'transfers' | 'redpackets' | 'finder' | 'miniprograms' |
  * 计数跟在名字后面（已访问过的类目才显示，避免假装是 0）。
  */
 const KIND_META: Record<Kind, { label: string; short: string; desc: string }> = {
-  revokes: { label: '撤回消息', short: '撤回', desc: '本地撤回缓存记录，点击会话可跳转定位' },
-  transfers: { label: '转账记录', short: '转账', desc: '微信转账明细，点击会话可跳转' },
-  redpackets: { label: '红包记录', short: '红包', desc: '微信红包明细，点击会话可跳转' },
-  finder: { label: '视频号', short: '视频号', desc: '视频号直播 / 用户页记录' },
-  miniprograms: { label: '小程序', short: '小程序', desc: '已使用的小程序联系人' },
-  friendverifications: { label: '好友验证', short: '好友验证', desc: '新朋友 / 好友验证消息' },
+  revokes: { label: '撤回消息', short: '撤回', desc: '' },
+  transfers: { label: '转账记录', short: '转账', desc: '' },
+  redpackets: { label: '红包记录', short: '红包', desc: '' },
+  finder: { label: '视频号', short: '视频号', desc: '' },
+  miniprograms: { label: '小程序', short: '小程序', desc: '' },
+  friendverifications: { label: '好友验证', short: '好友验证', desc: '' },
 }
 
 const KINDS: ReadonlyArray<Kind> = ['revokes', 'transfers', 'redpackets', 'finder', 'miniprograms', 'friendverifications']
@@ -89,6 +89,12 @@ const mono = (v: string | number | boolean | null | undefined, key = 'm'): React
 // 行数据来自未类型化的 DB 行，秒级时间戳可能是 number 也可能是字符串 → 统一数值化。
 // `Number(x) || null` 让 NaN/0/undefined 都走占位符，不会渲染出 Invalid Date。
 const timeTd = (ts: unknown, key = 't'): React.JSX.Element => <td key={key} className={css.muted}>{fmtDateTimeSec(Number(ts) || null)}</td>
+const amountTd = (v: unknown): React.JSX.Element => <td key="amt" className={css.mono}>{String(v ?? '').trim() || '—'}</td>
+const flowTd = (flow: unknown): React.JSX.Element => flow === 'in'
+  ? badge('转入', 'success', 'f')
+  : flow === 'out'
+    ? badge('流出', 'danger', 'f')
+    : td(<span className={css.muted}>—</span>, 'f')
 function badge(label: string, tone: string, key = 'b', hint?: string): React.JSX.Element {
   const cls = css[toneClass(tone)] ?? css.badgeMuted
   return <td key={key}><span className={`${css.badge} ${cls}`} title={hint}>{label}</span></td>
@@ -193,6 +199,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [direction, setDirection] = useState<'asc' | 'desc'>('desc')
+  const [sortBy, setSortBy] = useState<'time' | 'amount'>('time')
   const lastQueryKeyRef = useRef('')
   const requestSeqRef = useRef(0)
   const loadingMoreRef = useRef(false)
@@ -233,7 +240,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
     const requestSeq = ++requestSeqRef.current
     if (reset) setPage(0)
     setError(null)
-    const cacheKey = 'records:' + kind + ':' + keyword.trim() + ':' + fromDate + ':' + toDate + ':' + direction
+    const cacheKey = 'records:' + kind + ':' + keyword.trim() + ':' + fromDate + ':' + toDate + ':' + direction + ':' + sortBy
     if (reset) {
       const cached = readRenderCache<readonly RecordItem[]>(cacheKey)
       if (cached) {
@@ -249,7 +256,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
     }
     try {
       const nextPage = reset ? 0 : page + 1
-      const opts: { kind: string; limit: number; offset: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc' } = { kind, limit: PAGE, offset: nextPage * PAGE, direction }
+      const opts: { kind: string; limit: number; offset: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc'; sort?: 'time' | 'amount' } = { kind, limit: PAGE, offset: nextPage * PAGE, direction, sort: sortBy }
       const term = keyword.trim()
       if (term) opts.q = term
       if (TIME_KINDS[kind]) {
@@ -278,9 +285,9 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         loadingMoreRef.current = false
       }
     }
-  }, [kind, page, keyword, fromDate, toDate, direction, loading, loadingMore])
+  }, [kind, page, keyword, fromDate, toDate, direction, sortBy, loading, loadingMore])
 
-  const queryKey = kind + '|' + keyword.trim() + '|' + fromDate + '|' + toDate + '|' + direction
+  const queryKey = kind + '|' + keyword.trim() + '|' + fromDate + '|' + toDate + '|' + direction + '|' + sortBy
   useEffect(() => {
     if (!active) return
     if (queryKey === lastQueryKeyRef.current) return
@@ -355,15 +362,15 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
       case 'transfers':
         return (
           <table className={css.table}>
-            {head(['会话', '状态值（未释义）', '收款方', '付款方', '时间'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（字段域未验证，不推测状态）`)}{identityTd(it.pay_receiver, it.receiver_display || it.pay_receiver, it.receiver_enterprise, 'r')}{identityTd(it.pay_payer, it.payer_display || it.pay_payer, it.payer_enterprise, 'p')}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            {head(['会话', '金额', '状态值（未释义）', '支付状态', '时间'])}
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = transferSubType(it.pay_sub_type); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{amountTd(it.amount)}{badge(st.label, st.tone, 'b', `pay_sub_type=${String(it.pay_sub_type)}（字段域未验证，不推测状态）`)}{flowTd(it.pay_flow)}{timeTd(it.begin_transfer_time)}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'redpackets':
         return (
           <table className={css.table}>
-            {head(['会话', '发送者', '状态', '类型', '消息 ID'])}
-            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status, it.receive_status); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{identityTd(it.sender_user_name, it.sender_display || it.sender_user_name, it.sender_enterprise, 'n')}{badge(st.label, st.tone, 'b', 'hb_status / receive_status 原始值，未推测领取或退回状态')}{td(<span className={css.muted}>{it.hb_type === null || it.hb_type === undefined ? '类型值 —' : `类型值 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
+            {head(['会话', '金额', '发送者', '状态', '类型', '消息 ID'])}
+            <tbody>{pads.top > 0 && <tr style={{ height: pads.top }} aria-hidden="true" />}{visibleRecordRows(rowVirtualizer, items).map(({ it, i }) => { const st = hbStatus(it.hb_status, it.receive_status); return (<tr key={i} data-index={i} style={{ height: RECORD_ROW_PX }}>{linkTd(it.session_name, undefined, 's', identityText(it.session_display || it.session_name, it.session_enterprise))}{amountTd(it.amount)}{identityTd(it.sender_user_name, it.sender_display || it.sender_user_name, it.sender_enterprise, 'n')}{badge(st.label, st.tone, 'b', 'hb_status / receive_status 原始值，未推测领取或退回状态')}{td(<span className={css.muted}>{it.hb_type === null || it.hb_type === undefined ? '类型值 —' : `类型值 ${String(it.hb_type)}`}</span>, 't')}{mono(it.message_server_id, 'm')}</tr>) })}{pads.bottom > 0 && <tr style={{ height: pads.bottom }} aria-hidden="true" />}</tbody>
           </table>
         )
       case 'finder':
@@ -396,7 +403,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
           （页头 93px → 约 40px）。选择器见 records.module.css 的 `.panel > div:first-child`；
           不再包一层 div —— mutation M11 按 `desc={meta.desc}` 的逐字缩进锁定 PanelHeader。 */}
       <PanelHeader
-        title="资金往来"
+        title="逐笔明细"
         desc={meta.desc}
         actions={<button type="button" className={css.btn} onClick={() => { void load(true) }} disabled={loading}>{loading ? '刷新中…' : '刷新'}</button>}
       />
@@ -425,12 +432,7 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         )}
         right={(
           <>
-            <Segmented
-              options={[{ value: 'desc', label: '新→旧' }, { value: 'asc', label: '旧→新' }]}
-              value={direction}
-              onChange={(v) => { setDirection(v as 'asc' | 'desc') }}
-              ariaLabel="排序方向"
-            />
+            <RecordSortControls kind={kind} direction={direction} sortBy={sortBy} onDirection={setDirection} onSort={setSortBy} />
             <button type="button" className={css.btn} onClick={() => { void doExport() }} disabled={exportTask.running} {...desktopActionProps()}>{exportTask.finishing ? '完成中…' : exportTask.running ? '导出中…' : desktopAction() ? '导出 CSV（仅电脑）' : '导出 CSV'}</button>
           </>
         )}
@@ -468,6 +470,37 @@ export function RecordsPanel({ onOpenChat, seedQuery }: {
         )}
       </Card>
     </div>
+  )
+}
+
+function RecordSortControls({ kind, direction, sortBy, onDirection, onSort }: {
+  kind: Kind
+  direction: 'asc' | 'desc'
+  sortBy: 'time' | 'amount'
+  onDirection: (value: 'asc' | 'desc') => void
+  onSort: (value: 'time' | 'amount') => void
+}): React.JSX.Element {
+  const payment = kind === 'transfers' || kind === 'redpackets'
+  const byAmount = payment && sortBy === 'amount'
+  return (
+    <>
+      {payment && (
+        <Segmented
+          options={[{ value: 'time', label: '时间' }, { value: 'amount', label: '金额' }]}
+          value={sortBy}
+          onChange={(value) => { onSort(value as 'time' | 'amount') }}
+          ariaLabel="排序字段"
+        />
+      )}
+      <Segmented
+        options={byAmount
+          ? [{ value: 'desc', label: '高→低' }, { value: 'asc', label: '低→高' }]
+          : [{ value: 'desc', label: '新→旧' }, { value: 'asc', label: '旧→新' }]}
+        value={direction}
+        onChange={(value) => { onDirection(value as 'asc' | 'desc') }}
+        ariaLabel={byAmount ? '金额排序' : '时间排序'}
+      />
+    </>
   )
 }
 

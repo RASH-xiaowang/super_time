@@ -106,7 +106,8 @@ describe('拖拽手柄固定在卡片右上角', () => {
     expect(cssCode, '手柄不许用 opacity 靠 hover 才显现').not.toMatch(/\.canvasHandle[^{]*\{[^}]*opacity:\s*0[;\s]/)
   })
 
-  it('骨架屏里的占位卡不显示手柄（它不是可拖的真卡片）', () => {
-    expect(cssCode, '骨架应隐藏手柄').toMatch(/\.skelHost \.canvasHandle \{[^}]*display:\s*none/)
+  it('画布样式里不再留灰色占位卡（加载态改成文字说明）', () => {
+    expect(cssCode).not.toMatch(/\.skelHost/)
+    expect(cssCode).not.toMatch(/\.skelBlock/)
   })
 })

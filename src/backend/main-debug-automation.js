@@ -15,6 +15,8 @@
  *   - SUPERTIME_CLICK='labelA|labelB'：依次点击按钮（精确优先，其次前缀匹配）。
  *   - SUPERTIME_MAP_DEBUG=1：打印世界板块布局信息。
  *   - SUPERTIME_SCROLL=1|N：打印可滚动区域并滚动到指定位置。
+ *   - SUPERTIME_DUMP_DOM=1：打印 `document.body.innerText` 前 6000 字 —— 某些环境里
+ *     `capturePage` 拿不到画面（窗口被排除在捕获之外），DOM 文本是唯一可行的验收证据。
  */
 
 const fs = require('node:fs');
@@ -150,9 +152,13 @@ async function runScreenshotAutomation(options = {}) {
     await sleep(300);
   }
 
+  if (env.SUPERTIME_DUMP_DOM === '1') {
+    const text = await webContents.executeJavaScript('document.body.innerText');
+    console.log('[dom]', JSON.stringify(String(text).slice(0, 6000)));
+  }
+
   const image = await webContents.capturePage();
-  const output = String(env.SUPERTIME_SCREENSHOT);
-  writeFileSync(output, image.toPNG());
+  const output = String(env.SUPERTIME_SCREENSHOT);  writeFileSync(output, image.toPNG());
   console.log('[screenshot] saved', output);
   return { started: true };
 }

@@ -296,9 +296,47 @@ export function pickNode(
     const r = radiusOf(n) + slack
     const dx = px - p.x
     const dy = py - p.y
-    if (dx * dx + dy * dy <= r * r) return n.id
+    if (dx * dx + dy * dy <= r * r)   return n.id
   }
   return null
+}
+
+/**
+ * 命中离指针最近的一条线。节点优先，所以调用方应先用 {@link pickNode}。
+ * @param edges - 当前画出的边。
+ * @param positions - 世界坐标。
+ * @param cam - 相机，用来把 6px 容差换成世界单位。
+ * @param px - 世界坐标 x。
+ * @param py - 世界坐标 y。
+ * @returns 命中的边，或 null。
+ */
+export function pickEdge(
+  edges: readonly GEdge[],
+  positions: ReadonlyMap<string, Point>,
+  cam: Camera,
+  px: number,
+  py: number,
+): GEdge | null {
+  const slack = 6 / cam.k
+  let best: GEdge | null = null
+  let bestDist = slack
+  for (const edge of edges) {
+    const a = positions.get(edge.source)
+    const b = positions.get(edge.target)
+    if (a === undefined || b === undefined) continue
+    const abx = b.x - a.x
+    const aby = b.y - a.y
+    const len2 = abx * abx + aby * aby
+    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - a.x) * abx + (py - a.y) * aby) / len2))
+    const dx = px - (a.x + abx * t)
+    const dy = py - (a.y + aby * t)
+    const dist = Math.hypot(dx, dy)
+    if (dist <= bestDist) {
+      bestDist = dist
+      best = edge
+    }
+  }
+  return best
 }
 
 /** 社区聚焦/悬停的淡出系数。聚焦时非本圈几乎隐形，仅悬停时只做轻度淡出（免得扫过就闪）。 */

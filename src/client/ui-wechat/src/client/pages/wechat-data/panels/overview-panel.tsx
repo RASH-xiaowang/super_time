@@ -59,6 +59,8 @@ import {
   WorldMapSection,
 } from './overview-sections.tsx'
 import { useMenuDismiss } from './use-menu-dismiss.ts'
+import { DATA_IDENTITY_CHANGED_EVENT } from '../cache.ts'
+import { AiPendingSection, AiReplyOutcomeSection, AiReplyRuntimeSection, useOverviewOperations } from './overview-operations-cards.tsx'
 
 /** 总览的统计查询单次约 1–2 秒；WAL 高频推送只做合并限频，避免每几秒重复全量重算。 */
 export const OVERVIEW_AUTO_REFRESH_MIN_MS = 30_000
@@ -135,6 +137,57 @@ async function exportOverviewImage(input: {
   if (!outcome.ok) hold('图片导出失败: ' + outcome.error)
 }
 
+/** Hook-free render extraction; preserves the existing fragment and CardCanvas children. */
+function renderOverviewContent({ data, ins, ledger, stor, operations, extras, largeFiles, warnCount, go, openChat, openMoments }: {
+  data: OverviewSnapshot
+  ins: OverviewInsights | null
+  ledger: LedgerSnapshot | null
+  stor: StorageSnapshot | null
+  operations: ReturnType<typeof useOverviewOperations>
+  extras: OverviewInsights['extras'] | undefined
+  largeFiles: readonly unknown[]
+  warnCount: number
+  go: (tab: string) => void
+  openChat: (username: string) => void
+  openMoments: (username: string) => void
+}): React.JSX.Element {
+  return (
+          <>
+            {/* KPI 是「一眼看的四个数」，不参与拖拽排版；它本来就是横条形态。 */}
+            <KpiSection data={data} ins={ins} onGo={go} />
+
+            {/* 卡片区：**等宽瀑布流画布**（2026-11-19，与「年度报告」同一套）。
+                改前是 Bootstrap 栅格 `row g-2` + `col-12 col-xl-*`：每行必须等高、
+                列宽只能是 1/12 的整数倍，窄列里的指标格被挤成一团。
+                现在所有卡同宽、按最短列落位、可拖动摆放，位置按作用域记住。
+                `MoreAnalysis` 不再折叠 —— 展开后同样进画布（一整条瀑布流，
+                不再出现"折叠区是另一个版面"的割裂）。 */}
+            <div className={css.cardStack}>
+              <CardCanvas year={0} scope="overview">
+                <AiPendingSection ops={operations} onGo={go} />
+                <AiReplyOutcomeSection ops={operations} onGo={go} />
+                <AiReplyRuntimeSection ops={operations} />
+                {extras && <TrendSection extras={extras} />}
+                {extras && extras.heatmap.length > 0 && <HeatmapSection heatmap={extras.heatmap} />}
+                {ins && <RelationSection ins={ins} />}
+                <WorldMapSection />
+                {ins && <TopChatsSection ins={ins} onOpenChat={openChat} />}
+                {ins && <ContentSection ins={ins} />}
+                {ins && <AssetsOverviewSection ins={ins} official={data.official} />}
+                <StorageCompositionSection categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />
+                <LedgerSection ledger={ledger} onGo={go} />
+                {ins && <InteractionSection ins={ins} />}
+                <MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />
+                <WordCloudSection />
+                <RegionBoard />
+                <RevokedSection revoked={data.revoked} warnCount={warnCount} onGo={go} />
+                {ins && <HealthSection ins={ins} extras={extras} />}
+              </CardCanvas>
+            </div>
+          </>
+  )
+}
+
 /**
  * Render the WeChat data overview panel (space-capsule cockpit).
  * @param props - navigation, chat and moments deep-link callbacks.
@@ -161,19 +214,21 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
   // 失败类提示改前不带定时器（一直留着），所以走 hold 而不是 flash。
   const { notice, flash, hold } = useTransientNotice(6000)
   const [lastUpdated, setLastUpdated] = useState<number | null>(() => readCache(CACHE_TIME) as number | null)
+  const operations = useOverviewOperations(lastUpdated)
   const reportExport = useOverviewReportExport({ data, insights: ins, ledger, storage: stor, lastUpdated, flash, hold })
-  const [done, setDone] = useState(false)
-  const doneTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const rootRef = useRef<HTMLDivElement | null>(null)
   // 「更多 ▾」菜单：导出报告/数据/图片 + 归档全部会话（页头动作 3→2 后收进来的）。
   const [moreOpen, setMoreOpen] = useState(false)
   const closeMore = useCallback((): void => { setMoreOpen(false) }, [])
   const { rootRef: moreRootRef, triggerRef: moreTriggerRef } = useMenuDismiss(moreOpen, closeMore)
   const aliveRef = useRef(true)
+  const identityGenerationRef = useRef(0)
   const extrasTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const extrasResolveRef = useRef<(() => void) | null>(null)
 
   const load = async (): Promise<void> => {
+    const generation = identityGenerationRef.current
+    const current = (): boolean => aliveRef.current && generation === identityGenerationRef.current
     const hadData = data !== null
     if (hadData) setRefreshing(true)
     else setLoading(true)
@@ -182,6 +237,7 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         apiGetOverview(),
         apiGetOverviewInsights(),
       ])
+      if (!current()) return
       setData(base)
       setIns(insw)
       writeCache(CACHE_BASE, base)
@@ -190,17 +246,14 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
       const now = Date.now()
       setLastUpdated(now)
       writeCache(CACHE_TIME, now)
-      if (hadData) {
-        setDone(true)
-        if (doneTimer.current) clearTimeout(doneTimer.current)
-        doneTimer.current = setTimeout(() => { setDone(false) }, 1600)
-      }
     } catch (e) {
-      if (data === null) setError((e as Error).message)
-      else hold('后台刷新失败，当前显示缓存数据：' + (e as Error).message)
+      if (!current()) return
+      setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setLoading(false)
-      setRefreshing(false)
+      if (current()) {
+        setLoading(false)
+        setRefreshing(false)
+      }
     }
     // 资金/存储排在核心总览之后，并让出一拍：worker 单线程，紧接着打这两路会堵住切页。
     await new Promise<void>((resolve) => {
@@ -212,8 +265,8 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         resolve()
       }, OVERVIEW_EXTRAS_DELAY_MS)
     })
-    if (!aliveRef.current) return
-    await fetchOverviewExtras(() => aliveRef.current, (lg, st) => {
+    if (!current()) return
+    await fetchOverviewExtras(current, (lg, st) => {
       setLedger(lg)
       setStor(st)
       if (lg.readError) hold('资金台账读取不完整：' + lg.readError)
@@ -259,8 +312,30 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
     aliveRef.current = true
     lastAutoRefreshAtRef.current = Date.now()
     void runLoad()
+    const identityChanged = (): void => {
+      identityGenerationRef.current += 1
+      setData(null)
+      setIns(null)
+      setLedger(null)
+      setStor(null)
+      setLastUpdated(null)
+      setError(null)
+      setLoading(true)
+      setRefreshing(false)
+      if (autoRefreshTimerRef.current !== null) clearTimeout(autoRefreshTimerRef.current)
+      autoRefreshTimerRef.current = null
+      if (extrasTimerRef.current !== null) clearTimeout(extrasTimerRef.current)
+      extrasTimerRef.current = null
+      extrasResolveRef.current?.()
+      extrasResolveRef.current = null
+      loadInFlightRef.current = null
+      void runLoad()
+    }
+    window.addEventListener(DATA_IDENTITY_CHANGED_EVENT, identityChanged)
     return () => {
       aliveRef.current = false
+      identityGenerationRef.current += 1
+      window.removeEventListener(DATA_IDENTITY_CHANGED_EVENT, identityChanged)
       if (autoRefreshTimerRef.current !== null) clearTimeout(autoRefreshTimerRef.current)
       if (extrasTimerRef.current !== null) clearTimeout(extrasTimerRef.current)
       extrasResolveRef.current?.()
@@ -298,20 +373,12 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
     <div ref={rootRef} className={kitCss.panelShell}>
       <PanelHeader
         title="数据总览"
-        desc={(
-          <>
-            本机微信数据资产一屏纵览
-            {refreshing && <><span className={css.spinner} /> 同步中…</>}
-            {lastUpdated ? ` · 最后更新 ${fmtClockMs(lastUpdated)}` : ''}
-          </>
-        )}
+        desc={lastUpdated ? `更新 ${fmtClockMs(lastUpdated)}` : undefined}
         actions={(
           <>
             {/* 页头只留两个动作（微信化层级）：刷新 + 更多。导出与归档收进「更多 ▾」。 */}
-            <button type="button" className={css.refresh} onClick={() => { lastAutoRefreshAtRef.current = Date.now(); void runLoad() }} disabled={loading || refreshing}>
-              {(loading || refreshing)
-                ? <><span className={css.spinner} /> {loading ? '统计中…' : '更新中…'}</>
-                : done ? '✓ 已更新' : '刷新'}
+            <button type="button" className={css.refresh} onClick={() => { lastAutoRefreshAtRef.current = Date.now(); void runLoad() }} disabled={loading || refreshing} aria-label={refreshing ? '正在后台刷新数据总览' : '刷新数据总览'}>
+              {loading && data === null ? '统计中…' : '刷新'}
             </button>
             <div className={css.exportWrap} ref={moreRootRef}>
               <button
@@ -351,40 +418,11 @@ export function OverviewPanel({ onNavigate, onOpenChat, onOpenMoments }: {
         <ExportProgressStatus state={archiveTask.state} onCancel={() => { void archiveTask.cancel() }} />
         <ExportProgressStatus state={imageTask.state} />
         <ExportProgressStatus state={reportExport.state} />
-        {!debugSkeleton && error && data !== null && <ErrorState message="后台刷新失败（正在展示缓存数据）" />}
+        {!debugSkeleton && error && <ErrorState message={data === null ? '数据读取失败，请重试刷新' : '后台刷新失败，正在展示上次成功数据（可能已过期）；成功时间见页头'} />}
         {data === null || debugSkeleton ? <SkeletonOverview /> : null}
 
         {!debugSkeleton && data !== null && (
-          <>
-            {/* KPI 是「一眼看的四个数」，不参与拖拽排版；它本来就是横条形态。 */}
-            <KpiSection data={data} ins={ins} onGo={go} />
-
-            {/* 卡片区：**等宽瀑布流画布**（2026-11-19，与「年度报告」同一套）。
-                改前是 Bootstrap 栅格 `row g-2` + `col-12 col-xl-*`：每行必须等高、
-                列宽只能是 1/12 的整数倍，窄列里的指标格被挤成一团。
-                现在所有卡同宽、按最短列落位、可拖动摆放，位置按作用域记住。
-                `MoreAnalysis` 不再折叠 —— 展开后同样进画布（一整条瀑布流，
-                不再出现"折叠区是另一个版面"的割裂）。 */}
-            <div className={css.cardStack}>
-              <CardCanvas year={0} scope="overview">
-                {extras && <TrendSection extras={extras} />}
-                {extras && extras.heatmap.length > 0 && <HeatmapSection heatmap={extras.heatmap} />}
-                {ins && <RelationSection ins={ins} />}
-                <WorldMapSection />
-                {ins && <TopChatsSection ins={ins} onOpenChat={openChat} />}
-                {ins && <ContentSection ins={ins} />}
-                {ins && <AssetsOverviewSection ins={ins} official={data.official} />}
-                <StorageCompositionSection categories={data.storage.categories} stor={stor} largeFileCount={largeFiles.length} onGo={go} />
-                <LedgerSection ledger={ledger} onGo={go} />
-                {ins && <InteractionSection ins={ins} />}
-                <MomentsAuthorsSection authors={data.moments_authors} onOpenMoments={openMoments} onGo={go} />
-                <WordCloudSection />
-                <RegionBoard />
-                <RevokedSection revoked={data.revoked} warnCount={warnCount} onGo={go} />
-                {ins && <HealthSection ins={ins} extras={extras} />}
-              </CardCanvas>
-            </div>
-          </>
+          renderOverviewContent({ data, ins, ledger, stor, operations, extras, largeFiles, warnCount, go, openChat, openMoments })
         )}
       </div>
     </div>

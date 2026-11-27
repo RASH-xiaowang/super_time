@@ -42,7 +42,7 @@ beforeEach(setupMessageListFixture)
 afterEach(cleanupMessageListFixture)
 
 describe('下游投递：请求体与附件', () => {
-  it('大肥鱼 /send/text 的 AI 回复请求体严格为 {talker,text}', async () => {
+  it(' /send/text 的 AI 回复请求体严格为 {talker,text}', async () => {
     expect(saveMessageListRule(decrypted, {
       targetName: '小王',
       webhookUrl: 'http://192.0.2.10:17890/send/text',
@@ -123,7 +123,7 @@ describe('下游投递：请求体与附件', () => {
     expect(calls).toBe(0)
   })
 
-  it('记录无地址快照、由规则补解析出 /send/text 时仍使用大肥鱼请求体', async () => {
+  it('记录无地址快照、由规则补解析出 /send/text 时仍使用请求体', async () => {
     const inserted = insertAiReplyMessageListRecord(decrypted, {
       chatName: '小王',
       chatUsername: 'wxid_wang',

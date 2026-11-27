@@ -419,10 +419,8 @@ describe('间隙与卡内留白：走全站刻度，板块之间要接上', () =
       const m = new RegExp(`${prop}:\\s*([^;]+);`).exec(block[1])
       return m?.[1]?.trim() ?? null
     }
-    // 海报卡与更多卡内边距必须相同（骨架卡也照抄）—— 不一致会在加载完成时"长高几像素"。
     expect(declOf('.card', 'padding'), '海报卡缺 padding').not.toBeNull()
     expect(declOf('.moreCard', 'padding'), '两段内边距不一致').toBe(declOf('.card', 'padding'))
-    expect(declOf('.skelCard', 'padding'), '骨架与真实卡片内边距不一致').toBe(declOf('.card', 'padding'))
     // 标题色 / 附注字号：两段同值（层级怎么定都行，但不能一段一个样）。
     expect(declOf('.moreCardTitle', 'color')).toBe(declOf('.cardTitle', 'color'))
     expect(declOf('.moreCardExtra', 'font-size')).toBe(declOf('.cardExtra', 'font-size'))

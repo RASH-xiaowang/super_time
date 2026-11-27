@@ -57,13 +57,23 @@ export function useKbFilesSnapshot(kbId: number): KbFilesSnapshotState {
   })
   const [error, setError] = useState<string | null>(null)
   const [now, setNow] = useState(() => Date.now())
-  /** 已加载条数（`load` 的 limit 与 `loadMore` 的 offset 都以它为准，不必进依赖）。 */
+  /** Registration-triggered refreshes must not paint a departed scope. */
+  const scopeRef = useRef({ kbId })
+  if (scopeRef.current.kbId !== kbId) scopeRef.current = { kbId }
+  const mountedRef = useRef(true)
+  const readSeq = useRef(0)
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; readSeq.current++ } }, [])
+  /** 已加载条数：刷新与翻页共用。 */
   const loadedRef = useRef(snapshot.items.length)
   const loadingMoreRef = useRef(false)
 
   useEffect(() => { loadedRef.current = snapshot.items.length }, [snapshot.items.length])
 
   const load = useCallback(async (opts?: { silent?: boolean }): Promise<void> => {
+    const scope = scopeRef.current
+    if (!mountedRef.current || scope.kbId !== kbId) return
+    const seq = ++readSeq.current
+    const isCurrent = () => mountedRef.current && scopeRef.current === scope && readSeq.current === seq
     const silent = opts?.silent === true
     if (!silent) setLoading(true)
     try {
@@ -74,6 +84,7 @@ export function useKbFilesSnapshot(kbId: number): KbFilesSnapshotState {
        */
       const want = Math.min(KB_FILES_MAX, Math.max(KB_FILES_PAGE, loadedRef.current))
       const r = await apiGetKbFiles(kbId, { limit: want })
+      if (!isCurrent()) return
       setSnapshot({ items: r.items, total: r.total })
       setHasMore(r.items.length < r.total)
       setReadError(r.readError ?? null)
@@ -81,9 +92,9 @@ export function useKbFilesSnapshot(kbId: number): KbFilesSnapshotState {
       if (!r.readError) writeRenderCache(kbCacheKey('kb-files', kbId), { items: r.items, total: r.total })
       setError(null)
     } catch (e) {
-      setError((e as Error).message)
+      if (isCurrent()) setError((e as Error).message)
     } finally {
-      if (!silent) setLoading(false)
+      if (isCurrent()) setLoading(false)
     }
   }, [kbId])
 

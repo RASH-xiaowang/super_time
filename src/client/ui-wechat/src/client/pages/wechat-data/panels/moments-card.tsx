@@ -112,15 +112,12 @@ export interface MomentsCardProps {
  * 为什么不接 `token`：已实测 9 种用法（原样 / `?token` / `?token&key` / thumb / https / 匿名参数 / 路径段 / Referer+UA / Cookie）**全部 HTTP 400**（用**最新**动态测的），接上不改变结果。因此当地址是 http（代理按设计只取 https）或代理取不到时，这一格会显示上面的说明，而**不会**用本机解密结果顶替。
  */
 function MomentNoSource({ hint, detail }: { hint: string; detail?: string }): React.JSX.Element {
+  const loading = hint.startsWith('正在')
+  const title = detail ? hint + ' ' + detail : hint
   return (
-    <div className={css.imgFallback}>
+    <div className={css.imgFallback} title={title}>
       <div className={css.imgFallbackContent}>
-        <span className={css.imgFallbackIcon}>🖼</span>
-        <span className={css.imgFallbackText}>本机没有这张图</span>
-        <span className={css.imgFallbackHint} title={detail}>
-          {hint}
-          {detail ? '（' + detail + '）' : ''}
-        </span>
+        <span className={css.imgFallbackText}>{loading ? '取图中' : '未找到'}</span>
       </div>
     </div>
   )
@@ -301,7 +298,7 @@ export function MomentsCard({
           <div className={css.linkCard}>
             {(cover || m.link_thumb || m.contentType === 3) ? (
               <div className={css.linkCover} data-sns-key={coverKey || undefined}>
-                {/* .linkCover 是固定 60×60 的框：隐藏图片只会留下一个**没有意义的空格子**
+                {/* .linkCover 是固定尺寸的框：隐藏图片只会留下一个**没有意义的空格子**
                     （实测共享文章封面里有 3 个 mmbiz.qpic.cn 的图 400，页面上就是 3 个空方块），
                     所以取不到时画 🔗 占位。与评论图/朋友圈图的失败口径一致。 */}
                 <RemoteImg

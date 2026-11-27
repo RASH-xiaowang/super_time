@@ -24,6 +24,7 @@ import {
   CHAT_AI_REPLY_PERSONA_PROMPT_MAX,
   normalizeChatAiReplyPersona,
 } from './persona.ts'
+import { normalizeSafetyBlocked, normalizeSafetyHandoff } from './safety.ts'
 import { canonicalChatReference, isMessageTableHash } from '../message-identity.ts'
 import {
   ensureChatAiReplySchema,
@@ -125,6 +126,8 @@ function defaultSetting(): ChatAiReplySetting {
     kbEnabled: false,
     kbId: 0,
     contextWindowHours: 0,
+    safetyHandoff: normalizeSafetyHandoff(''),
+    safetyBlocked: '',
     revision: 0,
     updatedAt: 0,
     cursor: '',
@@ -172,6 +175,8 @@ interface SettingRow {
   kb_enabled?: unknown
   kb_id?: unknown
   context_window_hours?: unknown
+  safety_handoff?: unknown
+  safety_blocked?: unknown
   revision?: unknown
   updated_at?: unknown
   cursor?: unknown
@@ -209,6 +214,8 @@ function stateOf(
         kbEnabled: numOf(row.kb_enabled) === 1,
         kbId: Math.max(0, numOf(row.kb_id)),
         contextWindowHours: normalizeContextWindowHours(row.context_window_hours),
+        safetyHandoff: normalizeSafetyHandoff(row.safety_handoff),
+        safetyBlocked: normalizeSafetyBlocked(row.safety_blocked),
         revision: Math.max(0, numOf(row.revision)),
         updatedAt: Math.max(0, numOf(row.updated_at)),
         cursor: textOf(row.cursor, CURSOR_MAX),
@@ -414,6 +421,10 @@ export function saveChatAiReplySetting(
     kbId?: number
     /** 上下文时间窗（小时）；省略时保留当前值，0/非法值表示不限。 */
     contextWindowHours?: number
+    /** 省略时保留当前转人工话术。 */
+    safetyHandoff?: string
+    /** 省略时保留当前禁说词。 */
+    safetyBlocked?: string
     expectedRevision?: number
     cursor?: string
   },
@@ -461,6 +472,12 @@ export function saveChatAiReplySetting(
         const contextWindowHours = input.contextWindowHours === undefined
           ? (current === undefined ? 0 : normalizeContextWindowHours(current.context_window_hours))
           : normalizeContextWindowHours(input.contextWindowHours)
+        const safetyHandoff = input.safetyHandoff === undefined
+          ? normalizeSafetyHandoff(current?.safety_handoff)
+          : normalizeSafetyHandoff(input.safetyHandoff)
+        const safetyBlocked = input.safetyBlocked === undefined
+          ? normalizeSafetyBlocked(current?.safety_blocked)
+          : normalizeSafetyBlocked(input.safetyBlocked)
         const now = Date.now()
         failSupersededReservation(
           db,
@@ -475,11 +492,11 @@ export function saveChatAiReplySetting(
         const saved = db.prepare(`INSERT INTO chat_ai_reply_settings
           (account_key, chat_username, chat_name, enabled, provider,
            split_reply, persona_name, persona_prompt, kb_enabled, kb_id,
-           context_window_hours,
+           context_window_hours, safety_handoff, safety_blocked,
            revision, cursor,
            pending_cursor, pending_source_ref, pending_revision, stage,
            last_run_at, record_id, error, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, ?, NULL, NULL, '', ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', 0, ?, NULL, NULL, '', ?)
           ON CONFLICT(account_key, chat_username) DO UPDATE SET
             chat_name = excluded.chat_name,
             enabled = excluded.enabled,
@@ -490,6 +507,8 @@ export function saveChatAiReplySetting(
             kb_enabled = excluded.kb_enabled,
             kb_id = excluded.kb_id,
             context_window_hours = excluded.context_window_hours,
+            safety_handoff = excluded.safety_handoff,
+            safety_blocked = excluded.safety_blocked,
             revision = excluded.revision,
             cursor = excluded.cursor,
             pending_cursor = '',
@@ -518,6 +537,8 @@ export function saveChatAiReplySetting(
           kbEnabled ? 1 : 0,
           kbId,
           contextWindowHours,
+          safetyHandoff,
+          safetyBlocked,
           nextRevision,
           cursor,
           stage,
@@ -558,6 +579,10 @@ export function saveChatAiReplyPersona(
     kbId?: number
     /** 上下文时间窗（小时）；省略时保留当前值，0 表示不限。 */
     contextWindowHours?: number
+    /** 省略时保留当前转人工话术。 */
+    safetyHandoff?: string
+    /** 省略时保留当前禁说词。 */
+    safetyBlocked?: string
     expectedRevision?: number
   },
 ): ChatAiReplyMutationResult {
@@ -588,6 +613,12 @@ export function saveChatAiReplyPersona(
   const contextWindowHours = input.contextWindowHours === undefined
     ? current.contextWindowHours
     : normalizeContextWindowHours(input.contextWindowHours)
+  const safetyHandoff = input.safetyHandoff === undefined
+    ? current.safetyHandoff
+    : normalizeSafetyHandoff(input.safetyHandoff)
+  const safetyBlocked = input.safetyBlocked === undefined
+    ? current.safetyBlocked
+    : normalizeSafetyBlocked(input.safetyBlocked)
   if (
     persona.name === current.personaName
     && persona.prompt === current.personaPrompt
@@ -595,6 +626,8 @@ export function saveChatAiReplyPersona(
     && kbEnabled === current.kbEnabled
     && kbId === current.kbId
     && contextWindowHours === current.contextWindowHours
+    && safetyHandoff === current.safetyHandoff
+    && safetyBlocked === current.safetyBlocked
   ) {
     return { ok: true, state: current }
   }
@@ -610,6 +643,8 @@ export function saveChatAiReplyPersona(
     kbEnabled,
     kbId,
     contextWindowHours,
+    safetyHandoff,
+    safetyBlocked,
     expectedRevision,
     cursor: current.cursor,
   })

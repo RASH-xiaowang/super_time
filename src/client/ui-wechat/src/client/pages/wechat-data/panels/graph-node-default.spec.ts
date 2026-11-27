@@ -13,22 +13,34 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { defaultNodeLimit, eligibleCandidateCount } from './graph-model.ts'
+import { coreNodeLimit, defaultNodeLimit, eligibleCandidateCount } from './graph-model.ts'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const read = (name: string): string => readFileSync(join(HERE, name), 'utf8')
 
-describe('节点上限：初始默认 = 可显示总人数 30%', () => {
+describe('节点上限：初始默认画出有来往的核心圈', () => {
   it('四舍五入、至少 1', () => {
     expect(defaultNodeLimit(0)).toBe(1)
     expect(defaultNodeLimit(1)).toBe(1)
     expect(defaultNodeLimit(3)).toBe(1)
     expect(defaultNodeLimit(10)).toBe(3)
-    expect(defaultNodeLimit(20)).toBe(6)
-    expect(defaultNodeLimit(21)).toBe(6)
-    expect(defaultNodeLimit(284)).toBe(85)
     expect(defaultNodeLimit(289)).toBe(87)
-    expect(defaultNodeLimit(2500)).toBe(750)
+  })
+
+  it('有消息或已有观测边的人全部计入，沉默联系人留在圈外，并且不超过 320', () => {
+    const nodes = [
+      { id: 'a', kind: 'contact', is_friend: true, msg_count: 12 },
+      { id: 'b', kind: 'contact', is_friend: true, msg_count: 0 },
+      { id: 'c', kind: 'contact', is_friend: true, msg_count: 0 },
+    ]
+    expect(coreNodeLimit({ nodes, edges: [{ source: 'a', target: 'c' }] }, { mode: 'people', friendsOnly: true })).toBe(2)
+    const many = Array.from({ length: 400 }, (_, index) => ({
+      id: `u${index}`,
+      kind: 'contact',
+      is_friend: true,
+      msg_count: 1,
+    }))
+    expect(coreNodeLimit({ nodes: many, edges: [] }, { mode: 'people', friendsOnly: true })).toBe(320)
   })
 
   it('「总人数」= 当前过滤下可进图的人（排除群/我；仅好友时排除公众号与非好友）', () => {
@@ -55,13 +67,12 @@ describe('节点上限：初始默认 = 可显示总人数 30%', () => {
     expect(src).toMatch(/const rawNodes = rawCandidateNodes\(normalizedEnv, s\)/)
   })
 
-  it('Graph.tsx 等 data 落地后按 30% 覆盖默认哨兵；用户拖过滑杆则不覆盖；恢复默认同规则', () => {
+  it('Graph.tsx 等 data 落地后按核心圈覆盖默认哨兵；用户拖过滑杆则不覆盖；恢复默认同规则', () => {
     const src = read('Graph.tsx')
-    // 首屏 data=null 必须先跳过，否则先把哨兵消耗成 1、data 到了也不再生效
     expect(src, '缺 data 空守卫：首屏会把默认值算成 1').toMatch(/if \(!data\) return/)
-    expect(src).toMatch(/defaultNodeLimit\(eligibleCandidateCount\(data, prev\)\)/)
+    expect(src).toMatch(/coreNodeLimit\(data, prev\)/)
     expect(src).toMatch(/prev\.nodeLimit === DEFAULT_GRAPH_SETTINGS\.nodeLimit/)
-    expect(src, '恢复默认参数没有重算 30%').toMatch(/nodeLimit: defaultNodeLimit\(eligibleCandidateCount\(data, settings\)\)/)
+    expect(src, '恢复默认参数没有重算核心圈').toMatch(/nodeLimit: coreNodeLimit\(data, settings\)/)
   })
 
   it('滑杆允许 <20 的值（小图 30% 可能是 1–19）', () => {

@@ -572,8 +572,15 @@
   right: auto;
 }
 .msgRecognitionDialog {
-  width: min(960px, 94vw);
-  max-height: min(84vh, 760px);
+  box-sizing: border-box;
+  width: min(960px, 94vw, calc(78vh * 1.6));
+  min-width: min(560px, 94vw);
+  max-width: min(960px, 94vw);
+  aspect-ratio: 16 / 10;
+  height: min(600px, 78vh, calc(94vw * 0.625));
+  min-height: min(400px, 78vh);
+  max-height: min(600px, 78vh);
+  overflow: hidden;
   container-name: recognition-dialog;
   container-type: inline-size;
 }

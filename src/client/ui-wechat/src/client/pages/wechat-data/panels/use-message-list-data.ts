@@ -103,7 +103,7 @@ async function refreshDeepMessageListRecords(
   }
 }
 
-interface RefreshOptions {
+export interface RefreshOptions {
   /** 静默刷新不翻加载态、不清旧内容，失败也保留当前视图。 */
   silent?: boolean
   /** 主动刷新/筛选变化必须回第一页；静默回源默认原位合并。 */
@@ -439,12 +439,15 @@ function useMessageListRulesData(): {
   rulesTotal: number
   loadingRules: boolean
   rulesReadError: string
+  /** 至少成功读过一次规则表；未读完前不能断言「待配置」。 */
+  rulesResolved: boolean
   refreshRules: (options?: RefreshOptions) => Promise<void>
 } {
   const [rules, setRules] = useState<MessageListRule[]>([])
   const [rulesTotal, setRulesTotal] = useState(0)
   const [loadingRules, setLoadingRules] = useState(false)
   const [rulesReadError, setRulesReadError] = useState('')
+  const [rulesResolved, setRulesResolved] = useState(false)
   const rulesSeq = useRef(0)
   const rulesInFlight = useRef(0)
   const rulesRefreshQueued = useRef(false)
@@ -480,6 +483,7 @@ function useMessageListRulesData(): {
       setRules((prev) => sameRules(prev, snap.items) ? prev : snap.items)
       setRulesTotal((prev) => prev === snap.total ? prev : snap.total)
       setRulesReadError(snap.readError ?? '')
+      if (snap.readError === undefined) setRulesResolved(true)
     } catch (e) {
       if (mountedRef.current && seq === rulesSeq.current && !silent) {
         setRules([])
@@ -502,7 +506,7 @@ function useMessageListRulesData(): {
 
   useEffect(() => { void refreshRules() }, [refreshRules])
 
-  return { rules, rulesTotal, loadingRules, rulesReadError, refreshRules }
+  return { rules, rulesTotal, loadingRules, rulesReadError, rulesResolved, refreshRules }
 }
 
 function useMessageListWebhookInfo(canWrite: boolean): {
@@ -693,6 +697,7 @@ export function useMessageListData(canWrite: boolean) {
     webhookInfo,
     loadingRules: rulesState.loadingRules,
     rulesReadError: rulesState.rulesReadError,
+    rulesResolved: rulesState.rulesResolved,
     thumbs,
     stats,
     refreshRecords: recordsState.refreshRecords,

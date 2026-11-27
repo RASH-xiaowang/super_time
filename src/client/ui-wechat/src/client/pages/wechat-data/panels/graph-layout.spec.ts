@@ -13,8 +13,8 @@
  * @vitest-environment node
  */
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_GRAPH_SETTINGS, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
-import { fa2Settings, graphDataKey, isolatedStripPositions, layoutIterations, previewLayout, runLayout, warmLayoutIterations } from './graph-layout.ts'
+import { DEFAULT_GRAPH_SETTINGS, detectCommunities, type BuiltGraph, type GEdge, type GNode, type GraphSettings } from './graph-model.ts'
+import { fa2Settings, gatherIslands, graphDataKey, isolatedStripPositions, layoutIterations, packIslands, previewLayout, runLayout, seatIslands, spreadCommunities, warmLayoutIterations } from './graph-layout.ts'
 
 /** 造一个节点：只写关心的字段，其余给中性默认。 */
 function node(id: string, over: Partial<GNode> = {}): GNode {
@@ -26,8 +26,8 @@ function node(id: string, over: Partial<GNode> = {}): GNode {
 }
 
 /** 造一条边。 */
-function edge(source: string, target: string, weight = 1): GEdge {
-  return { source, target, weight, dist: 100, kind: 'common' }
+function edge(source: string, target: string, weight = 1, kind: GEdge['kind'] = 'common'): GEdge {
+  return { source, target, weight, dist: 100, kind }
 }
 
 /** 造一张链状小图：id 形如 `${prefix}0 …`，边权交替，便于做「改一处 → 指纹必须变」的对照。 */
@@ -503,7 +503,214 @@ describe('单独展示区：无边节点不进力导向', () => {
   })
 })
 
-describe('runLayout：无边节点被单独安置，且主簇不再被它们撑大', () => {
+describe('岛要收拢', () => {
+  it('散开的同岛成员收到一起，左右上下关系不变', () => {
+    const nodes = [
+      node('a', { community: 0 }),
+      node('b', { community: 0 }),
+      node('c', { community: 0 }),
+    ]
+    const pos = new Map<string, { x: number; y: number }>([
+      ['a', { x: 0, y: 0 }],
+      ['b', { x: 300, y: 0 }],
+      ['c', { x: 0, y: 300 }],
+    ])
+    packIslands(nodes, pos)
+    const a = pos.get('a')
+    const b = pos.get('b')
+    const c = pos.get('c')
+    expect(b && a ? b.x : 0).toBeGreaterThan(a?.x ?? 0)
+    expect(c && a ? c.y : 0).toBeGreaterThan(a?.y ?? 0)
+    expect(Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0))).toBeLessThan(80)
+    expect(Math.hypot((c?.x ?? 0) - (a?.x ?? 0), (c?.y ?? 0) - (a?.y ?? 0))).toBeLessThan(80)
+  })
+
+  it('没有坐标的同岛成员补进这座岛', () => {
+    const nodes = [node('a', { community: 0 }), node('b', { community: 0 })]
+    const pos = new Map<string, { x: number; y: number }>([['a', { x: 40, y: 40 }]])
+    packIslands(nodes, pos)
+    const b = pos.get('b')
+    expect(Math.hypot((b?.x ?? 0) - 40, (b?.y ?? 0) - 40)).toBeLessThan(80)
+  })
+
+  it('小岛在上、大岛在下，排成金字塔', () => {
+    const nodes = [
+      node('self', { id: 'self', kind: 'self' }),
+      node('a1', { community: 0 }),
+      node('b1', { community: 1 }),
+      node('b2', { community: 1 }),
+      node('c1', { community: 2 }),
+      node('c2', { community: 2 }),
+      node('c3', { community: 2 }),
+    ]
+    const pos = new Map<string, { x: number; y: number }>([['self', { x: 80, y: 80 }]])
+    seatIslands(nodes, pos, () => 10, 1.7)
+    const yOf = (id: string): number => pos.get(id)?.y ?? 0
+    expect(yOf('self')).toBeLessThan(yOf('a1'))
+    expect(yOf('a1')).toBeLessThan(yOf('b1'))
+    expect(yOf('a1')).toBeLessThan(yOf('c1'))
+    expect(pos.get('self')?.x ?? 1).toBeCloseTo(0)
+    const base = [pos.get('b1'), pos.get('b2'), pos.get('c1'), pos.get('c2'), pos.get('c3')]
+    const xs = base.map((point) => point?.x ?? 0)
+    expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(Math.abs((pos.get('a1')?.x ?? 0)))
+  })
+
+  it('圆圈形状把「我」放在中心，圈子绕在四周', () => {
+    const nodes = [
+      node('self', { id: 'self', kind: 'self' }),
+      node('a1', { community: 0 }),
+      node('b1', { community: 1 }),
+      node('b2', { community: 1 }),
+    ]
+    const pos = new Map<string, { x: number; y: number }>([['self', { x: 40, y: 40 }]])
+    seatIslands(nodes, pos, () => 10, 1.7, 'circle')
+    expect(pos.get('self')).toEqual({ x: 0, y: 0 })
+    const ay = pos.get('a1')?.y ?? 0
+    const by = pos.get('b1')?.y ?? 0
+    expect(ay * by).toBeLessThan(0)
+  })
+
+  it('圆圈分成几层，小岛靠近「我」，不会拉成一条大圆环', () => {
+    const nodes = [node('self', { id: 'self', kind: 'self' })]
+    for (let i = 0; i < 12; i++) nodes.push(node('p' + String(i), { community: i }))
+    const pos = new Map<string, { x: number; y: number }>([['self', { x: 40, y: 40 }]])
+    seatIslands(nodes, pos, () => 10, 1.7, 'circle')
+    const dist = (id: string): number => Math.hypot(pos.get(id)?.x ?? 0, pos.get(id)?.y ?? 0)
+    const distances = Array.from({ length: 12 }, (_, i) => dist('p' + String(i)))
+    const near = Math.min(...distances)
+    const far = Math.max(...distances)
+    expect(pos.get('self')).toEqual({ x: 0, y: 0 })
+    expect(far).toBeLessThan(100)
+    expect(near).toBeGreaterThan(10)
+  })
+
+  it('离得远的岛会靠拢，谁在右边不变', () => {
+    const nodes = [
+      node('a', { community: 0 }),
+      node('b', { community: 0 }),
+      node('c', { community: 1 }),
+      node('d', { community: 1 }),
+    ]
+    const pos = new Map<string, { x: number; y: number }>([
+      ['a', { x: 0, y: 0 }],
+      ['b', { x: 20, y: 0 }],
+      ['c', { x: 900, y: 0 }],
+      ['d', { x: 920, y: 0 }],
+    ])
+    gatherIslands(nodes, pos)
+    const left = ((pos.get('a')?.x ?? 0) + (pos.get('b')?.x ?? 0)) / 2
+    const right = ((pos.get('c')?.x ?? 0) + (pos.get('d')?.x ?? 0)) / 2
+    expect(right).toBeGreaterThan(left)
+    expect(right - left).toBeLessThan(400)
+    expect((pos.get('b')?.x ?? 0) - (pos.get('a')?.x ?? 0)).toBeCloseTo(20)
+  })
+})
+
+describe('圈子要分开', () => {
+  it('只通过「我」连着的两组人，会分成两个圈子', () => {
+    const nodes = [
+      node('self', { kind: 'self' }),
+      node('a'), node('b'), node('c'), node('d'),
+    ]
+    const edges = [
+      edge('self', 'a', 20, 'intimacy'),
+      edge('self', 'b', 20, 'intimacy'),
+      edge('self', 'c', 20, 'intimacy'),
+      edge('self', 'd', 20, 'intimacy'),
+      edge('a', 'b', 2, 'common'),
+      edge('c', 'd', 2, 'common'),
+    ]
+    detectCommunities(nodes, edges)
+    expect(nodes.find(n => n.id === 'a')?.community).toBe(nodes.find(n => n.id === 'b')?.community)
+    expect(nodes.find(n => n.id === 'c')?.community).toBe(nodes.find(n => n.id === 'd')?.community)
+    expect(nodes.find(n => n.id === 'a')?.community).not.toBe(nodes.find(n => n.id === 'c')?.community)
+    expect(nodes.find(n => n.id === 'a')?.community).toBeGreaterThanOrEqual(0)
+  })
+
+  it('两个圈子整团拉开，圈里的相对位置不变', () => {
+    const nodes = [
+      node('self'),
+      node('a1', { community: 0 }),
+      node('a2', { community: 0 }),
+      node('b1', { community: 1 }),
+      node('b2', { community: 1 }),
+    ]
+    const pos = new Map<string, { x: number; y: number }>([
+      ['self', { x: 0, y: 0 }],
+      ['a1', { x: 10, y: 0 }],
+      ['a2', { x: 20, y: 0 }],
+      ['b1', { x: 14, y: 6 }],
+      ['b2', { x: 24, y: 6 }],
+    ])
+    spreadCommunities(nodes, pos, 1.6)
+    expect((pos.get('a2')?.x ?? 0) - (pos.get('a1')?.x ?? 0)).toBeCloseTo(10)
+    expect((pos.get('b2')?.x ?? 0) - (pos.get('b1')?.x ?? 0)).toBeCloseTo(10)
+    const ax = ((pos.get('a1')?.x ?? 0) + (pos.get('a2')?.x ?? 0)) / 2
+    const ay = ((pos.get('a1')?.y ?? 0) + (pos.get('a2')?.y ?? 0)) / 2
+    const bx = ((pos.get('b1')?.x ?? 0) + (pos.get('b2')?.x ?? 0)) / 2
+    const by = ((pos.get('b1')?.y ?? 0) + (pos.get('b2')?.y ?? 0)) / 2
+    expect(Math.hypot(ax - bx, ay - by)).toBeGreaterThan(40)
+    expect(Math.hypot(ax - bx, ay - by)).toBeLessThan(100)
+  })
+
+  it('同一备注的人在同一座岛，共同群不会把别的单位卷进来', () => {
+    const nodes = [
+      node('a1', { remarkGroup: '宜州一中404', label: '甲' }),
+      node('a2', { remarkGroup: '宜州一中404', label: '乙' }),
+      node('b1', { label: '工商银行_南宁分行_张三' }),
+      node('b2', { label: '工商银行_南宁分行_李四' }),
+      node('mix', { label: '路人' }),
+    ]
+    detectCommunities(nodes, [
+      edge('a1', 'a2', 1, 'class'),
+      edge('b1', 'b2', 1, 'class'),
+      edge('a1', 'b1', 3, 'common'),
+      edge('a1', 'mix', 2, 'common'),
+    ])
+    expect(nodes.find(n => n.id === 'a1')?.community).toBe(nodes.find(n => n.id === 'a2')?.community)
+    expect(nodes.find(n => n.id === 'b1')?.community).toBe(nodes.find(n => n.id === 'b2')?.community)
+    expect(nodes.find(n => n.id === 'a1')?.community).not.toBe(nodes.find(n => n.id === 'b1')?.community)
+    expect(nodes.find(n => n.id === 'mix')?.community).toBe(-1)
+  })
+
+  it('直接来往的人成组，过大的共同群不再单独成岛', () => {
+    const friends = [node('p'), node('q')]
+    detectCommunities(friends, [edge('p', 'q', 1, 'social')])
+    expect(friends[0]?.community).toBe(friends[1]?.community)
+    expect(friends[0]?.community).toBeGreaterThanOrEqual(0)
+    const crowd = Array.from({ length: 9 }, (_, index) => node(`c${index}`))
+    const links = Array.from({ length: 8 }, (_, index) => edge(`c${index}`, `c${index + 1}`, 1, 'common'))
+    detectCommunities(crowd, links)
+    expect(crowd.every((person) => person.community < 0)).toBe(true)
+  })
+
+  it('人多的分行各自成岛，落单的分行才并到上一级', () => {
+    const split = [
+      node('n1', { label: '工商银行_南宁分行_甲' }),
+      node('n2', { label: '工商银行_南宁分行_乙' }),
+      node('y1', { label: '工商银行_玉林分行_丙' }),
+    ]
+    detectCommunities(split, [])
+    expect(split.find(n => n.id === 'n1')?.community).toBe(split.find(n => n.id === 'n2')?.community)
+    expect(split.find(n => n.id === 'y1')?.community).toBe(-1)
+    const merged = [
+      node('n1', { label: '工商银行_南宁分行_甲' }),
+      node('y1', { label: '工商银行_玉林分行_丙' }),
+    ]
+    detectCommunities(merged, [])
+    expect(merged[0]?.community).toBe(merged[1]?.community)
+    expect(merged[0]?.community).toBeGreaterThanOrEqual(0)
+    const courts = [
+      node('c1', { label: '法院_梧州万秀_甲' }),
+      node('c2', { label: '法院_来宾市区_乙' }),
+    ]
+    detectCommunities(courts, [])
+    expect(courts[0]?.community).toBe(-1)
+    expect(courts[1]?.community).toBe(-1)
+  })
+})
+
+describe('runLayout：没有分组的人不另成一座岛', () => {
   /** 一个「我 + 4 个互连好友」的核，外加 n 个无边节点。 */
   function graphWithLoners(n: number): BuiltGraph {
     const nodes = [node('self'), node('a'), node('b'), node('c'), node('d'), ...Array.from({ length: n }, (_, i) => node(`iso${i}`))]
@@ -514,45 +721,28 @@ describe('runLayout：无边节点被单独安置，且主簇不再被它们撑�
     return { nodes, edges, communityCount: 0, kindCounts: {} }
   }
 
-  it('覆盖全部节点：无边节点也要有坐标（否则画不出、点不中）', async () => {
+  it('没有分组的人没有坐标，不会被画成一座岛', async () => {
     const g = graphWithLoners(6)
     const r = await runLayout({ graph: g, settings: s(), fresh: true })
-    expect(r.positions.size).toBe(g.nodes.length)
-    for (const n of g.nodes) {
-      const p = r.positions.get(n.id)
-      expect(p, `${n.id} 没有坐标`).toBeTruthy()
-      expect(Number.isFinite(p?.x)).toBe(true)
-      expect(Number.isFinite(p?.y)).toBe(true)
-    }
+    for (const id of ['self', 'a', 'b', 'c', 'd']) expect(r.positions.has(id)).toBe(true)
+    for (let i = 0; i < 6; i++) expect(r.positions.has(`iso${i}`)).toBe(false)
   })
 
-  it('★ 无边节点排在核心下方，不会散到四周（这是「避免大片空白」的关键）', async () => {
-    const g = graphWithLoners(8)
+  it('只和我相连、跟别人没有来往的人也不进岛', async () => {
+    const g = graphWithLoners(0)
+    g.nodes.push(node('only-me'))
+    g.edges.push(edge('self', 'only-me', 1))
     const r = await runLayout({ graph: g, settings: s(), fresh: true })
-    const coreIds = ['self', 'a', 'b', 'c', 'd']
-    const coreMaxY = Math.max(...coreIds.map(id => r.positions.get(id)?.y ?? -Infinity))
-    for (let i = 0; i < 8; i++) {
-      expect(r.positions.get(`iso${i}`)?.y ?? -Infinity).toBeGreaterThan(coreMaxY)
-    }
+    expect(r.positions.has('only-me')).toBe(false)
+    for (const id of ['self', 'a', 'b', 'c', 'd']) expect(r.positions.has(id)).toBe(true)
   })
 
-  it('★ 力度滑杆不会把它们洗牌：不同力度下，无边节点内部的相对排布完全一致', async () => {
+  it('力度滑杆不会把没有分组的人再排出来', async () => {
     const g = graphWithLoners(9)
-    const grab = async (settings: GraphSettings): Promise<string[]> => {
+    for (const settings of [s({ forceRepulsion: 1 }), s({ forceRepulsion: 11 }), s({ forceCentripetal: 0.2, communitySeparation: 4 })]) {
       const r = await runLayout({ graph: g, settings, fresh: true })
-      // 只取「相对第一个槽位」的偏移 —— 整块跟着主簇平移是应该的，被洗牌才是问题。
-      // 取到 6 位小数：整块平移量不同，浮点相减会留下末位噪声，那与「排布变了」是两回事。
-      const base = r.positions.get('iso0')
-      return Array.from({ length: 9 }, (_, i) => {
-        const p = r.positions.get(`iso${i}`)
-        return `${((p?.x ?? 0) - (base?.x ?? 0)).toFixed(6)},${((p?.y ?? 0) - (base?.y ?? 0)).toFixed(6)}`
-      })
+      for (let i = 0; i < 9; i++) expect(r.positions.has(`iso${i}`)).toBe(false)
     }
-    const a = await grab(s({ forceRepulsion: 1 }))
-    const b = await grab(s({ forceRepulsion: 11 }))
-    const c = await grab(s({ forceCentripetal: 0.2, communitySeparation: 4 }))
-    expect(a).toEqual(b)
-    expect(a).toEqual(c)
   })
 
   it('没有无边节点时行为不变（不会凭空多出坐标或挪动已有节点）', async () => {
@@ -561,10 +751,9 @@ describe('runLayout：无边节点被单独安置，且主簇不再被它们撑�
     expect(r.positions.size).toBe(g.nodes.length)
   })
 
-  it('全是无边节点也不炸：全部进单独展示区', async () => {
+  it('全是没有分组的人也不炸，不会凭空排出一座岛', async () => {
     const g: BuiltGraph = { nodes: [node('x'), node('y')], edges: [], communityCount: 0, kindCounts: {} }
     const r = await runLayout({ graph: g, settings: s(), fresh: true })
-    expect(r.positions.size).toBe(2)
-    expect(Number.isFinite(r.positions.get('x')?.y)).toBe(true)
+    expect(r.positions.size).toBe(0)
   })
 })

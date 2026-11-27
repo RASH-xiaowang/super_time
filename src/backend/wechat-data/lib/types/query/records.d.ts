@@ -12,11 +12,15 @@ export declare function queryRecords(decryptedDir: string, kind: string, limit?:
     from?: number;
     to?: number;
     direction?: 'asc' | 'desc';
+    sort?: 'time' | 'amount';
+    selfUsername?: string;
 }): {
     items: RecordItem[];
     total: number;
     readError?: string;
 };
+/** 按已写入的 `amount` 排序。读不出金额的行放在最后，不把空值当成 0。 */
+export declare function sortRecordsByAmount(items: RecordItem[], direction: 'asc' | 'desc'): void;
 /**
  * 撤回消息列表（2026-09-29 起：**优先读我们自己的归档库**，见 `anti-revoke-archive.ts`）。
  *

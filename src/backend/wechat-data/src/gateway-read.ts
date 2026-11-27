@@ -47,6 +47,8 @@ import type { FeedbackRecord, IntentKind, RerankWeights } from './query/retrieva
 import { queryLedger } from './query/ledger.ts'
 import type { WordCloudOptions, WordCloudResult } from './query/wordcloud.ts'
 import { queryContact360 } from './query/contact360.ts'
+import { queryPortraitVolumesCached } from './query/portrait-volume.ts'
+import type { PortraitVolume } from './types.ts'
 import { queryGroupInsights } from './query/group-insights.ts'
 import { queryAssetInsights } from './query/asset-insights.ts'
 import { queryMediaAssets } from './query/media-assets.ts'
@@ -129,8 +131,8 @@ export abstract class GatewayRead extends GatewayCore {
    * @returns RecordsSnapshot: record items (items + total).
    */
   @Remote('getRecords')
-  getRecords(options: { kind: string; limit?: number; offset?: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc' }): RecordsSnapshot {
-    return queryRecords(this._dirs.decrypted, options.kind, options.limit, options.offset, options.q, options)
+  getRecords(options: { kind: string; limit?: number; offset?: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc'; sort?: 'time' | 'amount' }): RecordsSnapshot {
+    return queryRecords(this._dirs.decrypted, options.kind, options.limit, options.offset, options.q, { ...options, selfUsername: this.selfUsername() })
   }
 
   /**
@@ -663,6 +665,17 @@ export abstract class GatewayRead extends GatewayCore {
   @Remote('getContact360')
   getContact360(options: { username: string }): Contact360Snapshot {
     return queryContact360(this._dirs.decrypted, options.username)
+  }
+
+  /**
+   * 批量读取联系人的聊天、图片和朋友圈条数，供好友目录按信息量排序。
+   * @param options - `usernames` 为目录里的好友 id。
+   * @returns 每人三项计数；没有记录的人返回 0。
+   */
+  @Remote('getPortraitVolumes')
+  async getPortraitVolumes(options: { usernames: string[] }): Promise<PortraitVolume[]> {
+    const usernames = Array.isArray(options?.usernames) ? options.usernames : []
+    return queryPortraitVolumesCached(this._dirs.decrypted, usernames)
   }
 
   @Remote('getCalls')

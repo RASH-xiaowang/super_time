@@ -93,7 +93,7 @@ export declare function pumpSnsDecodeCache(wechatBaseDir: string | undefined, ae
     steps: number;
     backlog?: number;
 }>;
-export declare function snsAttachProgressForTest(wechatBaseDir: string): {
+export declare function snsAttachProgressForTest(wechatBaseDir: string, aesKey?: string, xorKey?: number): {
     decoded: number;
     pending: number;
     paths: number;

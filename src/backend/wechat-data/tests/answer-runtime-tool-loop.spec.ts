@@ -168,6 +168,43 @@ describe('runToolLoop：工具调用与结果回放', () => {
     expect(out.toolResults).toHaveLength(1)
     expect(out.cachedResults).toHaveLength(1)
   })
+
+  it('同一轮里不同的工具一起执行，慢的那个不挡住快的那个', async () => {
+    const order: string[] = []
+    const slow = vi.fn(async () => {
+      order.push('slow-start')
+      await new Promise(resolve => setTimeout(resolve, 40))
+      order.push('slow-end')
+      return hitResult('search_messages', [])
+    })
+    const fast = vi.fn(() => {
+      order.push('fast')
+      return hitResult('aggregate_messages', [])
+    })
+    const runTurn = vi.fn(async (input: Parameters<RunChatTurnFn>[0]) => {
+      if (input.messages.some(message => message.content.some(block => block.type === 'tool-result'))) {
+        return turn({ text: '好了。' })
+      }
+      return turn({
+        calls: [
+          { id: 'call_slow', name: 'search_messages', args: { keywords: ['合同'] } },
+          { id: 'call_fast', name: 'aggregate_messages', args: { question: '多少条' } },
+        ],
+      })
+    }) as unknown as RunChatTurnFn
+
+    const out = await runToolLoop(loopInput({
+      profileTools: [
+        fakeTool('search_messages', slow),
+        fakeTool('aggregate_messages', fast),
+      ],
+      runTurn,
+    }))
+
+    expect(order.indexOf('fast')).toBeGreaterThan(order.indexOf('slow-start'))
+    expect(order.indexOf('fast')).toBeLessThan(order.indexOf('slow-end'))
+    expect(out.toolCalls.map(trace => trace.name)).toEqual(['search_messages', 'aggregate_messages'])
+  })
 })
 
 describe('runToolLoop：会话锁定的必填参数注入', () => {

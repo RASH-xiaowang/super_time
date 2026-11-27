@@ -299,8 +299,8 @@ export abstract class GatewayTaskCenter extends GatewayChatAiReply {
   /**
    * 单飞 + 合并的**投递**调度器。
    *
-   * 与扫描分开：一次投递最多 10 条、每条 2 次尝试 / 15s 超时，最坏能跑上百秒；
-   * 如果把它塞在扫描的 Promise 里（旧实现），这期间所有新消息的触发都会被堵住。
+   * 与扫描分开：一批先捞 10 条，最多 4 条同时出网；写满且有成功就继续捞。
+   * 每条 Webhook 最多 2 次尝试 / 15s 超时。投递再慢也不能堵住下一拍扫描。
    * @returns 这一拍（或正在跑的那一拍）的投递摘要。
    */
   protected scheduleTaskDispatch(): Promise<TaskDispatchOutcome> {

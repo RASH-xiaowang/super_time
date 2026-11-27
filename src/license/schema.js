@@ -11,11 +11,13 @@ const {
   FEATURE_GROUPS,
   FEATURE_LABELS,
   GRANULAR_FEATURES,
+  APP_CAPABILITIES,
   featureLabel,
   isKnownFeature,
 } = require('./features')
 
 const PRODUCT_ID = 'super-time-wechat'
+const APP_CAPABILITY_IDS = APP_CAPABILITIES.map((item) => item.id)
 
 /**
  * 时钟回拨容差：系统时间比「上次看到的时间」倒退了超过这个量才算异常。
@@ -95,7 +97,47 @@ function validatePayload(payload) {
     return { ok: false, reason: 'bad_appVersionMin' }
   }
 
+  const appsError = validateAppsSection(p.apps)
+  if (appsError !== null) return { ok: false, reason: appsError }
+
   return { ok: true, value: p }
+}
+
+/**
+ * 校验可选的应用托管段 `apps`。
+ *
+ * 旧证没有这一段（返回 null 表示放行）；新证可以只写 `maxInstances`，
+ * 其余字段缺省时由服务层补默认值。这里只拦「结构错」与「超范围」，
+ * 不要求功能位与段同时存在 —— 那种一致性由签发台与 `getAppEntitlement` 保证。
+ * @param {unknown} apps - payload.apps。
+ * @returns {string|null} 错误原因；null 表示通过。
+ */
+function validateAppsSection(apps) {
+  if (apps == null) return null
+  if (typeof apps !== 'object' || Array.isArray(apps)) return 'bad_apps'
+  for (const key of Object.keys(apps)) {
+    // 只接受已知应用键，避免签发时把某个应用的额度误写到别的应用上。
+    if (key !== 'superlanguage') return `unknown_app:${key}`
+  }
+  const app = apps.superlanguage
+  if (app == null) return null
+  if (typeof app !== 'object' || Array.isArray(app)) return 'bad_apps'
+  if (app.maxInstances != null) {
+    const value = app.maxInstances
+    if (!Number.isInteger(value) || value < 1 || value > 500) return 'bad_apps_seats'
+  }
+  if (app.maxJobsPerHour != null) {
+    const value = app.maxJobsPerHour
+    if (!Number.isInteger(value) || value < 1 || value > 100000) return 'bad_apps_quota'
+  }
+  if (app.standalone != null && typeof app.standalone !== 'boolean') return 'bad_apps_standalone'
+  if (app.caps != null) {
+    if (!Array.isArray(app.caps) || app.caps.length === 0) return 'bad_apps_caps'
+    for (const cap of app.caps) {
+      if (typeof cap !== 'string' || !APP_CAPABILITY_IDS.includes(cap)) return `bad_app_cap:${String(cap)}`
+    }
+  }
+  return null
 }
 
 /**

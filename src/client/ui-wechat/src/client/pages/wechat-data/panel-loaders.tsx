@@ -18,14 +18,18 @@ export const ContactsPanel = lazy(() => import('./panels/Contacts.tsx').then(({ 
 export const PortraitsPanel = lazy(() => import('./panels/Portraits.tsx').then(({ PortraitsPanel }) => ({ default: PortraitsPanel })))
 export const MomentsPanel = lazy(() => import('./panels/moments-panel.tsx').then(({ MomentsPanel }) => ({ default: MomentsPanel })))
 export const FavoritesPanel = lazy(() => import('./panels/Favorites.tsx').then(({ FavoritesPanel }) => ({ default: FavoritesPanel })))
+// 本地工具：清单读后端注册表，纯展示（卡片网格）。
+export const LocalToolsPanel = lazy(() => import('./panels/LocalTools.tsx').then(({ LocalToolsPanel }) => ({ default: LocalToolsPanel })))
+// 应用托管：SuperLanguage 实例的席位、部署与运行态（授权主机 = 主进程）。
+export const AppsHostPanel = lazy(() => import('./panels/AppsHost.tsx').then(({ AppsHostPanel }) => ({ default: AppsHostPanel })))
 export const EmoticonsPanel = lazy(() => import('./panels/Emoticons.tsx').then(({ EmoticonsPanel }) => ({ default: EmoticonsPanel })))
 export const FilesPanel = lazy(() => import('./panels/Files.tsx').then(({ FilesPanel }) => ({ default: FilesPanel })))
+export const FundsView = lazy(() => import('./panels/FundsView.tsx').then(({ FundsView }) => ({ default: FundsView })))
 export const RecordsPanel = lazy(() => import('./panels/Records.tsx').then(({ RecordsPanel }) => ({ default: RecordsPanel })))
 export const LedgerPanel = lazy(() => import('./panels/Ledger.tsx').then(({ LedgerPanel }) => ({ default: LedgerPanel })))
 export const TasksPanel = lazy(() => import('./panels/Tasks.tsx').then(({ TasksPanel }) => ({ default: TasksPanel })))
 // 任务信息（2026-10-19）：关键词触发式任务 + 触发记录的双栏面板。
 export const TaskCenterPanel = lazy(() => import('./panels/TaskCenter.tsx').then(({ TaskCenterPanel }) => ({ default: TaskCenterPanel })))
-export const AgentDeskPanel = lazy(() => import('./panels/AgentDesk.tsx').then(({ AgentDeskPanel }) => ({ default: AgentDeskPanel })))
 // 消息列表（2026-10-27）：任务首次触发 / 局域网 Webhook / 手动回复的统一投递台账。
 export const MessageListPanel = lazy(() => import('./panels/MessageListPanel.tsx').then(({ MessageListPanel }) => ({ default: MessageListPanel })))
 export const GroupInsightsPanel = lazy(() => import('./panels/GroupInsights.tsx').then(({ GroupInsightsPanel }) => ({ default: GroupInsightsPanel })))

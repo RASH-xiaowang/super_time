@@ -243,7 +243,6 @@ export function OperationLogPanel(): React.JSX.Element {
     <section className={css.root}>
       <PanelHeader
         title="操作日志"
-        desc="仅记录操作元数据（时间/类型/动作/对象/结果/上下文），不保存会话内容 · 最多 500 条"
         actions={(
           <ActionMenu
             busy={opLoading}

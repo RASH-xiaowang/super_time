@@ -2,9 +2,8 @@
  * Normalize and group the answer-run stream into one readable trace.
  *
  * The model emits reasoning and tool stages as two independent streams. A
- * round is the stable boundary we can rely on across both streams, so the UI
- * renders "tool work -> round reasoning" instead of showing one global
- * reasoning block above every tool call.
+ * round is the stable boundary we can rely on across both streams. The UI
+ * shows each round as thinking, then framework steps, then the tool pair.
  */
 import type { AskStage } from './ask-stage-merge.ts'
 import type { ToolView } from './answer-run-view-model.ts'

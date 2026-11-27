@@ -77,7 +77,13 @@ function defaultConfig(): Record<string, unknown> {
  * 为什么：`config.json` 是「用户可以手工编辑、出问题会被整目录拷贝/交给支持人员」的文件
  * （H1/N6 那条泄漏路径的载体）。密钥单独放 `secrets.json`，并收紧到当前用户可访问。
  */
-const SECRET_FIELDS = ['db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token'] as const
+const SECRET_FIELDS = [
+  'db_enc_key', 'image_aes_key', 'image_xor_key', 'api_token',
+  // 2026-11-24：AI 回复工具（天气 / 网页搜索）的密钥。它们此前只在 secrets.json
+  // 或环境变量里能生效，而**没有任何界面入口** —— 加进这一族之后，界面保存时会
+  // 自动落到 secrets.json，并且 `getConfig()` 永远不会把它读回渲染层。
+  'reply_weather_api_key', 'reply_search_api_key',
+] as const
 
 /** 密钥文件路径：与后端 config.json 同级（数据根，不是宿主的状态目录）。 */
 function secretsPath(decryptedDir: string): string {
@@ -237,10 +243,17 @@ export function getConfig(decryptedDir: string): Record<string, unknown> {
   const cfg = defaultConfig()
   const raw = readRawConfig(p)
   if (raw) Object.assign(cfg, raw)
+  // Reply-provider secrets are server-only, even if accidentally placed in raw config.
+  // ⚠️ 这两行必须在**下面那个 SECRET_FIELDS 循环之前之后都成立**：光在前面删不够 ——
+  // 循环会按「secrets 优先」把它们从 secrets.json 里再读回 cfg（2026-11-24 实测踩到，
+  // 症状是 `getWechatConfig` 把 API Key 原样回了渲染层，而这正是要防的那条泄漏路径）。
+  const SERVER_ONLY_SECRETS = new Set(['reply_weather_api_key', 'reply_search_api_key'])
+  for (const field of SERVER_ONLY_SECRETS) delete cfg[field]
   // 密钥来源：secrets.json 优先（迁移后它才是唯一真源）；config.json 里若还有
   // 旧值就沿用它 —— 下一次 saveConfig 会把它搬进 secrets.json 并从这里删掉。
   const { values: secrets } = readSecrets(decryptedDir)
   for (const field of SECRET_FIELDS) {
+    if (SERVER_ONLY_SECRETS.has(field)) continue
     const fromSecrets = secrets[field]
     // 同 secretIsMeaningful：secrets 里若是空串/默认值（老版本可能写进去过），
     // 不该压住 config.json 里的真值 —— 这也是「钉住 136」的自愈路径。
@@ -375,4 +388,21 @@ function clearDecodedImages(dir: string): void {
       try { rmSync(join(dir, name), { recursive: true, force: true }) } catch { /* best effort */ }
     }
   } catch { /* best effort */ }
+}
+
+/** Server-only reply-tool settings. Never merged into getConfig/renderer snapshots.
+ * Public provider/access choices live in config.json; keys only in secrets.json/env.
+ * Empty provider is intentionally disabled (no assumption of free commercial access).
+ */
+export function readReplyToolsConfig(decryptedDir: string): import('../query/reply-tools/types.ts').ReplyToolsConfig {
+  const raw = readRawConfig(configPath(decryptedDir)) ?? {}
+  const secrets = readSecrets(decryptedDir)
+  const pick = (value: unknown, fallback: string | undefined): string => typeof value === 'string' && value.trim() !== '' ? value.trim() : fallback?.trim() ?? ''
+  return {
+    weatherProvider: pick(raw['reply_weather_provider'], process.env['SUPERTIME_REPLY_WEATHER_PROVIDER']),
+    weatherAccess: pick(raw['reply_weather_access'], process.env['SUPERTIME_REPLY_WEATHER_ACCESS']),
+    weatherApiKey: secrets.corrupt ? '' : pick(secrets.values['reply_weather_api_key'], process.env['SUPERTIME_REPLY_WEATHER_API_KEY']),
+    searchProvider: pick(raw['reply_search_provider'], process.env['SUPERTIME_REPLY_SEARCH_PROVIDER']),
+    searchApiKey: secrets.corrupt ? '' : pick(secrets.values['reply_search_api_key'], process.env['SUPERTIME_REPLY_SEARCH_API_KEY']),
+  }
 }

@@ -13,7 +13,7 @@ GitHub Pages 直接发布本目录（见 `.github/workflows/pages.yml`，会先 
 当前页面口径（更新时请再核对一次公开 Release）：
 
 - 公开可下载版本：**1.2.1**（`Super-Time-Setup-1.2.1.exe`，发布于 2026-11-16）
-- 本机产品版本：**1.4.1**（已在仓库中，尚未作为 GitHub Release 发布）
+- 本机产品版本：**1.4.2**（已在仓库中，尚未作为 GitHub Release 发布）
 
 ## 使用场景数据
 

@@ -27,8 +27,6 @@ import { IdentityName } from './identity.tsx'
 import { InfoRow } from './chats-info-rows.tsx'
 import { hasMoreMembers, memberMoreLabel, showsAddTile } from './chats-member-view.ts'
 import { TaskCreateDialog } from './task-create-dialog.tsx'
-import { CustomerPortraitDialog } from './CustomerPortraitDialog.tsx'
-import type { CustomerIdentity } from './customer-profile.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import css from './chats.module.css'
 import cssrows from './chats-rows.module.css'
@@ -101,28 +99,18 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
   } = props
   /** 底部动作位「新建任务」的弹窗开关（只在点开时渲染，抽屉本身不关心它）。 */
   const [taskOpen, setTaskOpen] = useState(false)
-  /** 点击成员后打开的完整画像；悬浮资料卡仍作为轻量预览保留。 */
-  const [portraitMember, setPortraitMember] = useState<GroupMember | null>(null)
   // 抽屉关掉时顺手收掉弹窗：本组件常驻在渲染树里，不重置的话下次开抽屉会直接弹出旧弹窗。
   useEffect(() => {
     if (open) return
     setTaskOpen(false)
-    setPortraitMember(null)
   }, [open])
   if (!open || !isGroup) return null
-  const portraitIdentity: CustomerIdentity | null = portraitMember === null
-    ? null
-    : {
-      username: portraitMember.username,
-      displayName: portraitMember.name,
-      category: 'member',
-      categories: ['member'],
-      ...(portraitMember.enterpriseName ? { enterpriseName: portraitMember.enterpriseName } : {}),
-      ...(portraitMember.signature ? { description: portraitMember.signature } : {}),
-    }
   return (
+    <>
+    <button type="button" className={cssshell.drawerScrim} aria-label="关闭群聊信息" onClick={() => { setGroupInfoOpen(false); setProfileMember(null) }} />
     <div
       className={csscards.groupInfo}
+      data-edge="drawer"
       data-side-panel-view=""
       role="dialog"
       aria-modal="true"
@@ -165,15 +153,12 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
               <>
                 <div className={cssshell.memberGrid}>
                   {shownMembers.map(m => (
-                    <button
-                      type="button"
+                    <div
                       key={m.username}
                       className={cssrows.memberTile}
                       title={`${withEnterprise(m.name, m.enterpriseName)}\n${m.username}`}
                       onMouseEnter={(e) => { showMemberProfile(m, e.currentTarget) }}
                       onMouseLeave={hideMemberProfile}
-                      onClick={() => { hideMemberProfile(); setPortraitMember(m) }}
-                      aria-label={`查看 ${withEnterprise(m.name, m.enterpriseName)} 的客户画像与标签`}
                     >
                       {/* 与会话列表同一套懒挂载：展开到 200 人时不再一次性发起 200 个头像请求（审计 P2-4） */}
                       <LazyMount placeholder={<span className={css.avatarStub} style={{ width: 48, height: 48 }} />} rootMargin="300px 0px">
@@ -181,7 +166,7 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
                       </LazyMount>
                       {groupInfo.owner === m.username && <span className={cssrows.memberBadge}>群主</span>}
                       <span className={cssrows.memberName}>{withEnterprise(m.name, m.enterpriseName)}</span>
-                    </button>
+                    </div>
                   ))}
                   {/*
                     故意的死控件（L13）：微信「聊天信息」页的成员网格末尾就是这个「＋ 添加」方块，
@@ -271,16 +256,7 @@ export function ChatsGroupInfoView(props: ChatsGroupInfoViewProps): React.JSX.El
           onClose={() => { setTaskOpen(false) }}
         />
       )}
-      <CustomerPortraitDialog
-        open={portraitMember !== null}
-        identity={portraitIdentity}
-        context={{
-          source: 'group-member',
-          isSelf: portraitMember?.isSelf === true,
-          isGroupOwner: portraitMember !== null && groupInfo?.owner === portraitMember.username,
-        }}
-        onClose={() => { setPortraitMember(null) }}
-      />
     </div>
+    </>
   )
 }

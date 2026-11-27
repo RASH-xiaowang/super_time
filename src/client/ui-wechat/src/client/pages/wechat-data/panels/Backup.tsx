@@ -180,7 +180,6 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
       ) : (
         <PanelHeader
           title="备份管家"
-          desc="本地快照（目录拷贝 / AES-256 加密 WCB）"
           actions={(
             <>
               <input type="password" className={css.backupInput} placeholder="备份密码（加密备份/恢复用）" value={password} onChange={(e) => { setPassword(e.target.value) }} aria-label="备份密码" />
@@ -203,7 +202,6 @@ export function BackupPanel({ embedded = false }: { embedded?: boolean } = {}): 
             <EmptyState
               icon="💾"
               title="暂无备份"
-              desc="「创建备份」生成目录快照（原样拷贝，可增量）；「加密备份」生成 AES-256 加密包（适合存到外部盘）。两者都只写本机，不会上传。"
             />
           </div>
         )}

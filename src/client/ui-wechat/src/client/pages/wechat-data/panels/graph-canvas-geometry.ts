@@ -63,16 +63,44 @@ export function connectivityBackbone(edges: readonly GEdge[]): Set<number> {
  *   刻意收节点表而不是个数：只出现在边表里的 id 不会被画出来，为它们保底纯属浪费预算。
  * @returns 实际要画的边（保持输入顺序，绘制顺序稳定）。
  */
+const DIRECT_SOCIAL = new Set([
+  'invite', 'invitation', 'reply', 'quote_reply', 'mention_user', 'mention_member', 'at_user',
+  'call', 'moment_like', 'moment_comment', 'moment_reply', 'transfer', 'redpacket', 'friend_request',
+])
+
+function isRemarkLink(edge: GEdge): boolean {
+  return edge.kind === 'class' || (edge.relations ?? []).some((relation) => relation.kind === 'class')
+}
+
+function isDirectSocial(edge: GEdge): boolean {
+  if (edge.kind === 'social') return true
+  return (edge.relations ?? []).some((relation) => relation.rawKind !== undefined && DIRECT_SOCIAL.has(relation.rawKind))
+}
+
 export function selectEdges(edges: readonly GEdge[], nodes: readonly GNode[]): GEdge[] {
   const backbone = connectivityBackbone(edges)
   const authoritative: number[] = []
+  const remarkLinks: number[] = []
+  const directSocial: number[] = []
   edges.forEach((edge, index) => {
     if (edge.authoritative === true) authoritative.push(index)
+    if (isRemarkLink(edge)) remarkLinks.push(index)
+    if (isDirectSocial(edge)) directSocial.push(index)
   })
-  // 后端观测边优先于客户端推导边；只要它们自身不超过绝对上限，就不要再被密度预算裁掉。
-  const budget = edgeBudget(nodes.length, edges.length, Math.max(backbone.size, authoritative.length))
+  directSocial.sort((a, b) => (edges[b]?.weight ?? 0) - (edges[a]?.weight ?? 0))
+  const keptSocial = directSocial.slice(0, 400)
+  // 同备注、以及回复/邀请/通话这类直接来往，不能被共同群的线挤掉。
+  const budget = edgeBudget(
+    nodes.length,
+    edges.length,
+    Math.max(backbone.size, authoritative.length + remarkLinks.length + keptSocial.length),
+  )
   if (edges.length <= budget) return [...edges]
   const chosen = new Set<number>(backbone)
+  for (const index of [...remarkLinks, ...keptSocial]) {
+    if (chosen.size >= budget) break
+    chosen.add(index)
+  }
   authoritative
     .slice()
     .sort((a, b) => (edges[b]?.weight ?? 0) - (edges[a]?.weight ?? 0))
@@ -113,6 +141,52 @@ export function selectEdges(edges: readonly GEdge[], nodes: readonly GNode[]): G
     }
   }
   return edges.filter((_, i) => chosen.has(i))
+}
+
+const SELF_NODE_ID = 'self'
+
+function nodeHasPeer(id: string, edges: readonly GEdge[]): boolean {
+  for (const edge of edges) {
+    if (edge.kind === 'initial') continue
+    const other = edge.source === id ? edge.target : edge.target === id ? edge.source : ''
+    if (other !== '' && other !== id && other !== SELF_NODE_ID) return true
+  }
+  return false
+}
+
+export interface FrameEdges {
+  drawn: GEdge[]
+  spokes: Map<string, GEdge>
+}
+
+let frameCache: { edges: readonly GEdge[]; nodes: readonly GNode[]; pack: FrameEdges } | null = null
+
+/**
+ * 这一帧真正要画的线。
+ * 只和「我」相连的人已经排在外圈，那条长辐条平时不画，避免每帧描几百条横跨画面的线。
+ * 点中或悬停那个人时，用 `spokes` 把这一条补上。
+ */
+export function frameEdges(edges: readonly GEdge[], nodes: readonly GNode[]): FrameEdges {
+  if (frameCache && frameCache.edges === edges && frameCache.nodes === nodes) return frameCache.pack
+  const outer = new Set<string>()
+  for (const node of nodes) {
+    if (node.id === SELF_NODE_ID || node.kind === 'self') continue
+    if (!nodeHasPeer(node.id, edges)) outer.add(node.id)
+  }
+  const spokes = new Map<string, GEdge>()
+  const kept: GEdge[] = []
+  for (const edge of edges) {
+    if (edge.kind === 'initial') continue
+    const other = edge.source === SELF_NODE_ID ? edge.target : edge.target === SELF_NODE_ID ? edge.source : ''
+    if (other !== '' && outer.has(other)) {
+      spokes.set(other, edge)
+      continue
+    }
+    kept.push(edge)
+  }
+  const pack = { drawn: selectEdges(kept, nodes), spokes }
+  frameCache = { edges, nodes, pack }
+  return pack
 }
 
 /**

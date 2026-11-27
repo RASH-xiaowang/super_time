@@ -86,7 +86,9 @@ export type DecodeDatPayload = {
     error: string;
 };
 /** Decrypt raw .dat bytes (XOR / V1 / V2) without running a wxgf transcoder. */
-export declare function decodeDatPayload(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number): DecodeDatPayload;
+export declare function decodeDatPayload(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number, opts?: {
+    snsMemory?: boolean;
+}): DecodeDatPayload;
 /** 把转码产物按实际魔数收口；失败降级为 hevc（与改造前行为一致）。 */
 export declare function renderWxgfTranscode(decrypted: Uint8Array, t: WxgfTranscodeResult): {
     bytes: Uint8Array;

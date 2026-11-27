@@ -18,8 +18,7 @@ import {
 } from '../api.ts'
 import type { LedgerSnapshot, OverviewInsights, OverviewMomentsAuthor, OverviewSnapshot, StorageSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
 import { CACHE_BASE, CACHE_INSIGHTS, CACHE_LEDGER, CACHE_STOR, CACHE_TIME } from './overview-cache-keys.ts'
-import { Card, LoadingState } from '../ui/kit.tsx'
-import kitCss from '../ui/kit.module.css'
+import { Card, LoadingState, PageBoot } from '../ui/kit.tsx'
 import css from './overview.module.css'
 import { CanvasCard } from './card-canvas-card.tsx'
 import { CalendarHeatmapPanel } from './overview-export.ts'
@@ -91,117 +90,13 @@ export const MSG_BUCKETS: ReadonlyArray<{ label: string; key: keyof OverviewInsi
   { label: '系统消息', key: 'system' },
 ]
 
-/** 骨架行：带微光扫过的占位条。 */
-export function SkLine({ width = '100%', height = 12, className }: {
-  width?: string
-  height?: number
-  className?: string
-}): React.JSX.Element {
-  return <span className={`${css.skLine} ${className ?? ''}`} style={{ width, height }} />
-}
-
-/** 骨架统计项：数值占位 + 真实标签。 */
-export function SkMetric({ label }: { label: string }): React.JSX.Element {
-  return (
-    <div className={css.metric}>
-      <SkLine width="72%" height={16} />
-      <span className={kitCss.textCaption}>{label}</span>
-    </div>
-  )
-}
-
-/** 骨架条形项：标签 + “真实”的条形轨道。 */
-export function SkBar({ label, width = '80%' }: { label: string; width?: string }): React.JSX.Element {
-  return (
-    <div className={css.cat}>
-      <div className={css.catRow}>
-        <span className={css.catLabel}>{label}</span>
-        <SkLine width="110px" height={9} />
-      </div>
-      <div className={css.bar}>
-        <div className={css.skBarFill} style={{ width }} />
-      </div>
-    </div>
-  )
-}
-
-/** 骨架屏：保留总览的真实栏目/标签，仅数值与内容用骨架占位。
- *
- * 2026-10-19 起与「4 KPI + 6 卡 + 更多分析」的新结构保持一致：
- * 不再画 14 张卡片的占位墙（加载完布局会整体跳变）。
- */
+/** 总览第一次打开：说明正在统计，不画灰色占位卡。 */
 export function SkeletonOverview(): React.JSX.Element {
   return (
-    <div className={css.skeleton} aria-label="正在加载微信数据总览" aria-busy="true">
-      {/* KPI 条：4 格 */}
-      <div className="row g-2">
-        {CARDS.map(card => (
-          <div key={card.key} className="col-6 col-sm-3">
-            <div className={css.skeletonStat}>
-              <SkLine width="52%" height={18} />
-              <span className={kitCss.textCaption}>{card.label}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {/* 趋势 + 热力 */}
-      <div className={css.skeletonRows}>
-        <div className={css.skeletonCard}>
-          <SkLine width="36%" height={12} />
-          <div className={css.skeletonGrid}>
-            {['近 7 天消息', '近 30 天消息', '近 30 天活跃好友', '近 30 天活跃群'].map(label => (
-              <div key={label} className={css.skeletonCell}>
-                <SkLine width="48%" height={16} />
-                <span className={kitCss.textCaption}>{label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className={css.skeletonCard}>
-          <SkLine width="30%" height={12} />
-          <div className={css.skeletonMap} />
-        </div>
-      </div>
-
-      {/* 关系 + 内容 */}
-      <div className={css.skeletonRows}>
-        <div className={css.skeletonCard}>
-          <SkLine width="32%" height={12} />
-          <div className={css.skeletonMap} />
-        </div>
-        <div className={css.skeletonCard}>
-          <SkLine width="28%" height={12} />
-          <div className={css.skeletonGrid}>
-            {['文本', '图片', '视频', '链接/文件', '系统消息'].map(label => (
-              <SkBar key={label} label={label} width="60%" />
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* 存储 + 资金 */}
-      <div className={css.skeletonRows}>
-        <div className={css.skeletonCard}>
-          <SkLine width="34%" height={12} />
-          <div className={css.skStack}>
-            <SkBar label="图片" width="72%" />
-            <SkBar label="视频" width="58%" />
-            <SkBar label="语音" width="42%" />
-          </div>
-        </div>
-        <div className={css.skeletonCard}>
-          <SkLine width="30%" height={12} />
-          <div className={css.metricGrid}>
-            <SkMetric label="收入" />
-            <SkMetric label="支出" />
-            <SkMetric label="转账次数" />
-          </div>
-        </div>
-      </div>
-
-      <div className={css.skLoadingText}><span className={css.spinner} /> 正在统计微信数据…</div>
-    </div>
+    <PageBoot
+      title="正在统计微信数据"
+      detail="会话、消息、联系人和资金汇总完，就会出现在这里。"
+    />
   )
 }
 

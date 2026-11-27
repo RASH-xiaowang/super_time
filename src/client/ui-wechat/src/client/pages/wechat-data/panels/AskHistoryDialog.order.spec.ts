@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
  * 历史记录展开后的阅读顺序必须与实时/完成态一致：
- * 执行轨迹（工具后接本轮思考）→ 证据 → 正式回答正文。
+ * 执行轨迹（本轮思考在工具调用之前）→ 正式回答正文 → 证据。
  */
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
@@ -131,7 +131,7 @@ describe('AskHistoryDialog 展示顺序', () => {
     expect(document.body.textContent).toContain('项目群的问答历史')
   })
 
-  it('执行轨迹位于证据与正式回答之前，且本轮工具位于本轮思考之前', async () => {
+  it('本轮思考在工具调用之前，正式回答在证据之前', async () => {
     act(() => {
       root.render(createElement(AskHistoryDialog, { open: true, onClose: () => undefined }))
     })
@@ -150,11 +150,12 @@ describe('AskHistoryDialog 展示顺序', () => {
     const answer = need('[data-ask-history-answer]')
 
     expect(meta.compareDocumentPosition(trace) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
-    expect(trace.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
     expect(trace.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
+    expect(answer.compareDocumentPosition(evidence) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
 
     const traceText = trace.textContent ?? ''
     expect(traceText.indexOf('消息检索')).toBeGreaterThan(-1)
-    expect(traceText.indexOf('第一轮思考')).toBeGreaterThan(traceText.indexOf('消息检索'))
+    expect(traceText.indexOf('第一轮思考')).toBeGreaterThan(-1)
+    expect(traceText.indexOf('第一轮思考')).toBeLessThan(traceText.indexOf('消息检索'))
   })
 })

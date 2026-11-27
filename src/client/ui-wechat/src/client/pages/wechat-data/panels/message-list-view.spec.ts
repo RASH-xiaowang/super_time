@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import type { MessageListRecord, MessageListSnapshot } from '@deepseek-ai/dsh-wechat-data/types'
+import type {
+  MessageListRecord,
+  MessageListRule,
+  MessageListSnapshot,
+} from '@deepseek-ai/dsh-wechat-data/types'
 import {
   AI_REPLY_REGENERATE_WINDOW_MS,
   AI_REPLY_STALLED_MS,
@@ -23,7 +27,9 @@ import {
   messageListRecordStatusHint,
   messageListRecordStatusLabel,
   nextMessageListPageSize,
+  recordHasMatchingRule,
   replaceMessageListWindow,
+  ruleCoversRecord,
   ruleFormForRecord,
   type MessageListWindowState,
 } from './message-list-view.ts'
@@ -279,6 +285,7 @@ describe('记录到规则表单的参数带入', () => {
       greetingText: '您好',
       note: '现有规则',
       enabled: false,
+      appInstanceId: '',
       createdAt: 1,
       updatedAt: 2,
     }
@@ -318,6 +325,53 @@ describe('AI 回复待配置状态', () => {
   })
 })
 
+describe('规则覆盖判定', () => {
+  function rule(patch: Partial<MessageListRule> = {}): MessageListRule {
+    return {
+      id: 1,
+      chatName: '会话 7',
+      targetName: '对象 7',
+      webhookUrl: 'http://192.0.2.10:17890/webhook/***',
+      greetingText: '你好',
+      note: '',
+      enabled: true,
+      appInstanceId: '',
+      createdAt: 1,
+      updatedAt: 2,
+      ...patch,
+    }
+  }
+
+  it('精确 > 同会话 > 指定对象 > 全局，停用与空地址不算可用', () => {
+    const target = { chatName: '会话 7', targetName: '对象 7' }
+    expect(ruleCoversRecord(rule(), target)).toBe(true)
+    expect(ruleCoversRecord(rule({ targetName: '' }), target)).toBe(true)
+    expect(ruleCoversRecord(rule({ chatName: '', targetName: '对象 7' }), target)).toBe(true)
+    expect(ruleCoversRecord(rule({ chatName: '', targetName: '' }), target)).toBe(true)
+    expect(ruleCoversRecord(rule({ chatName: '别的会话' }), target)).toBe(false)
+    expect(ruleCoversRecord(rule({ targetName: '别人' }), target)).toBe(false)
+    expect(ruleCoversRecord(rule({ enabled: false }), target)).toBe(false)
+    expect(ruleCoversRecord(rule({ webhookUrl: '' }), target)).toBe(false)
+  })
+
+  it('群聊规则写到会话名也能覆盖（后端投递入口的兜底口径）', () => {
+    const group = { chatName: '老乡群', targetName: '张三' }
+    expect(ruleCoversRecord(rule({ chatName: '老乡群', targetName: '老乡群' }), group)).toBe(true)
+    expect(ruleCoversRecord(rule({ chatName: '老乡群', targetName: '张三' }), group)).toBe(true)
+    expect(ruleCoversRecord(rule({ chatName: '老乡群', targetName: '李四' }), group)).toBe(false)
+  })
+
+  it('记录只要命中任意一条可用规则即视为已配置', () => {
+    const group = { chatName: '老乡群', targetName: '张三' }
+    expect(recordHasMatchingRule(group, [])).toBe(false)
+    expect(recordHasMatchingRule(group, [rule({ chatName: '别的会话' })])).toBe(false)
+    expect(recordHasMatchingRule(group, [
+      rule({ chatName: '别的会话' }),
+      rule({ chatName: '老乡群', targetName: '' }),
+    ])).toBe(true)
+  })
+})
+
 describe('AI 回复阶段判定', () => {
   const BASE = 1_700_000_000_000
 
@@ -352,6 +406,20 @@ describe('AI 回复阶段判定', () => {
     expect(messageListRecordStatusLabel(waiting, BASE + 60_000)).toBe('待配置')
     expect(messageListRecordStatusHint(waiting, BASE + 60_000))
       .toBe('正文已生成并保存；配置发送地址后自动投递')
+  })
+
+  it('规则已匹配但地址快照未写入时是待发送，不能再说待配置', () => {
+    const queued = aiRecord({ text: '在的，怎么了？' })
+    expect(aiReplyPhase(queued, BASE + 60_000, true)).toBe('queued_send')
+    expect(messageListRecordStatusLabel(queued, BASE + 60_000, true)).toBe('待发送')
+    expect(messageListRecordStatusHint(queued, BASE + 60_000, true))
+      .toBe('规则已匹配；等待前序分段或下游任务结束后自动投递')
+    expect(isAiReplyWaitingForWebhook(queued, true)).toBe(false)
+    // 地址快照写入后阶段不变，仍按“等待投递”展示。
+    expect(aiReplyPhase(aiRecord({
+      text: '在的',
+      webhookUrl: 'http://192.0.2.10:17890/webhook/***',
+    }), BASE + 60_000, true)).toBe('other')
   })
 
   it('失败记录按是否已有正文区分生成失败与发送失败', () => {

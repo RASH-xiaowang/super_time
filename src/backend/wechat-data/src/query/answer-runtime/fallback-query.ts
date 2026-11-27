@@ -127,7 +127,7 @@ export function fallbackArguments(
       : undefined
   }
   if (name === 'get_message_context') return undefined
-  if (name === 'list_sessions') return {}
+  if (name === 'list_sessions' || name === 'get_social_summary') return {}
   /*
    * 专用数据域工具：只填问题里能确定的部分（锁定范围、内容词、媒体种类）。
    * 模型首轮没调工具时，这些工具往往是唯一能看到对应数据的入口

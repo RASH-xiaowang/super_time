@@ -23,7 +23,8 @@ import type { EmoticonsSnapshot, EmoticonItem } from '@deepseek-ai/dsh-wechat-da
 import { EmptyMaybeSyncing, SearchInput, Select, Toolbar } from '../ui/kit.tsx'
 import css from './list-panel.module.css'
 import kitCss from '../ui/kit.module.css'
-import { EmoticonCell, PackageCell } from './asset-ui.tsx'
+import { PackageCell } from './asset-ui.tsx'
+import { EmoticonVirtualGrid } from './emoticon-grid.tsx'
 
 /** 三个页签。 */
 type EmoTab = 'mine' | 'others' | 'packages'
@@ -48,18 +49,17 @@ export function EmoticonsPanel(): React.JSX.Element {
   // 提示语自动消失（L20）：原手写的 `setTimeout(…, 3000)` 已由 hook 统一管理。
   const { notice, flash } = useTransientNotice()
 
+  const [othersLoaded, setOthersLoaded] = useState(false)
+  const [othersLoading, setOthersLoading] = useState(false)
+
   const pager = usePagedList<EmoticonItem>({
     pageSize: 200,
     fetchPage: async (offset, limit) => {
-      const env = await apiGetEmoticons({ limit, offset })
+      // 个人表情不带消息库扫描。那次扫描只在用户打开「其他表情包」时发生。
+      const env = await apiGetEmoticons({ limit, offset, includeOthers: false })
       setPackages(env.packages)
       setTotal(env.total)
       setOrderedBy(env.orderedBy)
-      // `others` 只在第一页返回（后端只在 offset === 0 时扫消息库）。
-      if (offset === 0) {
-        setOthers(env.others ?? [])
-        setOthersTotal(env.othersTotal ?? 0)
-      }
       return { items: env.custom, total: env.total }
     },
   })
@@ -71,15 +71,13 @@ export function EmoticonsPanel(): React.JSX.Element {
       let cancelled = false
       setLoading(true)
       setError(null)
-      void apiGetEmoticons({ limit: 2000 })
+      void apiGetEmoticons({ limit: 2000, includeOthers: false })
         .then((env) => {
           if (cancelled) return
           setCustom(env.custom)
           setPackages(env.packages)
           setTotal(env.total)
           setOrderedBy(env.orderedBy)
-          setOthers(env.others ?? [])
-          setOthersTotal(env.othersTotal ?? 0)
         })
         .catch((e: unknown) => { if (!cancelled) setError((e as Error).message) })
         .finally(() => { if (!cancelled) setLoading(false) })
@@ -88,6 +86,23 @@ export function EmoticonsPanel(): React.JSX.Element {
     pager.reset()
     return undefined
   }, [searching, pager.reset])
+
+  // 「其他表情」要扫全部分片，打开面板时不算；切到这一档再算，算过就留在本次挂载里。
+  useEffect(() => {
+    if (tab !== 'others' || othersLoaded) return undefined
+    let cancelled = false
+    setOthersLoading(true)
+    void apiGetEmoticons({ limit: 1, offset: 0, includeOthers: true })
+      .then((env) => {
+        if (cancelled) return
+        setOthers(env.others ?? [])
+        setOthersTotal(env.othersTotal ?? env.others?.length ?? 0)
+        setOthersLoaded(true)
+      })
+      .catch((e: unknown) => { if (!cancelled) setError((e as Error).message) })
+      .finally(() => { if (!cancelled) setOthersLoading(false) })
+    return () => { cancelled = true }
+  }, [tab, othersLoaded])
 
   useEffect(() => {
     if (searching) return
@@ -117,13 +132,10 @@ export function EmoticonsPanel(): React.JSX.Element {
   }, [packages, q])
 
   const shown = tab === 'mine' ? filteredMine : tab === 'others' ? filteredOthers : []
+  const othersCaption = othersLoaded ? String(othersTotal) : (othersLoading ? '统计中' : '…')
+  const busy = loading || (tab === 'others' && othersLoading && !othersLoaded)
   const gridRef = useRef<HTMLDivElement | null>(null)
   const windowKey = `${tab}\u0000${q}`
-  const { start: emoStart, count: emoCount, beforeHeight: emoBefore, sentinelRef: emoSentinel, topSentinelRef: emoTopSentinel } = useProgressiveList(
-    shown.length,
-    150,
-    { maxCount: 300, resetKey: windowKey, listRef: gridRef },
-  )
   const { start: pkgStart, count: pkgCount, beforeHeight: pkgBefore, sentinelRef: pkgSentinel, topSentinelRef: pkgTopSentinel } = useProgressiveList(
     tab === 'packages' ? filteredPackages.length : 0,
     150,
@@ -149,9 +161,9 @@ export function EmoticonsPanel(): React.JSX.Element {
               ariaLabel="搜索表情"
             />
             <span className={kitCss.textCaption}>
-              {loading && custom.length === 0
+              {busy && custom.length === 0 && tab !== 'others'
                 ? '正在加载…（后端启动同步期间首次查询约需 20-30 秒）'
-                : `个人 ${String(custom.length)} · 其他 ${String(othersTotal)} · 表情包 ${String(packages.length)}${orderedBy === 'wechat' ? ' · 顺序与微信一致' : ''}`}
+                : `个人 ${String(searching ? custom.length : (total || custom.length))} · 其他 ${othersCaption} · 表情包 ${String(packages.length)}${orderedBy === 'wechat' ? ' · 顺序与微信一致' : ''}`}
             </span>
           </>
         )}
@@ -161,52 +173,44 @@ export function EmoticonsPanel(): React.JSX.Element {
             onChange={(v) => { setTab(v as EmoTab) }}
             ariaLabel="表情分类"
             options={[
-              { value: 'mine', label: `个人表情包 (${filteredMine.length})` },
-              { value: 'others', label: `其他表情包 (${filteredOthers.length})` },
+              { value: 'mine', label: `个人表情包 (${searching ? filteredMine.length : total || filteredMine.length})` },
+              { value: 'others', label: `其他表情包 (${othersLoaded ? filteredOthers.length : '…'})` },
               { value: 'packages', label: `表情商店 (${filteredPackages.length})` },
             ]}
           />
         )}
       />
       {notice && <div className={css.notice}>{notice}</div>}
-      <div ref={gridRef} className={css.grid}>
-        {loading && <ListSkeleton rows={10} grid />}
-        {error && <div className={kitCss.error} role="alert">⚠️ 表情数据加载失败（{error}）</div>}
-
-        {/* 个人表情包 / 其他表情包：都是表情网格。 */}
-        {!loading && !error && tab !== 'packages' && shown.length === 0 && (
-          <EmptyMaybeSyncing
-            text={q ? '未找到相关表情' : tab === 'mine' ? '暂无个人表情' : '暂无其他表情'}
-            note={q
-              ? '换个关键词再试；表情按名称与 MD5 匹配。'
-              : tab === 'mine'
-                ? '个人表情来自微信「我收藏的表情」：没收藏过，或刚启动后台仍在同步（首次约 1–2 分钟）时都会是空的。'
-                : '其他表情来自聊天记录里别人发过的表情。取到图后会永久保存到本地缓存，下次打开直接显示。'}
+      {error && <div className={kitCss.error} role="alert">⚠️ 表情数据加载失败（{error}）</div>}
+      {tab !== 'packages' && (busy ? <div className={css.emoScroll}><ListSkeleton rows={10} grid /></div>
+        : shown.length === 0 ? (
+          <div className={css.emoScroll}>
+            <EmptyMaybeSyncing
+              text={q ? '未找到相关表情' : tab === 'mine' ? '暂无个人表情' : '暂无其他表情'}
+            />
+          </div>
+        ) : (
+          <EmoticonVirtualGrid
+            items={shown}
+            onCopy={copyMd5}
+            footer={!searching && tab === 'mine' && pager.hasMore ? <ListSentinel refFn={loadMoreRef} /> : null}
           />
-        )}
-        {!loading && !error && tab !== 'packages' && <ProgressiveListSpacer height={emoBefore} topSentinelRef={emoTopSentinel} />}
-        {!loading && !error && tab !== 'packages' && shown.slice(emoStart, emoCount).map((e: EmoticonItem, idx) => (
-          <EmoticonCell key={e.md5} e={e} onCopy={copyMd5} itemIndex={emoStart + idx} />
         ))}
-        {!loading && !error && tab !== 'packages' && shown.length > emoCount && <ListSentinel refFn={emoSentinel} />}
-        {/* 个人表情还有下一页时才挂分页哨兵；「其他表情」是一次性返回的完整列表。 */}
-        {!loading && !error && tab === 'mine' && !searching && pager.hasMore && <ListSentinel refFn={loadMoreRef} />}
-
-        {/* 表情商店：包名 + 表情数。 */}
-        {!loading && !error && tab === 'packages' && filteredPackages.length === 0 && (
+      {tab === 'packages' && (
+      <div ref={gridRef} className={css.grid}>
+        {busy && <ListSkeleton rows={10} grid />}
+        {!busy && !error && filteredPackages.length === 0 && (
           <EmptyMaybeSyncing
             text={q ? '未找到相关表情包' : '暂无表情包'}
-            note={q
-              ? '换个关键词再试；表情包按名称匹配。'
-              : '表情包来自微信「表情商店」的本地缓存：没下载/收藏过表情包，或刚启动后台仍在同步（首次约 1–2 分钟）时都会是空的。'}
           />
         )}
-        {!loading && !error && tab === 'packages' && <ProgressiveListSpacer height={pkgBefore} topSentinelRef={pkgTopSentinel} />}
-        {!loading && !error && tab === 'packages' && filteredPackages.slice(pkgStart, pkgCount).map((p, idx) => (
+        {!busy && !error && <ProgressiveListSpacer height={pkgBefore} topSentinelRef={pkgTopSentinel} />}
+        {!busy && !error && filteredPackages.slice(pkgStart, pkgCount).map((p, idx) => (
           <PackageCell key={p.name} name={p.name} count={p.count} itemIndex={pkgStart + idx} />
         ))}
-        {!loading && !error && tab === 'packages' && filteredPackages.length > pkgCount && <ListSentinel refFn={pkgSentinel} />}
+        {!busy && !error && filteredPackages.length > pkgCount && <ListSentinel refFn={pkgSentinel} />}
       </div>
+      )}
     </div>
   )
 }

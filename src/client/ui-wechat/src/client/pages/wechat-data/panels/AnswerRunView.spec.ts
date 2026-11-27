@@ -167,7 +167,7 @@ describe('AnswerRunView 实时状态', () => {
     expect(host.textContent).not.toContain('正在调用工具检索原文')
     expect(host.textContent).not.toContain('先确认问题里的时间范围')
     expect(host.textContent).not.toContain('调用参数')
-    expect(button('本轮思考 · 调用前').getAttribute('aria-expanded')).toBe('false')
+    expect(button('已思考').getAttribute('aria-expanded')).toBe('false')
     expect(button('消息检索').getAttribute('aria-expanded')).toBe('false')
     expect(host.querySelectorAll('[role="status"]')).toHaveLength(1)
     expect(processBody().hidden).toBe(false)
@@ -180,7 +180,7 @@ describe('AnswerRunView 实时状态', () => {
     const status = host.querySelector('[class*="statusText"]')
     const thought = host.querySelector('[data-variant="trace"]')
     expect(status?.textContent).toBe('思考中')
-    expect(thought?.textContent).toContain('本轮思考 · 调用前')
+    expect(thought?.textContent).toContain('已思考')
     expect(thought?.textContent).not.toContain('思考中')
     expect(thought?.textContent).not.toContain('先确认问题范围')
   })
@@ -370,17 +370,17 @@ describe('AnswerRunView 实时状态', () => {
   it('实时思考默认完全折叠，正文不进入 DOM，显式展开后才可见', () => {
     const reasoning = `开头。\n${'持续追加的思考内容。'.repeat(90)}\n最新结论。`
     render({ streaming: true, reasoning })
-    const toggle = button('本轮思考 · 调用前')
+    const toggle = button('已思考')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
     expect(host.textContent).not.toContain('最新结论')
     expect(host.querySelector('[data-scroll="true"]')).toBeNull()
 
-    click('本轮思考 · 调用前')
+    click('已思考')
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(host.querySelector('[class*="thinkingText"]')?.textContent).toBe(reasoning)
 
-    click('本轮思考 · 调用前')
+    click('已思考')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
     expect(host.textContent).not.toContain('最新结论')
@@ -390,7 +390,7 @@ describe('AnswerRunView 实时状态', () => {
     const reasoning = '第一段思考内容。'
     render({ streaming: true, reasoning })
     rerender({ streaming: true, reasoning: `${reasoning}\n第二段新增思考内容。` })
-    expect(button('本轮思考 · 调用前').getAttribute('aria-expanded')).toBe('false')
+    expect(button('已思考').getAttribute('aria-expanded')).toBe('false')
     expect(host.textContent).not.toContain('第一段思考内容')
     expect(host.textContent).not.toContain('第二段新增思考内容')
   })
@@ -948,17 +948,17 @@ describe('AnswerRunView 长内容与证据', () => {
       }),
     })
     click('执行轨迹')
-    const toggle = button('本轮思考 · 调用前')
+    const toggle = button('已思考')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.getAttribute('aria-controls')).toBeTruthy()
     expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
     expect(host.textContent).not.toContain('思考段落')
 
-    click('本轮思考 · 调用前')
+    click('已思考')
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(host.querySelector('[class*="thinkingText"]')?.textContent).toBe(reasoning)
 
-    click('本轮思考 · 调用前')
+    click('已思考')
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(host.querySelector('[class*="thinkingText"]')).toBeNull()
   })
@@ -976,7 +976,7 @@ describe('AnswerRunView 长内容与证据', () => {
         },
       }),
     })
-    click('执行轨迹')
+    click('证据记录')
     expect(host.querySelectorAll('[class*="evidenceItem"]')).toHaveLength(6)
     expect(host.textContent).toContain('第 1 条完整证据内容')
     expect(host.textContent).toContain('未在原文找到')
@@ -1001,7 +1001,7 @@ describe('AnswerRunView 长内容与证据', () => {
         },
       }),
     })
-    click('执行轨迹')
+    click('证据记录')
     expect(host.textContent).toContain('证据 1（企业：甲方公司）')
     expect(host.textContent).toContain('李四（企业：乙方公司）')
   })

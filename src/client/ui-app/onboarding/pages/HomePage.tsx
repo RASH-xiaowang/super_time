@@ -22,7 +22,7 @@ import { FIRST_RUN_STEPS, QUESTION_CARDS } from '../onboarding-content.tsx'
  * 三处都按这两个数字现算，改了它会一起红。
  */
 const FACTS = [
-  { k: 'MODULES', v: '17' },
+  { k: 'MODULES', v: '18' },
   { k: 'REMOTE API', v: '238' },
 ] as const
 

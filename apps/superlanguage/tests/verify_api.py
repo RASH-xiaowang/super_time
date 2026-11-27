@@ -270,7 +270,7 @@ class IsolatedProcess:
         startup.lpDesktop = self.desktop_name
 
         command_line = ctypes.create_unicode_buffer(
-            f'"{self.executable}" --tray')
+            f'"{self.executable}" --tray --test-skip-license')
         process_info = PROCESS_INFORMATION()
         created = kernel32.CreateProcessW(
             str(self.executable),

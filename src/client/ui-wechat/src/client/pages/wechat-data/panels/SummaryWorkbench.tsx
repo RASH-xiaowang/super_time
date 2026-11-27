@@ -248,7 +248,6 @@ export function SummaryWorkbench({ onOpenSettings }: { onOpenSettings?: (section
     <div className={css.panel}>
       <PanelHeader
         title="总结"
-        desc="按时间范围总结聊天"
         actions={(
           <>
             <button type="button" className={css.ghostBtn} aria-expanded={historyOpen} onClick={() => { setHistoryOpen(v => !v) }} title="回看历史总结">

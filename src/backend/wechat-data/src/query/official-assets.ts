@@ -8,7 +8,7 @@ import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import { cachedBySigAsync, fileSigOf, INSIGHTS_TTL_MS, shardCatalogSig } from './meta.ts'
-import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { yieldToLoop } from './search-build.ts'
 import type { OfficialAssetsSnapshot, OfficialAssetRow } from '../types.ts'
 import { displayNameForUsername, messageTableName } from './message-identity.ts'
 
@@ -97,8 +97,10 @@ async function computeOfficialAssets(decryptedDir: string): Promise<OfficialAsse
   const usernames = loadOfficialUsernames(decryptedDir)
   const names = loadNames(decryptedDir)
   const per = new Map<string, { messages: number; articles: number; lastArticleTime: number | null }>()
+  const byTable = new Map<string, string>()
+  for (const username of usernames) byTable.set(messageTableName(username), username)
   const dir = join(decryptedDir, 'message')
-  if (existsSync(dir)) {
+  if (existsSync(dir) && byTable.size > 0) {
     for (const f of readdirSync(dir)) {
       if (!/^(biz_)?message_\d+\.db$/.test(f)) continue
       let db: DatabaseSync
@@ -106,35 +108,28 @@ async function computeOfficialAssets(decryptedDir: string): Promise<OfficialAsse
       try {
         const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'Msg_%'").all() as Array<{ name: string }>).map(r => r.name)
         for (const table of tables) {
-          const username = usernames.find(u => messageTableName(u) === table)
+          const username = byTable.get(table)
           if (!username) continue
           const cols = tableColumns(db, table)
           if (!cols.has('create_time') || !cols.has('local_type')) continue
           try {
-            // 2026-09-28：`.all()` → 游标 + 行级让出。
-            // 本机真实数据实测 `queryOfficialAssets` 冷跑 **39ms 且一次都不让出**
-            // （`working/probe-stall.txt`，是清零后**受测集里唯一剩下的独占项**）：
-            // 它要逐张消息分片把公众号会话的整张 `Msg_*` 拉出来数条数（每行都要判定
-            // `local_type === 49`），不打散就是几十毫秒按住整条串行队列。
-            const cur = db.prepare(`SELECT create_time, local_type FROM "${table}"`).iterate() as Iterable<Record<string, unknown>>
-            let acc = per.get(username)
-            if (!acc) { acc = { messages: 0, articles: 0, lastArticleTime: null }; per.set(username, acc) }
-            let sinceYield = 0
-            for (const r of cur) {
-              acc.messages += 1
-              const lt = Number(r['local_type'] ?? 0) & 4294967295
-              if (lt === 49) {
-                acc.articles += 1
-                const t = Number(r['create_time'] ?? 0)
-                if (t > 0 && (acc.lastArticleTime == null || t > acc.lastArticleTime)) acc.lastArticleTime = t
-              }
-              sinceYield += 1
-              if (sinceYield >= YIELD_EVERY_ROWS) { sinceYield = 0; await yieldToLoop() }
-            }
+            // 一条聚合代替逐行把整张 Msg_* 拉进 JS。公众号会话可以有十几万行，
+            // 行循环会按住后端队列，面板点击后一直停在「统计中」。
+            const row = db.prepare(
+              `SELECT COUNT(*) AS messages,
+                      SUM(CASE WHEN (local_type & 4294967295) = 49 THEN 1 ELSE 0 END) AS articles,
+                      MAX(CASE WHEN (local_type & 4294967295) = 49 AND create_time > 0 THEN create_time END) AS lastArticleTime
+                 FROM "${table}"`,
+            ).get() as { messages: number; articles: number | null; lastArticleTime: number | null } | undefined
+            if (!row || row.messages <= 0) continue
+            per.set(username, {
+              messages: row.messages,
+              articles: Number(row.articles ?? 0),
+              lastArticleTime: row.lastArticleTime && row.lastArticleTime > 0 ? row.lastArticleTime : null,
+            })
           } catch { /* skip */ }
         }
       } finally { db.close() }
-      // 分片级让出：一张分片可以有十几万行。
       await yieldToLoop()
     }
   }

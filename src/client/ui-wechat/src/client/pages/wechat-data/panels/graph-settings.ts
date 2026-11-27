@@ -38,6 +38,8 @@ export interface GraphSettings {
   nodeGap: number
   /** 圈子分离度:不同社区节点对之间的额外排斥(圈与圈之间有留白) */
   communitySeparation: number
+  /** 社交图谱的排版：金字塔尖是「我」，或「我」在圆圈中心。 */
+  islandShape: 'pyramid' | 'circle'
   /** 锁定布局:拖动节点不带动邻居,参数变化不自动重排 */
   lockLayout: boolean
 }
@@ -71,6 +73,7 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
   forceEdgeLength: 1.05,
   nodeGap: 1.7,
   communitySeparation: 1.6,
+  islandShape: 'pyramid',
   lockLayout: false,
 }
 

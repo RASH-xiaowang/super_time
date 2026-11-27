@@ -80,7 +80,7 @@ import {
 import {
   regenerateChatAiReplyRecord,
 } from './runner-regenerate.ts'
-import { deferReplyIfBlocked, deliverChatAiReply } from './runner-policy.ts'
+import { deliverChatAiReply } from './runner-policy.ts'
 import type { ChatAiReplyRegenerateResult } from './runner-regenerate.ts'
 
 /** Runtime snapshot for diagnostics/tests; cursor intentionally excluded from display. */
@@ -256,10 +256,6 @@ async function runOne(
       if (isCancelled()) return false
       // 预约之前复核：已经被更新消息越过时，不建预约、不留失败记录。
       if (await cancelSupersededBeforeReservation(deps, state, started)) return false
-      if (deferReplyIfBlocked(deps, state)) {
-        options.onEvent?.('skipped')
-        return false
-      }
       const reserved = await reserveChatAiReplyRun(deps, state, started)
       if (reserved === 'done') {
         options.onEvent?.('skipped')

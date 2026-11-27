@@ -18,6 +18,7 @@ import type {
   ChatAiReplyTrace,
   ChatAiReplyTracePatch,
   ChatAiReplyTraceStage,
+  ChatAiReplyTraceTool,
 } from './types.ts'
 
 /** 单字段上限：留痕是为了看清过程，不是无限备份聊天记录。 */
@@ -58,8 +59,47 @@ export function ensureChatAiReplyTraceSchema(db: DatabaseSync): void {
     error TEXT NOT NULL DEFAULT '',
     redacted INTEGER NOT NULL DEFAULT 0,
     stages TEXT NOT NULL DEFAULT '[]',
+    tools TEXT NOT NULL DEFAULT '[]',
     updated_at INTEGER NOT NULL
   )`)
+  /*
+   * 老库补列（2026-11-24）：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表加列，
+   * 而「详情里看不到工具调用」正是缺这一列的直接后果 —— 不补的话旧库永远读不到。
+   */
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(chat_ai_reply_traces)').all() as Array<Record<string, unknown>>)
+      .map((row) => String(row['name'] ?? '')),
+  )
+  if (!columns.has('tools')) {
+    try {
+      db.exec("ALTER TABLE chat_ai_reply_traces ADD COLUMN tools TEXT NOT NULL DEFAULT '[]'")
+    } catch { /* 另一个连接刚补完同一列：以 PRAGMA 的事实为准，不把重复列当故障 */ }
+  }
+}
+
+/** 工具调用数组的解析（坏项丢弃；只保留有名字的条目）。 */
+function toolsOf(raw: unknown): ChatAiReplyTraceTool[] {
+  if (typeof raw !== 'string' || raw === '') return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const out: ChatAiReplyTraceTool[] = []
+    for (const item of parsed) {
+      if (typeof item !== 'object' || item === null) continue
+      const row = item as Record<string, unknown>
+      const name = typeof row['name'] === 'string' ? row['name'].trim() : ''
+      if (name === '') continue
+      out.push({
+        name: name.slice(0, 60),
+        ok: row['ok'] === true,
+        ...(typeof row['code'] === 'string' && row['code'] !== '' ? { code: row['code'].slice(0, 80) } : {}),
+        elapsedMs: numOf(row['elapsedMs']),
+      })
+    }
+    return out.slice(-24)
+  } catch {
+    return []
+  }
 }
 
 function stagesOf(raw: unknown): ChatAiReplyTraceStage[] {
@@ -128,6 +168,7 @@ export function writeChatAiReplyTrace(
         if (patch.voiceCount !== undefined) put('voice_count', numOf(patch.voiceCount))
         if (patch.output !== undefined) put('output', textOf(patch.output, OUTPUT_MAX))
         if (patch.error !== undefined) put('error', textOf(patch.error, ERROR_MAX))
+        if (patch.tools !== undefined) put('tools', JSON.stringify(toolsOf(JSON.stringify(patch.tools))))
         if (patch.redacted !== undefined) put('redacted', patch.redacted ? 1 : 0)
         if (patch.stage !== undefined) {
           const row = db.prepare('SELECT stages FROM chat_ai_reply_traces WHERE record_id = ?')
@@ -235,6 +276,7 @@ export function readChatAiReplyTrace(
         error: textOf(row['error'], ERROR_MAX),
         redacted: numOf(row['redacted']) === 1,
         stages: stagesOf(row['stages']),
+        tools: toolsOf(row['tools']),
         updatedAt: numOf(row['updated_at']),
       },
     }

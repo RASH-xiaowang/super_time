@@ -37,6 +37,8 @@ export type RpaParamSource =
   | 'imagesJson'
   | 'imageCount'
   | 'firstImageUrl'
+  | 'textsJson'
+  | 'textCount'
   | 'fixed'
   | 'template'
 

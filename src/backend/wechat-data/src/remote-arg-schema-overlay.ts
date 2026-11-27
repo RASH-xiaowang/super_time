@@ -66,6 +66,30 @@ const messageListImageSchema = z.object({
 export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] = [
   remote('getSelfProfile'),
   remote('listRpaVendors'),
+  remote('getLocalTools'),
+  remote('getLocalToolConfig'),
+  remote('saveLocalToolConfig', z.object({
+    weatherProvider: z.string().optional(),
+    weatherAccess: z.string().optional(),
+    weatherApiKey: z.string().optional(),
+    searchProvider: z.string().optional(),
+    searchApiKey: z.string().optional(),
+  })),
+  // 2026-11-24：工具卡片可增删改。`fixed` 交给源码侧 `validateCustomTool` 逐键校验
+  // （它要对照目标工具的 schema），这里只约束「外层形状」—— 影子档不该重复一套业务校验。
+  remote('saveLocalTool', z.object({
+    name: z.string().optional(),
+    title: z.string(),
+    description: z.string(),
+    kind: z.union([z.literal('alias'), z.literal('answer')]),
+    enabled: z.boolean().optional(),
+    target: z.string().optional(),
+    fixed: z.unknown().optional(),
+    answer: z.string().optional(),
+    expose: z.array(z.string()).optional(),
+  })),
+  remote('deleteLocalTool', z.object({ name: z.string() })),
+  remote('setLocalToolEnabled', z.object({ name: z.string(), enabled: z.boolean() })),
   remote('getFileImageDataUrls', z.object({
     keys: z.array(z.string()),
     thumbFirst: z.boolean().optional(),
@@ -164,6 +188,8 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     chatUsername: z.string(),
     chatName: z.string().optional(),
     webhookUrl: z.string(),
+    // 「下游地址选托管应用」：地址由主进程解析，这里只透传实例 id 给自动绑定的规则。
+    appInstanceId: z.string().optional(),
   })),
   remote('listEnabledChatAiReplyStates'),
   remote('setChatAiReplyEnabled', z.object({
@@ -179,9 +205,13 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     personaName: z.string(),
     personaPrompt: z.string(),
     splitReply: z.boolean().optional(),
+    kbEnabled: z.boolean().optional(),
+    kbId: z.number().int().min(0).optional(),
     // 上下文时间窗：0 = 不限；上限 720 小时（30 天）。这里只校验范围，
     // 存储层仍会再夹紧一次，避免绕过 Remote 的调用方写出越界值。
     contextWindowHours: z.number().int().min(0).max(720).optional(),
+    safetyHandoff: z.string().max(80).optional(),
+    safetyBlocked: z.string().max(400).optional(),
     expectedRevision: z.number().optional(),
   })),
   remote('scanChatAiReplyNow'),
@@ -223,6 +253,10 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
     greetingText: z.string().optional(),
     note: z.string().optional(),
     enabled: z.boolean().optional(),
+    // 地址来自某个托管实例时由主进程写入；普通保存不传。
+    appInstanceId: z.string().optional(),
+    // 内部「同步实例地址」专用：保留原有 managed_by。
+    keepManagedBy: z.boolean().optional(),
   })),
   remote('deleteMessageListRule', z.object({
     id: z.number(),
@@ -278,37 +312,5 @@ export const REMOTE_ARG_SCHEMA_OVERLAY: readonly RemoteArgSchemaOverlayEntry[] =
   remote('queryMessageListWebhookJob', z.object({
     recordId: z.number(),
     jobId: z.string().optional(),
-  })),
-  remote('getAgentDesk'),
-  remote('saveAgentControl', z.object({
-    killed: z.boolean().optional(),
-    shadow: z.boolean().optional(),
-    quietStart: z.string().optional(),
-    quietEnd: z.string().optional(),
-    cooldownMs: z.number().int().min(0).max(86_400_000).optional(),
-    hourCap: z.number().int().min(0).max(10_000).optional(),
-    dayCap: z.number().int().min(0).max(100_000).optional(),
-    proactiveHourCap: z.number().int().min(0).max(100).optional(),
-    handoff: z.boolean().optional(),
-  })),
-  remote('writeAgentMemory', z.object({
-    scope: z.enum(['user', 'conversation']),
-    scopeKey: z.string().min(1),
-    kind: z.enum(['semantic', 'episode', 'profile', 'relation', 'promise']),
-    text: z.string().min(1).max(500),
-  })),
-  remote('deleteAgentMemory', z.object({ id: z.number().int().positive() })),
-  remote('addAgentPromise', z.object({
-    text: z.string().min(1).max(300),
-    dueAt: z.number().int().positive(),
-  })),
-  remote('setAgentProposalStatus', z.object({
-    id: z.number().int().positive(),
-    status: z.enum(['accepted', 'dismissed']),
-  })),
-  remote('sendAgentDraft', z.object({ id: z.number().int().positive() })),
-  remote('sendAgentProposal', z.object({
-    id: z.number().int().positive(),
-    target: z.string().min(1).max(200),
   })),
 ]

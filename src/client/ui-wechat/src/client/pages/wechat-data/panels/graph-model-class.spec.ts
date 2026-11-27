@@ -81,11 +81,11 @@ function isConnected(ids: string[], edges: GEdge[]): boolean {
 }
 
 describe('同备注编号边：数量与连通性', () => {
-  it('4 人班是 3 条边（人数−1），且整班连通', () => {
+  it('4 人及以内的同班，每两个人都有一条线', () => {
     const ids = ['p0', 'p1', 'p2', 'p3']
     const g = buildGraph(env(ids.map(id => person(id, '宜州一中404'))), S)
     const cls = ofKind(g.edges, 'class')
-    expect(cls.length).toBe(3)
+    expect(cls.length).toBe(6)
     expect(isConnected(ids, cls)).toBe(true)
     for (const e of cls) {
       expect(e.bidirectional).toBe(true)
@@ -132,8 +132,8 @@ describe('同备注编号边：数量与连通性', () => {
     // pa-pb 这条边保留「共同群」身份（观测到的共处优先于推断出的同门）
     const ab = g.edges.find(e => pairKey(e) === 'pa|pb')
     expect(ab?.kind).toBe('common')
-    // 剩下的 2 条把 pc / pd 挂上（3 条锚点边里有一条被去重吃掉了）
-    expect(ofKind(g.edges, 'class').length).toBe(2)
+    // 4 人两两相连共 6 对，其中 pa-pb 已是共同群，其余 5 条是同班。
+    expect(ofKind(g.edges, 'class').length).toBe(5)
     expect(isConnected(['pa', 'pb', 'pc', 'pd'], g.edges)).toBe(true)
   })
 })
@@ -159,11 +159,43 @@ describe('同备注编号边：开关与作用域', () => {
     const ids = ['p0', 'p1', 'p2', 'p3']
     const g = buildGraph(env(ids.map(id => person(id, '宜州一中404'))), { ...S, minCommon: 5 })
     expect(ofKind(g.edges, 'common').length).toBe(0)
-    expect(ofKind(g.edges, 'class').length).toBe(3)
+    expect(ofKind(g.edges, 'class').length).toBe(6)
   })
 
   it('单个成员不构成班级（各成一班时不建边）', () => {
     const g = buildGraph(env([person('p0', '宜州一中404'), person('p1', '物联本202')]), S)
     expect(ofKind(g.edges, 'class').length).toBe(0)
+  })
+
+  it('分隔符备注按单位连线：同一科室相连，不同科室不相连', () => {
+    const g = buildGraph(env([
+      { ...person('a'), label: '法院_梧州万秀_会计小郭' },
+      { ...person('b'), label: '法院_梧州万秀_贾老师' },
+      { ...person('c'), label: '法院_来宾市区_陈羽' },
+    ]), S)
+    const cls = ofKind(g.edges, 'class')
+    expect(cls.map(pairKey)).toEqual(['a|b'])
+    expect(cls[0]?.relations?.[0]?.evidence).toEqual(['法院_梧州万秀'])
+  })
+
+  it('同一家银行的不同支行会连到「工商银行」，不同法院不会因为都叫法院而连上', () => {
+    const g = buildGraph(env([
+      { ...person('a'), label: '工商银行_南宁分行_科技王科长' },
+      { ...person('b'), label: '工商银行_玉林分行_刘经理' },
+      { ...person('c'), label: '法院_梧州万秀_会计小郭' },
+      { ...person('d'), label: '法院_来宾市区_陈羽' },
+    ]), S)
+    const pairs = new Set(ofKind(g.edges, 'class').map(pairKey))
+    expect(pairs.has('a|b')).toBe(true)
+    expect(pairs.has('c|d')).toBe(false)
+  })
+
+  it('共同群把显示额度占满后，同班的人仍然连在一起', () => {
+    const classmates = ['c0', 'c1', 'c2', 'c3', 'c4', 'c5'].map((id) => person(id, '宜州一中404'))
+    const crowd = Array.from({ length: 70 }, (_, index) => person(`x${String(index).padStart(2, '0')}`, undefined, ['g-big']))
+    const g = buildGraph(env([...classmates, ...crowd]), { ...S, nodeLimit: 200 })
+    const ids = classmates.map((node) => node.id)
+    const between = g.edges.filter((edge) => ids.includes(edge.source) && ids.includes(edge.target))
+    expect(isConnected(ids, between)).toBe(true)
   })
 })

@@ -144,7 +144,6 @@ export function ChatRightDetail(props: ChatRightDetailProps): React.JSX.Element 
         <button type="button" className={css.backBtn} onClick={onBack}>
           ← 返回
         </button>
-        <span className={css.introHint}>这里只展示过程，不发任何请求</span>
       </div>
 
       <section className={css.section} aria-label="分析的思考过程">

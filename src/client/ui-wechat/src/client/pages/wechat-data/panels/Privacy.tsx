@@ -214,7 +214,7 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
       ) : (
         <PanelHeader
           title="隐私体检"
-          desc={data ? `命中 ${totalHits} 条 · 涉及 ${involved} 个会话` : '扫描手机号 / 身份证 / 银行卡 / 邮箱 / 密码 / 地址等敏感信息'}
+          desc={data ? `命中 ${totalHits} 条 · 涉及 ${involved} 个会话` : undefined}
           actions={(
             <>
               <button type="button" className={css.catBtn} data-active="true" onClick={() => { void scan() }} disabled={loading}>
@@ -305,7 +305,6 @@ export function PrivacyPanel({ onOpenChat, embedded = false }: {
               <EmptyState
                 icon="✅"
                 title="没有命中"
-                desc="按上面 6 类规则在本地消息里逐条比对，没有发现敏感信息。这个结论只覆盖本机已解密的消息库，不代表对外发送过什么。"
               />
             </div>
           )}

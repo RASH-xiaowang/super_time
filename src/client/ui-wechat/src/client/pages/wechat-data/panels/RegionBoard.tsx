@@ -17,9 +17,9 @@ import { useCallback, useEffect, useState } from 'react'
 import { apiGetRegionMap } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
 import type { RegionMapSnapshot, RegionNode } from '@deepseek-ai/dsh-wechat-data/types'
-import css from './overview.module.css'
 import regionCss from './overview-region.module.css'
 import { OvSection } from './overview-parts.tsx'
+import { LoadingState } from '../ui/kit.tsx'
 
 /** 单条榜单行。 */
 interface RankRow {
@@ -114,7 +114,7 @@ const SKELETON_SLOTS = [
 
 /**
  * 好友地区榜单（省份 + 城市）。
- * @returns 两栏榜单；数据未到时显示骨架行。
+ * @returns 两栏榜单；数据未到时说明正在统计。
  */
 export function RegionBoard(): React.JSX.Element {
   const [snap, setSnap] = useState<RegionMapSnapshot | null>(null)
@@ -148,9 +148,7 @@ export function RegionBoard(): React.JSX.Element {
       <>
         {SKELETON_SLOTS.map(({ slot, title }) => (
           <RankCard key={slot} slot={slot} title={title}>
-            <div className={regionCss.regionRank}>
-              <div className={regionCss.regionRows}>{Array.from({ length: 8 }, (_, i) => <span key={i} className={css.skLine} style={{ width: '100%', height: 12 }} />)}</div>
-            </div>
+            <LoadingState variant="compact" label="正在统计地区…" />
           </RankCard>
         ))}
       </>

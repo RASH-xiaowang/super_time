@@ -24,6 +24,16 @@ vi.mock('../api.ts', () => ({
   writeRenderCache: vi.fn(() => { /* 不写 */ }),
 }))
 
+// 图表板整块替成纯容器：ECharts 在 jsdom 里没有 canvas，一旦 data 有值就会初始化失败，
+// 整棵树被卸载 ⇒ textContent 变成空串（这条用例曾经因此误报「没有用上总览的缓存」）。
+vi.mock('./ledger-charts.tsx', async () => {
+  const React = await import('react')
+  return {
+    LedgerChartBoard: ({ children }: { children?: React.ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
+  }
+})
+
 const { LedgerPanel } = await import('./Ledger.tsx')
 
 async function flush(n = 4): Promise<void> {

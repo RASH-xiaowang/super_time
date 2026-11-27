@@ -372,6 +372,8 @@ export interface ImageDataUrlResult {
    * HTTP 远程访问忽略此字段，继续用 `url` 的 data URL。
    */
   file?: string
+  /** 局域网取图地址。 */
+  lanUrl?: string
   error?: string
 }
 
@@ -390,7 +392,7 @@ export interface ArticleCoversResult {
  * 消息），去重之后顺序就与入参不再一一对应。用键回信，调用方才不会错位贴图。
  */
 export interface EmoticonDataUrlsResult {
-  items: Array<{ md5: string; dataUrl?: string; format?: string; error?: string }>
+  items: Array<{ md5: string; dataUrl?: string; format?: string; file?: string; error?: string }>
 }
 
 /**

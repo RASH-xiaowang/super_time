@@ -2,13 +2,16 @@
    全部走 scifi-theme 的设计令牌，不写字面量颜色 —— 浅色主题下才会跟着切换。 */
 
 .dialogWide {
-  /* **固定尺寸**：不随记录条数伸缩（1 条与 200 条弹窗一样大）。
-     行数少时下方留白，换来的是窗口不跳、表格区域高度稳定、列宽布局不抖动。 */
-  width: min(1200px, 95vw);
-  max-width: 1200px;
-  height: min(760px, 86vh);
-  /* 覆盖 kit 的 max-height: 84vh —— 上面已给出确定高度 */
-  max-height: none;
+  /* 固定 16:10：不随记录条数伸缩。行数少时下方留白，表格区域高度稳定。 */
+  box-sizing: border-box;
+  width: min(1200px, 95vw, calc(78vh * 1.6));
+  min-width: min(720px, 95vw);
+  max-width: min(1200px, 95vw);
+  aspect-ratio: 16 / 10;
+  height: min(750px, 78vh, calc(95vw * 0.625));
+  min-height: min(450px, 78vh);
+  max-height: min(750px, 78vh);
+  overflow: hidden;
 }
 
 /* 弹窗正文：三段式（筛选行 / 表格 / 提示）里的弹性段。

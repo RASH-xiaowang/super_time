@@ -15,6 +15,24 @@ import { useAskScopeTrigger } from './use-ask-scope-trigger.ts'
 import { IdentityName } from './identity.tsx'
 import css from './ask.module.css'
 
+/** 范围标签上的小叉：平时不占视觉，悬浮到对应片段才出现。 */
+function ScopeClearButton({ label, onClear }: { label: string; onClear: () => void }): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className={css.scopeClear}
+      aria-label={label}
+      title={label}
+      onClick={(event) => {
+        event.stopPropagation()
+        onClear()
+      }}
+    >
+      <span aria-hidden="true">×</span>
+    </button>
+  )
+}
+
 /**
  * @param props.question - 当前输入内容。
  * @param props.setQuestion - 写入输入内容。
@@ -100,6 +118,7 @@ export function AskComposer({
   }, [onSubmit, question, setQuestion, trigger])
 
   const hasScope = scopeUsername !== '' || from !== '' || to !== ''
+  const hasTime = from !== '' || to !== ''
   const scopeLabel = scopeDisplayName || '全部会话'
 
   return (
@@ -176,14 +195,22 @@ export function AskComposer({
         {hasScope && (
           <span className={css.scopeActive} title={`当前检索范围：${scopeLabel} · ${describeRange(from, to)}`}>
             <span>范围：</span>
-            {scopeUsername
-              ? (
-                  <IdentityName className={css.scopeActiveIdentity} name={scopeLabel} username={scopeUsername} size={16}>
-                    {scopeLabel}
-                  </IdentityName>
-                )
-              : scopeLabel}
-            <span> · {describeRange(from, to)}</span>
+            <span className={css.scopeToken}>
+              {scopeUsername
+                ? (
+                    <IdentityName className={css.scopeActiveIdentity} name={scopeLabel} username={scopeUsername} size={16}>
+                      {scopeLabel}
+                    </IdentityName>
+                  )
+                : scopeLabel}
+              {scopeUsername !== '' && (
+                <ScopeClearButton label="取消选择的会话" onClear={() => { onPickScope('') }} />
+              )}
+            </span>
+            <span className={css.scopeToken}>
+              <span> · {describeRange(from, to)}</span>
+              {hasTime && <ScopeClearButton label="取消时间范围" onClear={onClearTime} />}
+            </span>
           </span>
         )}
         <span className={css.actionHint}>输入 @ 选范围 · Enter 发送</span>

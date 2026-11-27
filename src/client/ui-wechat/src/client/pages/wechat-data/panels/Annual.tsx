@@ -24,14 +24,12 @@
  * **段与段之间不加横贯标题**：那会破坏 12 列网格的整除关系，也把一屏切成碎片。
  * 分区改由每张卡右上角的小药丸承担（`Card` 的 `zone`）。
  *
- * ⚠️ 改顺序或 span 时必须同步 `annual-skeleton.tsx` 的 CELLS 与
- * `annual-more.wiring.spec.ts` —— 两处都会逐行求和。
+ * ⚠️ 改顺序或 span 时必须同步 `annual-more.wiring.spec.ts` —— 它会逐行求和。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiCapturePanel, apiGetAnnual, apiGetAnnualReview, apiGetAvatarsLocal, readRenderCache, runtimeCapabilities, writeRenderCache } from '../api.ts'
 import type { AnnualReviewShape } from '../api.ts'
 import { useWechatDataUpdated } from './hooks.tsx'
-import { CardCanvasSkeleton } from './annual-skeleton.tsx'
 import { annualReviewCacheKey, defaultAnnualYear, normalizeAnnualYears, normalizeReview, type NormalizedReview } from './annual-normalize.ts'
 import { AVATAR_SIZE, Avatar, adaptiveTiers, dur, fmt, lv } from './annual-common.tsx'
 import { CardCanvas } from './card-canvas.tsx'
@@ -44,7 +42,7 @@ import {
   AssetsCard, CatchphraseTopCard, ExtremesCard, GroupsCard, MediaCallCard, MomentsCard,
   MoneyCard, MonthlyTrendCard, RevokeCard, YearPortrait,
 } from './annual-more-cards.tsx'
-import { EmptyState, PanelHeader } from '../ui/kit.tsx'
+import { EmptyState, PageBoot, PanelHeader } from '../ui/kit.tsx'
 import kitCss from '../ui/kit.module.css'
 import css from './annual.module.css'
 import { avatarColors, fmtBytes } from '../utils/format.ts'
@@ -894,12 +892,6 @@ export function AnnualPanel(): React.JSX.Element {
     <div className={kitCss.panelShell} ref={shellRef}>
       <PanelHeader
         title="年度报告"
-        desc={(
-          <>
-            本机聊天记录的年度回顾
-            <span className={css.caliber} title="人物类指标（发出/排行/搭子/口头禅/回复速度/谁先开口）只统计「我发出的」；规模类指标（日历热力/最疯的一天/作息切片）统计全部消息">口径</span>
-          </>
-        )}
         actions={(
           <div className={css.tools}>
             {/* 只有一个年份时**不渲染下拉框** —— 一个选项的下拉框点开还是它自己，
@@ -933,9 +925,12 @@ export function AnnualPanel(): React.JSX.Element {
       <div className={`${kitCss.panelBody} ${css.scrollBody}`}>
         <ExportProgressStatus state={exportTask.state} />
         {error && <div className={kitCss.error} role="alert">{error}</div>}
-        {/* 加载骨架屏：与真实卡片**同构**（同一个 12 列网格 + 同样的 span/rows 分布），
-            加载完成时只有内容替换、没有布局跳变。见 `annual-skeleton.tsx` 的说明。 */}
-        {!data && loading && <CardCanvasSkeleton year={year ?? 0} />}
+        {!data && loading && (
+          <PageBoot
+            title={year != null ? `正在整理 ${year} 年的报告` : '正在整理年度报告'}
+            detail="聊天、联系人、资金和朋友圈会一起算完，算完再铺到这块画布上。"
+          />
+        )}
         {!data && !loading && !error && (
           <div className={css.empty}>
             <EmptyState

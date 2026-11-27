@@ -53,6 +53,7 @@ import { ChatRightDetail } from './chat-right-detail.tsx'
 import type { InlineAnalysisEntry } from './use-inline-analysis.ts'
 import type { ReplyTrace, WechatMessage } from '@deepseek-ai/dsh-wechat-data/types'
 import shell from './session-ask.module.css'
+import cssshell from './chats-shell.module.css'
 import css from './chat-right-panel.module.css'
 
 /** `ChatRightPanelProps` 的字段说明见各成员注释。 */
@@ -114,8 +115,11 @@ export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
   const title = allowSuggest ? '回复助手' : '消息分析'
 
   return (
+    <>
+    <button type="button" className={cssshell.drawerScrim} aria-label="关闭" onClick={onClose} />
     <div
       className={shell.panel}
+      data-edge="drawer"
       data-side-panel-view=""
       data-reply-assistant=""
       {...(detailOpen ? { 'data-detail': 'open' } : {})}
@@ -215,5 +219,6 @@ export function ChatRightPanel(props: ChatRightPanelProps): React.JSX.Element {
         </div>
       )}
     </div>
+    </>
   )
 }

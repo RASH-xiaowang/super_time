@@ -44,11 +44,11 @@ describe('导航与懒加载：taskinfo 是一个可见入口', () => {
     expect(TAB_LABELS[tab]).toBe('任务信息')
   })
 
-  it('「行动与维护」组里有可见的 taskinfo 条目（不是 hidden）', () => {
-    const group = NAV_GROUPS.find((g) => g.label === '行动与维护')
-    expect(group, '「行动与维护」分组不见了（nav-config 改结构时请同步本用例）').toBeDefined()
+  it('「任务」组里有可见的 taskinfo 条目（不是 hidden）', () => {
+    const group = NAV_GROUPS.find((g) => g.label === '任务')
+    expect(group, '「任务」分组不见了（nav-config 改结构时请同步本用例）').toBeDefined()
     const item = group?.items.find((it) => it.tab === 'taskinfo')
-    expect(item, '「行动与维护」里没有 taskinfo 条目').toBeDefined()
+    expect(item, '「任务」里没有 taskinfo 条目').toBeDefined()
     expect(item?.label).toBe('任务信息')
     expect(item?.hidden, 'taskinfo 被标成 hidden —— 侧栏就看不到这个入口了').not.toBe(true)
     expect(item?.icon, '图标为空（SVG 会被渲染成空白）').toContain('<path')
@@ -294,7 +294,7 @@ describe('数据容器：取数、事件联动、选中过滤', () => {
     expect(panes).toContain('删除所选 (')
     expect(code).toContain('删除所选 ${String(ids.length)} 个任务？')
     expect(code).toContain('删除所选 ${String(ids.length)} 条触发记录？')
-    expect(code, '任务批删确认没有说明历史记录保留').toContain('已产生的触发记录会保留')
+    expect(code, '任务批删确认没有说明触发记录会一起删除').toContain('全部触发记录都会删除')
     expect(code, '触发记录批删确认没有说明重算统计').toContain('触发次数与最近触发时间会按剩余记录重算')
     expect(panes, '批量删除没有受桌面端权限控制').toContain('desktopActionProps()')
     expect(panes, '缺少 500 条上限').toContain('TASK_BATCH_DELETE_MAX')
@@ -343,12 +343,12 @@ describe('记录弹窗：完整内容五组 + 图片按需解码 + 可访问性'
     expect(code).toContain('重新投递')
   })
 
-  it('源码模式可切换，并展示完整 Unicode 转义 JSON', () => {
+  it('源码模式可切换，并展示完整 JSON', () => {
     expect(code).toContain('源码模式')
     expect(code).toContain('界面模式')
     expect(code).toContain('aria-pressed={sourceMode}')
     expect(code).toContain('setSourceMode(value => !value)')
-    expect(code).toContain('triggerRecordSource(record)')
+    expect(code).toContain('triggerRecordSource(sourceRecord ?? record)')
     expect(code).toContain('data-trigger-source=""')
   })
 
@@ -363,8 +363,14 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
   const logic = panelRead('task-center.ts')
 
   it('选择器由 catalog 渲染（选项 = descriptor.name），不为具体厂商写死', () => {
-    for (const label of ['任务名', '触发关键词', '触发方式', '照片数量']) {
+    // 2026-11-24：照片张数与文本条数搬进 `task-center-limit-fields.tsx`（M21 行数上限），
+    // 所以「字段存在」这一条要跨两个文件看 —— 仍然是同一个表单。
+    const limitFields = panelRead('task-center-limit-fields.tsx')
+    for (const label of ['任务名', '触发关键词', '触发方式']) {
       expect(code, `编辑表单缺少「${label}」`).toContain(label)
+    }
+    for (const label of ['照片数量', '文本条数']) {
+      expect(limitFields, `编辑表单缺少「${label}」`).toContain(label)
     }
     expect(code, '触发方式选择器没有接收目录').toContain('catalog={vendorCatalog}')
     expect(code, '选择器没有遍历目录').toContain('props.catalog.map')
@@ -470,7 +476,7 @@ describe('编辑表单（抽屉 body）：配置项与三个动作', () => {
     expect(remove, '共享删除按钮没有二次确认（useConfirm）').toContain('useConfirm()')
     expect(remove, '删除按钮没有危险色').toContain('variant="danger"')
     expect(remove, '删除按钮没有桌面端降级').toContain('desktopActionProps()')
-    expect(remove, '确认文案没有说明历史记录保留').toContain('已产生的触发记录会保留')
+    expect(remove, '确认文案没有说明触发记录会一起删除').toContain('全部触发记录都会删除')
     expect(code, '行内删除入口没有使用共享按钮').toContain('TaskDeleteButton')
   })
 
@@ -524,7 +530,11 @@ describe('样式与 SSR 冒烟', () => {
     expect(css).toContain('.board {')
     expect(css).toContain('grid-template-columns: minmax(300px, 3fr) minmax(0, 7fr)')
     expect(css, '缺少 ≤900px 堆叠断点').toContain('@media (max-width: 900px)')
-    expect(css, '弹窗没有高度上界（窄屏会顶出视口）').toContain('max-height: min(86vh, 820px)')
+    // 2026-11-24：弹窗改成 16:10 锁定（高度与宽度联动，窄屏不会再顶出视口）。
+    // 旧口径断言的是一个固定的 `max-height: min(86vh, 820px)`，与现在的几何不一致。
+    const modal = sliceBetween(css, '.modal {', '}', 'modal 规则')
+    expect(modal, '弹窗没有高度上界（窄屏会顶出视口）').toMatch(/max-height:\s*min\(/)
+    expect(modal, '弹窗不是 16:10 锁定（宽度与高度会各自为政）').toContain('aspect-ratio: 16 / 10')
   })
 
   it('样式只用设计令牌，不写裸色值（浅色主题读不清的根因）', () => {
@@ -559,7 +569,7 @@ describe('样式与 SSR 冒烟', () => {
     expect(script, 'SSR 冒烟没有覆盖任务行删除入口').toContain('aria-label="删除任务')
   })
 
-  it('SSR 冒烟覆盖 catalog 注入、影刀动态表单、任务行摘要与目录失败/未知厂商降级', () => {
+  it('SSR 冒烟覆盖 catalog 注入、八爪鱼表单、任务行摘要与目录失败/未知厂商降级', () => {
     const script = readText(join(ROOT, 'scripts', 'task-center-ssr.tsx'))
     const fixture = readText(join(ROOT, 'scripts', 'task-center-ssr-vendors.ts'))
     const scriptAndFixture = `${script}\n${fixture}`
@@ -577,17 +587,13 @@ describe('样式与 SSR 冒烟', () => {
       '附加参数 固定值 1',
       '附加参数 模板 2',
       '查看 八爪鱼 API Key',
-      '影刀 RPA',
-      'AccessKeyId',
-      'AccessKeySecret',
-      '账号与鉴权',
-      '流程与参数',
-      '高级',
-      '参数核对 2026-10-21',
       '触发方式不可用（厂商已下线）',
       '读取触发方式目录失败',
     ]) {
       expect(scriptAndFixture, `SSR 冒烟没有断言「${text}」`).toContain(text)
+    }
+    for (const gone of ['影刀 RPA', 'UiPath', '阿里云 RPA', '来也 RPA', '实在智能', '八爪鱼 RPA（MCP）']) {
+      expect(scriptAndFixture, `SSR 仍包含已移除的「${gone}」`).not.toContain(gone)
     }
     expect(script, 'SSR 主场景没有用 bazhuayu fixture 断言任务行摘要').toContain('八爪鱼 RPA · ')
     expect(script, 'SSR 没有断言八爪鱼 v1.2.0 不再渲染「参数映射」').toContain("!bazhuayuFormHtml.includes('参数映射')")

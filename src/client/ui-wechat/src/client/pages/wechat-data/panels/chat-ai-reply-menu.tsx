@@ -21,6 +21,8 @@ export interface ChatAiReplyUiState {
   kbId: number
   /** 上下文时间窗（小时）；0 = 不限。 */
   contextWindowHours: number
+  safetyHandoff: string
+  safetyBlocked: string
   onToggle: () => void
   onScanNow: () => void
   onSavePersona: (input: {
@@ -30,6 +32,8 @@ export interface ChatAiReplyUiState {
     kbEnabled: boolean
     kbId: number
     contextWindowHours: number
+    safetyHandoff: string
+    safetyBlocked: string
   }) => Promise<boolean>
 }
 
@@ -156,7 +160,7 @@ export function ChatAiReplyMenu(props: {
   )
 }
 
-/** 人格弹窗挂在菜单容器之外，菜单收起时不会被连带卸载。 */
+/** 人格抽屉挂在菜单容器之外，菜单收起时不会被连带卸载。 */
 export function ChatAiReplySettingsHost(props: {
   curSession: WechatSession
   aiReply?: ChatAiReplyUiState
@@ -176,6 +180,8 @@ export function ChatAiReplySettingsHost(props: {
       initialKbEnabled={aiReply.kbEnabled}
       initialKbId={aiReply.kbId}
       initialContextWindowHours={aiReply.contextWindowHours}
+      initialHandoff={aiReply.safetyHandoff}
+      initialBlocked={aiReply.safetyBlocked}
       saving={aiReply.busy}
       {...(aiReply.error === undefined ? {} : { error: aiReply.error })}
       onClose={onClose}

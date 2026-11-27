@@ -32,7 +32,7 @@ import type {
 /** 附加参数的全部值来源（描述符可用 `field.paramSources` 收窄子集）。 */
 export const ALL_PARAM_SOURCES: readonly RpaParamSource[] = [
   'room', 'content', 'at', 'taskName', 'keyword', 'triggeredAt', 'chatType',
-  'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'fixed', 'template',
+  'taskId', 'recordId', 'imagesJson', 'imageCount', 'firstImageUrl', 'textsJson', 'textCount', 'fixed', 'template',
 ]
 
 /** 值来源的中文名（下拉选项、行内错误、文档共用同一套字面量）。 */
@@ -49,6 +49,8 @@ export const PARAM_SOURCE_LABELS: Record<RpaParamSource, string> = {
   imagesJson: '触发图片（JSON 链接清单）',
   imageCount: '触发图片数量',
   firstImageUrl: '首张图片链接',
+  textsJson: '触发人最近文本（JSON 清单）',
+  textCount: '触发人文本条数',
   fixed: '固定值',
   template: '自定义模板',
 }

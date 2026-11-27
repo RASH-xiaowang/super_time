@@ -90,6 +90,8 @@ export function useChatsAiReplyControls({
         kbEnabled: chatAiReply.state?.kbEnabled === true,
         kbId: chatAiReply.state?.kbId ?? 0,
         contextWindowHours: chatAiReply.state?.contextWindowHours ?? 0,
+        safetyHandoff: chatAiReply.state?.safetyHandoff ?? '',
+        safetyBlocked: chatAiReply.state?.safetyBlocked ?? '',
         onToggle: () => { void chatAiReply.toggle() },
         onScanNow: () => { void chatAiReply.scanNow() },
         onSavePersona: (persona: {
@@ -99,6 +101,8 @@ export function useChatsAiReplyControls({
           kbEnabled: boolean
           kbId: number
           contextWindowHours: number
+          safetyHandoff: string
+          safetyBlocked: string
         }) => chatAiReply.savePersona(persona),
       }
     : undefined

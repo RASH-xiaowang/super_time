@@ -54,6 +54,7 @@ const TASK_A: TaskInfo = {
   targetName: '客户经理',
   keywords: ['报价', '合同', '打款', '交付'],
   photoLimit: 3,
+  textLimit: 0,
   mentionMeOnly: true,
   triggerMethod: 'webhook',
   triggerConfig: {},
@@ -80,6 +81,7 @@ const TASK_B: TaskInfo = {
   targetName: '运维值班',
   keywords: ['上线'],
   photoLimit: 1,
+  textLimit: 0,
   mentionMeOnly: false,
   triggerMethod: 'webhook',
   triggerConfig: {
@@ -112,6 +114,7 @@ const TASK_BAZHUAYU: TaskInfo = {
   targetName: '客户经理',
   keywords: ['RPA'],
   photoLimit: 0,
+  textLimit: 0,
   mentionMeOnly: false,
   triggerMethod: 'bazhuayu',
   triggerConfig: {
@@ -132,37 +135,6 @@ const TASK_BAZHUAYU: TaskInfo = {
   triggerCount: 0,
 }
 
-/** 任务 D：触发方式 = 影刀 RPA（catalog 动态字段：两个 secret + 应用 UUID + 附加参数）。 */
-const TASK_YINGDAO: TaskInfo = {
-  id: 4,
-  name: '影刀报价同步',
-  chatUsername: 'wxid_group_a',
-  chatName: '报价群',
-  chatType: 'group',
-  targetUsername: 'wxid_target_a',
-  targetName: '客户经理',
-  keywords: ['影刀'],
-  photoLimit: 0,
-  mentionMeOnly: false,
-  triggerMethod: 'yingdao',
-  triggerConfig: {
-    robotUuid: '73d9a119-7ec7-4226-b679-506afefae667',
-    extraParams: [
-      { name: 'room_name', source: 'room' },
-      { name: 'at_name', source: 'at' },
-    ],
-  },
-  triggerSecretSet: { accessKeyId: true, accessKeySecret: true },
-  triggerVendorVersion: '1.1.0',
-  callbackUrl: '',
-  bazhuayuFlowId: '',
-  bazhuayuApiKeySet: false,
-  status: 'incomplete',
-  createdAt: T(2026, 10, 20, 9, 30, 0),
-  updatedAt: T(2026, 10, 20, 9, 30, 0),
-  triggerCount: 0,
-}
-
 /** 任务 E：厂商已下线（目录里没有该 id）——保存必须被拒、任务行摘要要显示「不可用」。 */
 const TASK_UNKNOWN: TaskInfo = {
   id: 5,
@@ -174,6 +146,7 @@ const TASK_UNKNOWN: TaskInfo = {
   targetName: '客户经理',
   keywords: ['旧'],
   photoLimit: 0,
+  textLimit: 0,
   mentionMeOnly: false,
   triggerMethod: 'gone-vendor',
   triggerConfig: { legacy: 'x' },
@@ -203,6 +176,7 @@ const RECORD_1: TaskTriggerRecord = {
     { localId: 9001, createTime: T(2026, 10, 19, 10, 23, 40), sender: '客户经理' },
     { localId: 9002, createTime: T(2026, 10, 19, 10, 23, 52), sender: '客户经理' },
   ],
+  texts: [],
   messageLocalId: 5001,
   messageSortSeq: 70001,
   triggeredAt: T(2026, 10, 19, 10, 24, 0),
@@ -222,6 +196,7 @@ const RECORD_2: TaskTriggerRecord = {
   keyword: '合同',
   text: '合同盖章版我这边收到了，下午走流程。',
   images: [],
+  texts: [],
   messageLocalId: 5002,
   messageSortSeq: 70002,
   triggeredAt: T(2026, 10, 19, 9, 5, 30),
@@ -240,6 +215,7 @@ const RECORD_OTHER: TaskTriggerRecord = {
   keyword: '上线',
   text: '该记录应被过滤掉',
   images: [],
+  texts: [],
   messageLocalId: 5003,
   messageSortSeq: 70003,
   triggeredAt: T(2026, 10, 19, 11, 2, 0),
@@ -294,14 +270,6 @@ const bazhuayuFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_BAZHU
 /** 八爪鱼方式（从未配置过 Key）的抽屉 body：placeholder 应提示去填。 */
 const bazhuayuNewFormHtml = renderToStaticMarkup(h(TaskEditForm, {
   task: { ...TASK_BAZHUAYU, triggerSecretSet: {}, bazhuayuApiKeySet: false },
-  ...FORM_VENDORS,
-  ...FORM_STUBS,
-}))
-/** 影刀方式：catalog 动态字段（账号与鉴权 / 流程与参数 / 高级 / map / 厂商说明）。 */
-const yingdaoFormHtml = renderToStaticMarkup(h(TaskEditForm, { task: TASK_YINGDAO, ...FORM_VENDORS, ...FORM_STUBS }))
-/** 实验性厂商：状态徽标与 risks。 */
-const experimentalFormHtml = renderToStaticMarkup(h(TaskEditForm, {
-  task: { ...TASK_UNKNOWN, triggerMethod: 'aliyun-rpa', triggerConfig: {} },
   ...FORM_VENDORS,
   ...FORM_STUBS,
 }))
@@ -502,29 +470,7 @@ check('八爪鱼参数传递（v1.4.0）：没有「参数映射」区块，附�
   ok(!bazhuayuFormHtml.includes('aria-label="附加参数 固定值 2"'), '模板来源的行不该渲染固定值输入')
 })
 
-check('影刀 RPA：catalog 动态字段（账号与鉴权 / 流程与参数 / 高级 / 附加参数 / 厂商说明）', () => {
-  ok(yingdaoFormHtml.includes('aria-label="编辑任务：影刀报价同步"'), '影刀任务表单没有可访问名')
-  ok(yingdaoFormHtml.includes('影刀 RPA'), '选择器里没有渲染目录中的「影刀 RPA」')
-  ok(yingdaoFormHtml.includes('账号与鉴权'), '缺少「账号与鉴权」分区')
-  ok(yingdaoFormHtml.includes('流程与参数'), '缺少「流程与参数」分区')
-  ok(yingdaoFormHtml.includes('高级'), '缺少「高级」折叠区')
-  ok(yingdaoFormHtml.includes('aria-label="AccessKeyId"'), '缺少 AccessKeyId 凭据字段')
-  ok(yingdaoFormHtml.includes('aria-label="AccessKeySecret"'), '缺少 AccessKeySecret 凭据字段')
-  ok(yingdaoFormHtml.includes('aria-label="应用 UUID"'), '缺少「应用 UUID」字段')
-  ok(!yingdaoFormHtml.includes('参数映射'), '影刀 v1.1.0 仍渲染了「参数映射」')
-  ok(yingdaoFormHtml.includes('附加参数'), '影刀没有渲染「附加参数」')
-  ok(yingdaoFormHtml.includes('aria-label="附加参数 参数名 1"'), '影刀缺少第一行附加参数名')
-  ok(yingdaoFormHtml.includes('value="room_name"'), '影刀附加参数没有回填 room_name')
-  ok(yingdaoFormHtml.includes('aria-label="附加参数 值来源 2"'), '影刀缺少第二行值来源')
-  ok(yingdaoFormHtml.includes('value="73d9a119-7ec7-4226-b679-506afefae667"'), '应用 UUID 没有回填任务里的值')
-  ok(yingdaoFormHtml.includes('参数核对 2026-10-21'), '厂商说明缺少参数核对时间')
-  ok(yingdaoFormHtml.includes('https://api.yingdao.com/oapi/dispatch/v2/job/start'), '厂商说明缺少官方触发接口链接')
-  ok(yingdaoFormHtml.includes('回调无签名'), '厂商 risks 没有展示')
-})
-
-check('实验性厂商：⚠ 实验性徽标 + risks；已下线厂商：选择器不可用且保存/标记禁用', () => {
-  ok(experimentalFormHtml.includes('⚠ 实验性'), '实验性厂商没有警告徽标')
-  ok(experimentalFormHtml.includes('body/query 矛盾'), '实验性厂商 risks 没有展示')
+check('已下线厂商：选择器不可用且保存/标记禁用', () => {
   ok(unknownVendorFormHtml.includes('触发方式不可用（厂商已下线）'), '未知厂商没有「触发方式不可用（厂商已下线）」')
   ok(unknownVendorFormHtml.includes('disabled=""'), '未知厂商的「保存 / 标记」按钮没有禁用')
   ok(!unknownVendorFormHtml.includes('aria-label="八爪鱼 FlowId"'), '未知厂商不该渲染动态字段')

@@ -311,20 +311,23 @@ export function detectXorKey(data: Uint8Array): number | null {
 }
 
 /** AES-128-ECB decrypt (no padding). */
-function aes128EcbDecrypt(key: Uint8Array, data: Uint8Array): Uint8Array {
+function aes128EcbDecrypt(key: Uint8Array, data: Uint8Array, snsMemory = false): Uint8Array {
   if (key.length < 16) throw new Error('AES key 长度不足 16 字节')
   const decipher = createDecipheriv('aes-128-ecb', Buffer.from(key), null)
   decipher.setAutoPadding(false)
-  const out = Buffer.concat([decipher.update(Buffer.from(data)), decipher.final()])
-  return new Uint8Array(out)
+  // SNS owns the input until this synchronous decrypt returns; crypto output owns new storage.
+  const input = snsMemory ? Buffer.from(data.buffer, data.byteOffset, data.byteLength) : Buffer.from(data)
+  const body = decipher.update(input), tail = decipher.final()
+  const out = snsMemory && tail.length === 0 ? body : Buffer.concat([body, tail])
+  return snsMemory ? new Uint8Array(out.buffer, out.byteOffset, out.byteLength) : new Uint8Array(out)
 }
 
 /** Strip PKCS7 padding (defensive). */
-function pkcs7Unpad(data: Uint8Array): Uint8Array {
+function pkcs7Unpad(data: Uint8Array, snsMemory = false): Uint8Array {
   if (data.length === 0) return data
   const pad = data[data.length - 1] ?? 0
   if (pad === 0 || pad > 16 || pad > data.length) return data
-  if (data.slice(data.length - pad).every(b => b === pad)) return data.slice(0, data.length - pad)
+  if (data.subarray(data.length - pad).every(b => b === pad)) return snsMemory ? data.subarray(0, data.length - pad) : data.slice(0, data.length - pad)
   return data
 }
 
@@ -344,6 +347,7 @@ export function decodeDatPayload(
   data: Uint8Array,
   aesKey: Uint8Array | string | null,
   xorKey: number,
+  opts: { snsMemory?: boolean } = {},
 ): DecodeDatPayload {
   if (data.length < 6) return { error: '文件太小' }
   const sig = Array.from(data.slice(0, 6))
@@ -361,13 +365,16 @@ export function decodeDatPayload(
     const aligned = alignedAesBlockSize(aesSize)
     let offset = 15
     if (offset + aligned > data.length) return { error: '数据不足 AES 块' }
-    const decAes = pkcs7Unpad(aes128EcbDecrypt(key, data.slice(offset, offset + aligned)))
+    const aesInput = opts.snsMemory ? data.subarray(offset, offset + aligned) : data.slice(offset, offset + aligned)
+    const decAes = pkcs7Unpad(aes128EcbDecrypt(key, aesInput, opts.snsMemory), opts.snsMemory)
     offset += aligned
     const rawEnd = data.length - xorSize
-    const raw = offset < rawEnd ? data.slice(offset, Math.max(offset, rawEnd)) : new Uint8Array(0)
+    const raw = offset < rawEnd ? (opts.snsMemory ? data.subarray(offset, Math.max(offset, rawEnd)) : data.slice(offset, Math.max(offset, rawEnd))) : new Uint8Array(0)
     offset = Math.max(offset, rawEnd)
-    const xorPart = data.slice(offset).map(b => b ^ xorKey)
-    const out = new Uint8Array(decAes.length + raw.length + xorPart.length)
+    const xorPart = (opts.snsMemory ? data.subarray(offset) : data.slice(offset)).map(b => b ^ xorKey)
+    // A whole-AES SNS image needs no second plaintext assembly; mixed tails still get an owned output.
+    const out = opts.snsMemory && raw.length === 0 && xorPart.length === 0
+      ? decAes : new Uint8Array(decAes.length + raw.length + xorPart.length)
     out.set(decAes, 0)
     out.set(raw, decAes.length)
     out.set(xorPart, decAes.length + raw.length)

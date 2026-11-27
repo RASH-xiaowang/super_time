@@ -26,6 +26,11 @@ const {
   featureLabel,
 } = require('./schema')
 const {
+  APP_CAPABILITIES,
+  DEFAULT_APP_CAPABILITIES,
+  DEFAULT_APP_MAX_JOBS_PER_HOUR,
+} = require('./features')
+const {
   readLicenseFile, writeLicenseFile, deleteLicenseFile, licensePath,
   readLastSeen, writeLastSeen, clearLastSeen,
 } = require('./store')
@@ -264,6 +269,10 @@ const FEATURE_METHODS = {
   overview: [
     'getDailyCounts', 'getMapGeoJson', 'getOverview', 'getOverviewInsights',
     'getRegionMap', 'getWordCloud',
+    // 2026-11-24：本地工具清单是概览类的只读视图（各工具注册表 + 配置状态）。
+    // 2026-11-24：本地工具清单与管理（只读写本机注册表与配置，不碰微信库、不出网）。
+    'getLocalTools', 'saveLocalTool', 'deleteLocalTool', 'setLocalToolEnabled',
+    'getLocalToolConfig', 'saveLocalToolConfig',
   ],
   chats: [
     'clearAllSessionDrafts', 'clearSessionDraft', 'editChatMessage', 'getCalls',
@@ -310,8 +319,6 @@ const FEATURE_METHODS = {
     'setTaskInfoStatus',
   ],
   'message-list': [
-    // Explicit sends reuse the existing insert/resend feature, not a new license bit.
-    'sendAgentDraft', 'sendAgentProposal',
     'batchDeleteMessageListRecords', 'batchResendMessageListRecords',
     'deleteMessageListRule', 'getMessageListWebhookInfo', 'ingestMessageListWebhook',
     'insertMessageListRecord', 'listMessageListRecords', 'listMessageListRules',
@@ -332,9 +339,6 @@ const FEATURE_METHODS = {
     'saveSummaryTask', 'suggestKbLinks', 'summarizeKbFile', 'toggleSummaryTask',
   ],
   'ai-reply': [
-    // Teammate controls and memory belong to the existing AI reply capability.
-    'getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory',
-    'addAgentPromise', 'setAgentProposalStatus',
     'deleteAiReplyReservations', 'getChatAiReplyDefaultWebhook', 'getChatAiReplyState',
     'getChatAiReplyTrace',
     'listEnabledChatAiReplyStates', 'regenerateChatAiReplyRecord',
@@ -437,6 +441,46 @@ function authorizeCall(status, method) {
 }
 
 /**
+ * 读取「被托管应用」的授权额度。
+ *
+ * 只有证书里显式签了 `apps-superlanguage` 功能位才算开通；`apps` 段只描述额度，
+ * 不能代替功能位（否则签一张只有 apps 段、没有功能位的证就能绕过签发台）。
+ * 缺失字段按保守默认补齐：实例数回落到证书的 `seats`（当前 Super Time 自身按
+ * 设备指纹绑定，`seats` 未被占用），能力回落到全部，配额回落到内置值。
+ *
+ * @param {object} status - `getLicenseStatus` 的返回值。
+ * @param {string} [appId] - 应用 id，目前只支持 `superlanguage`。
+ * @returns {{ ok: true, maxInstances: number, caps: string[], maxJobsPerHour: number, standalone: boolean }
+ *   | { ok: false, code: string, message: string }}
+ */
+function getAppEntitlement(status, appId = 'superlanguage') {
+  const feature = 'apps-' + appId
+  const gate = authorizeFeature(status, feature)
+  if (!gate.ok) return gate
+  const section = status?.payload?.apps?.[appId]
+  const rawSeats = Number(section?.maxInstances)
+  const fallbackSeats = Number(status?.payload?.seats)
+  const maxInstances = Number.isInteger(rawSeats) && rawSeats > 0
+    ? rawSeats
+    : (Number.isInteger(fallbackSeats) && fallbackSeats > 0 ? fallbackSeats : 1)
+  const knownCaps = new Set(APP_CAPABILITIES.map((item) => item.id))
+  const caps = Array.isArray(section?.caps)
+    ? [...new Set(section.caps.filter((cap) => typeof cap === 'string' && knownCaps.has(cap)))]
+    : [...DEFAULT_APP_CAPABILITIES]
+  const rawQuota = Number(section?.maxJobsPerHour)
+  return {
+    ok: true,
+    maxInstances,
+    caps: caps.length > 0 ? caps : [...DEFAULT_APP_CAPABILITIES],
+    maxJobsPerHour: Number.isInteger(rawQuota) && rawQuota > 0
+      ? rawQuota
+      : DEFAULT_APP_MAX_JOBS_PER_HOUR,
+    // 默认禁止独立运行；只有签发台显式写成 true 才放宽（当前签发台不提供该开关）。
+    standalone: section?.standalone === true,
+  }
+}
+
+/**
  * 导出本机指纹包，供客户发给厂商申请发证。
  */
 function getActivationRequest(userDataDir, appVersion) {
@@ -462,6 +506,7 @@ module.exports = {
   isUsableStatus,
   authorizeCall,
   authorizeFeature,
+  getAppEntitlement,
   METHOD_FEATURE,
   FEATURE_METHODS,
 }

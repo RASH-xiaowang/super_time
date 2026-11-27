@@ -105,7 +105,7 @@ describe('resolveMessageFileDataUrl：同名副本里挑出属于这条消息的
     // （缓存键里没月份的话，这一句会直接吃回五月的命中）。
     expect(bodyOf(resolveMessageFileDataUrl(root, '月份线索.pdf', { createTime: tsLocal(2024, 1, 10) }))).toBe('一月那份')
     // 仓库里不落任何东西（本仓有过测试在仓库建目录、照红无关打包守卫的教训）。
-    expect(isAbsolute(relative(REPO_ROOT, root)), '夹具跑进仓库里了').toBe(true)
+    expect(root.toLowerCase().startsWith(REPO_ROOT.toLowerCase()), '夹具跑进仓库里了').toBe(false)
     expect(existsSync(join(REPO_ROOT, 'msg')), '仓库根被建出了 msg/').toBe(false)
   })
 

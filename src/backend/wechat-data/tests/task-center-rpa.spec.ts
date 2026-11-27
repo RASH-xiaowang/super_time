@@ -3,7 +3,7 @@
  * 多厂商触发**核心管道**的后端行为守卫（2026-10-21）。
  *
  * 覆盖契约 §3 里不属于单个厂商的部分：
- *  ① 注册表：固定 8 个内置/厂商 id 与顺序、未知 id、可序列化目录副本、`listRpaVendors` 处理器；
+ *  ① 注册表：固定 2 个触发方式（Webhook / 八爪鱼）与顺序、未知 id、可序列化目录副本、`listRpaVendors` 处理器；
  *  ② 模板层：默认值、类型/pattern/URL 校验、必填判定、凭据合并、占位符渲染与参数容器五态；
  *  ③ 鉴权层：bearer / header / token-exchange（缓存）/ custom 钩子、按 when 选择模式；
  *  ④ 派发管道：主机白名单（含 Webhook 任意 http(s) 特例、私有化 baseUrl + 私网拒绝）、
@@ -182,9 +182,9 @@ function fieldsDescriptor(over: Partial<RpaVendorDescriptor> = {}): RpaVendorDes
 }
 
 describe('注册表与 Remote 目录', () => {
-  it('固定 7 个条目与顺序；未知 id 返回 undefined；map 与版本一致', () => {
+  it('固定 2 个条目与顺序；未知 id 返回 undefined；map 与版本一致', () => {
     expect(RPA_VENDORS.map((adapter) => adapter.descriptor.id)).toEqual([
-      'webhook', 'bazhuayu', 'bazhuayu-mcp', 'yingdao', 'uipath', 'aliyun-rpa', 'laiye', 'shizai',
+      'webhook', 'bazhuayu',
     ])
     expect(RPA_VENDOR_MAP.size).toBe(RPA_VENDORS.length)
     expect(findVendor('webhook')).toBe(RPA_VENDOR_MAP.get('webhook'))
@@ -904,7 +904,7 @@ describe('存储派生：externalTaskId 往返', () => {
   it('rowToTask 读取旧 map 配置时自动返回 extraParams，避免 UI 显示为空', () => {
     const task = rowToTask({
       id: 9,
-      name: '旧影刀任务',
+      name: '旧八爪鱼任务',
       chat_username: 'wxid_group',
       chat_name: '群',
       chat_type: 'group',
@@ -913,7 +913,7 @@ describe('存储派生：externalTaskId 往返', () => {
       keywords: '["报价"]',
       photo_limit: 0,
       mention_me_only: 0,
-      trigger_method: 'yingdao',
+      trigger_method: 'bazhuayu',
       trigger_config: JSON.stringify({
         robotUuid: 'robot-1',
         paramMap: { room: 'old_room', content: 'old_content', at: 'old_at' },

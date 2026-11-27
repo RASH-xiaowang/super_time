@@ -1,10 +1,9 @@
 /**
  * Shared answer-run view for WeChat Q&A and session-level AI Q&A.
  *
- * Information order is intentional: a compact live/final status is always
- * visible, followed by the full reasoning/tool/evidence trace and then the
- * formal answer. The trace can default open while there is no answer yet, but
- * it collapses once generation starts so it cannot bury the formal response.
+ * 助手一轮的阅读顺序：状态条 → 系统提示（Hint）→ 执行过程
+ * （思考 Thinking → 工具调用与结果 ToolCall/ToolResult）→ 正式正文（Text，
+ * 引用贴在正文上）→ 证据。过程在还没有正文时展开，正文一开始就收起，避免挡住回答。
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
@@ -338,6 +337,7 @@ function EvidenceSection({ rows, grounding }: {
   rows: readonly EvidenceRow[]
   grounding?: AskGrounding
 }): React.JSX.Element | null {
+  const [open, setOpen] = useState(false)
   const [showAll, setShowAll] = useState(false)
   const listId = useId()
   if (rows.length === 0) return null
@@ -345,21 +345,26 @@ function EvidenceSection({ rows, grounding }: {
   const checked = grounding?.checked ?? 0
   const cited = grounding?.cited ?? 0
   const unsupported = Array.isArray(grounding?.unsupported) ? grounding.unsupported : []
+  const summary = [
+    `${String(rows.length)} 条`,
+    checked > 0 ? `核对 ${String(checked)} 项` : '',
+    cited > 0 ? `引用 ${String(cited)} 条` : '',
+    grounding?.repaired === true ? '已自动修订' : '',
+    unsupported.length > 0 ? `${String(unsupported.length)} 项未找到原文` : '',
+  ].filter(Boolean).join(' · ')
   return (
-    <section className={processCss.section} data-status={unsupported.length > 0 ? 'warning' : undefined}>
-      <div className={processCss.sectionHead}>
+    <section className={processCss.section} data-block="evidence" data-status={unsupported.length > 0 ? 'warning' : undefined} aria-label="证据记录">
+      <button
+        type="button"
+        className={processCss.sectionHead}
+        onClick={() => { setOpen(value => !value) }}
+        aria-expanded={open}
+        title={open ? '收起证据记录' : '展开证据记录'}
+      >
         <span className={processCss.sectionTitle}>证据记录</span>
-        <span className={processCss.sectionSummary}>
-          {[
-            `${String(rows.length)} 条`,
-            checked > 0 ? `核对 ${String(checked)} 项` : '',
-            cited > 0 ? `引用 ${String(cited)} 条` : '',
-            grounding?.repaired === true ? '已自动修订' : '',
-            unsupported.length > 0 ? `${String(unsupported.length)} 项未找到原文` : '',
-          ].filter(Boolean).join(' · ')}
-        </span>
-      </div>
-      <div className={processCss.sectionBody}>
+        <span className={processCss.sectionSummary}>{summary}</span>
+      </button>
+      {open && <div className={processCss.sectionBody}>
         <ul id={listId} className={processCss.evidenceList}>
           {shown.map(row => (
             <li key={row.key} className={processCss.evidenceItem}>
@@ -418,7 +423,7 @@ function EvidenceSection({ rows, grounding }: {
             </span>
           </div>
         )}
-      </div>
+      </div>}
     </section>
   )
 }
@@ -570,9 +575,9 @@ function ProcessInspector(input: {
           </div>
         )}
         {(input.planNode !== undefined || input.retrievalNode !== undefined) && (
-          <section className={processCss.section}>
+          <section className={processCss.section} data-block="hint">
             <div className={processCss.sectionHead}>
-              <span className={processCss.sectionTitle}>检索规划与召回</span>
+              <span className={processCss.sectionTitle}>系统提示</span>
             </div>
             <div className={processCss.sectionBody}>
               {input.planNode}
@@ -592,7 +597,6 @@ function ProcessInspector(input: {
             <ToolCard key={tool.key} tool={tool} closed={!input.streaming} />
           )}
         />
-        <EvidenceSection rows={input.evidence} {...(input.grounding ? { grounding: input.grounding } : {})} />
       </div>
     </section>
   )
@@ -631,7 +635,7 @@ function RunNotices({ outcome, reason, withheld, synthesisError, grounding, erro
   const showRetry = outcome === 'failed' && onRetry !== undefined
   if (notices.length === 0 && !showRetry && errorCode === undefined) return null
   return (
-    <div className={css.notices} role={danger ? 'alert' : undefined}>
+    <div className={css.notices} data-block="hint" role={danger ? 'alert' : undefined}>
       {notices.map((notice, index) => (
         <div
           key={`${String(index)}:${notice}`}
@@ -841,6 +845,7 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
         {hasAnswer && (
           <section
             className={css.answerCard}
+            data-block="text"
             data-live={streaming || undefined}
             aria-label="AI 回答"
             aria-busy={streaming || undefined}
@@ -853,6 +858,9 @@ export function AnswerRunView(props: AnswerRunViewProps): React.JSX.Element {
               {...(props.activeCite !== undefined ? { activeCite: props.activeCite } : {})}
             />
           </section>
+        )}
+        {evidence.length > 0 && (
+          <EvidenceSection rows={evidence} {...(turn?.grounding !== undefined ? { grounding: turn.grounding } : {})} />
         )}
         {streaming && !hasAnswer && !hasTraceContent && (
           <div className={css.pendingAnswer} aria-hidden="true">

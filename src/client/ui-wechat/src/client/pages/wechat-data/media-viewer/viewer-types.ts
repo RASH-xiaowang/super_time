@@ -5,7 +5,7 @@ export interface ViewerSource {
   /** 已可用的缩略图 URL：原图未到时先显示它（可选）。 */
   thumb?: string | undefined
   /** 按需解析可渲染的 URL（data:/wechat-media:/blob:）；失败抛错。 */
-  load: () => Promise<string>
+  load: (options?: { retry?: boolean }) => Promise<string>
   /** 顶部信息条标题。 */
   title?: string | undefined
   /** 顶部信息条副标题（大小/来源等）。 */

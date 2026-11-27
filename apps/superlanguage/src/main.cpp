@@ -18,6 +18,7 @@
 
 #include "api_server.h"
 #include "automation.h"
+#include "license_gate.h"
 #include "queue_store.h"
 #include "resource.h"
 #include "version.h"
@@ -564,6 +565,92 @@ bool api_file_path(const wchar_t* file_name, wchar_t* path, size_t capacity) {
     *slash = L'\0';
     return _snwprintf_s(path, capacity, _TRUNCATE, L"%s\\%s", directory,
                         file_name) > 0;
+}
+
+/** 本进程 exe 的完整路径；失败返回空串。 */
+std::wstring executable_path() {
+    wchar_t path[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, path, ARRAYSIZE(path));
+    if (length == 0 || length >= ARRAYSIZE(path)) return std::wstring();
+    return std::wstring(path);
+}
+
+/** 本进程所在目录（不含末尾反斜杠）；失败返回空串。 */
+std::wstring executable_dir() {
+    std::wstring path = executable_path();
+    if (path.empty()) return path;
+    const size_t slash = path.find_last_of(L'\\');
+    if (slash == std::wstring::npos) return std::wstring();
+    return path.substr(0, slash);
+}
+
+/** 本目录是否由 Super Time 托管（存在 instance.ini）。 */
+bool has_instance_binding() {
+    wchar_t path[MAX_PATH]{};
+    return api_file_path(L"instance.ini", path, ARRAYSIZE(path))
+        && GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES;
+}
+
+/**
+ * 单实例锁的名字**按 exe 目录派生**。
+ *
+ * 原先是一个全局固定名：同一用户会话里任何一份 SuperLanguage 都会抢占它，
+ * 于是「一个 Super Time 托管多个实例」根本跑不起来 —— 第二份会立刻退出，
+ * 宿主只看到一句「实例进程已退出(code=0)」。按目录派生之后，不同实例目录互不干扰，
+ * 同一目录仍只允许一份（队列与 instance.lock 安全的前提）。
+ */
+std::wstring singleton_name() {
+    const std::wstring dir = executable_dir();
+    if (dir.empty()) return std::wstring(kMutexName);
+    unsigned long hash = 2166136261u;
+    for (const wchar_t ch : dir) {
+        hash ^= static_cast<unsigned long>(ch & 0xFFFF);
+        hash *= 16777619u;
+    }
+    wchar_t name[128]{};
+    swprintf_s(name, ARRAYSIZE(name), L"%s.%08lx", kMutexName, hash);
+    return std::wstring(name);
+}
+
+/** 窗口是否属于「与本进程同一个 exe」（按进程映像路径比较）。 */
+bool window_belongs_to_this_exe(HWND hwnd, const std::wstring& exe) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (pid == 0) return false;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return false;
+    wchar_t path[MAX_PATH * 2]{};
+    DWORD size = ARRAYSIZE(path);
+    const bool ok = QueryFullProcessImageNameW(process, 0, path, &size) != 0;
+    CloseHandle(process);
+    return ok && _wcsicmp(path, exe.c_str()) == 0;
+}
+
+struct OwnWindowSearch {
+    const std::wstring* exe;
+    HWND found;
+};
+
+BOOL CALLBACK find_own_window_proc(HWND hwnd, LPARAM lparam) {
+    auto* search = reinterpret_cast<OwnWindowSearch*>(lparam);
+    wchar_t cls[64]{};
+    if (GetClassNameW(hwnd, cls, ARRAYSIZE(cls)) == 0) return TRUE;
+    if (_wcsicmp(cls, kWindowClass) != 0) return TRUE;
+    if (!window_belongs_to_this_exe(hwnd, *search->exe)) return TRUE;
+    search->found = hwnd;
+    return FALSE;
+}
+
+/**
+ * 找「本目录这一份」已经开着的窗口。
+ *
+ * 不能用 `FindWindowW(kWindowClass, nullptr)`：那会抓到**别的实例**的窗口，
+ * 于是用户点启动时被激活的是另一个实例，看起来像「点了没反应」。
+ */
+HWND find_own_window(const std::wstring& exe) {
+    OwnWindowSearch search{&exe, nullptr};
+    EnumWindows(find_own_window_proc, reinterpret_cast<LPARAM>(&search));
+    return search.found;
 }
 
 // Keeps one previous generation (flow-debug.log.1) once the live file passes
@@ -1533,6 +1620,19 @@ void complete_active_job(bool succeeded, int sent_count, DWORD error) {
 }
 
 void start_next_job() {
+    // 授权闸门：票据失效且宽限期结束后不再领取新任务；已经在飞的任务不打断。
+    // 这里刻意只挡「领取」，不做 kill —— 安全性优先于立即止损。
+    if (!feather::license::available()) {
+        static ULONGLONG last_blocked_log = 0;
+        const ULONGLONG now = GetTickCount64();
+        if (now - last_blocked_log > 30000) {
+            last_blocked_log = now;
+            add_log(L"授权受限 · 暂停领取任务 · 状态 %hs · 请回到 Super Time「应用托管」检查",
+                    feather::license::state_code());
+        }
+        g.queueBackoffUntil = now + 5000;
+        return;
+    }
     if (!g.hwnd || g.modalDepth > 0 || g.jobActive
         || g.queueConsumptionBlocked || g.wechatPolling
         || g.pendingSearch[0] || g.pendingMessage[0]
@@ -4649,15 +4749,18 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     // ERROR_ACCESS_DENIED, which is expected and harmless.
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
-    HANDLE mutex = CreateMutexW(nullptr, TRUE, kMutexName);
+    const std::wstring singleton = singleton_name();
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, singleton.c_str());
     if (!mutex) {
         MessageBoxW(nullptr, L"无法初始化单实例锁。", kAppName, MB_ICONERROR | MB_OK);
         return 1;
     }
     if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        // 只激活「本目录这一份」的窗口；别的实例的窗口不属于这次启动。
+        const std::wstring exe = executable_path();
         HWND existing = nullptr;
         for (int attempt = 0; attempt < 40; ++attempt) {
-            existing = FindWindowW(kWindowClass, nullptr);
+            existing = find_own_window(exe);
             if (existing) {
                 break;
             }
@@ -4669,7 +4772,10 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
             PostMessageW(existing, kActivateMessage, 0, 0);
         }
         CloseHandle(mutex);
-        return 0;
+        // 托管模式：把「本目录已有一份在跑」如实报给宿主（退出码 5）。
+        // 回 0 会被读成「启动后正常结束」，界面就只剩一句「实例进程已退出(code=0)」，
+        // 而真实原因是单实例锁 —— 这条区分掉之后宿主才能提示「点启动重试（会接手）」。
+        return has_instance_binding() ? 5 : 0;
     }
 
     // Must be held before queue::open: a second instance's crash recovery
@@ -4693,6 +4799,27 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     g.startTick = GetTickCount64();
     g.taskbarCreatedMessage = RegisterWindowMessageW(L"TaskbarCreated");
     create_brushes();
+
+    // 授权闸门：必须在建窗口/开队列之前。拿不到 Super Time 的票据就退出，
+    // 绝不进入「先跑起来、慢慢等授权」的中间态（fail-closed）。
+    if (!feather::license::initialize(has_argument(L"--test-skip-license"))) {
+        if (!has_argument(L"--no-error-ui")) {
+            MessageBoxW(nullptr, feather::license::startup_block_message().c_str(),
+                        kAppName, MB_ICONERROR | MB_OK);
+        }
+        feather::license::shutdown();
+        destroy_brushes();
+        if (instance_lock) CloseHandle(instance_lock);
+        ReleaseMutex(mutex);
+        CloseHandle(mutex);
+        return 4;
+    }
+    if (feather::license::managed()) {
+        add_log(L"授权票据已就绪 · 剩余 %d 秒 · 关闭 Super Time 后宽限 15 分钟",
+                feather::license::expires_in_seconds());
+    } else {
+        add_log(L"授权校验已跳过 · 仅限隔离测试使用");
+    }
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -4857,6 +4984,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, LPWSTR, int) {
     stop_stop_hotkey();
     feather::automation::end_automation_guard();
     feather::automation::end_input_guard();
+    feather::license::shutdown();
     const bool api_stopped = feather::api::stop();
     if (api_stopped) {
         feather::queue::close();

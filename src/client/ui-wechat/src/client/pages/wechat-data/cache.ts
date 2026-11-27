@@ -92,12 +92,22 @@ export function cachedGet<T>(key: string, fetcher: () => Promise<T>): Promise<T>
       return timedFetch(key + ':hit', () => Promise.resolve(hit.value as T))
     }
   }
-  // 回源：走的是真实后端往返，这是最该被量到的一条。
-  return timedFetch(key, () => fetcher().then((value) => {
+  // 冷启动同键并发：图谱挂载时 useFreshData 和紧跟着的 reload 会在快照写入前
+  // 各打一次后端。worker 上这两次都是完整计算（真机 getGraph 1.3s + 2.0s）。
+  // 复验路径已有 _revalidating；这里补上「还没有任何快照」的在途合并。
+  const pending = _inflightGets.get(key)
+  if (pending) return pending as Promise<T>
+  const promise = timedFetch(key, () => fetcher().then((value) => {
     snapshotSet(key, value)
     notifySnapshotRefreshed(key)
     return value
   }))
+  _inflightGets.set(key, promise)
+  const forget = (): void => {
+    if (_inflightGets.get(key) === promise) _inflightGets.delete(key)
+  }
+  promise.then(forget, forget)
+  return promise
 }
 
 /** 后台复验一个已缓存的键：成功才写回并通知；同键并发只跑一次。 */
@@ -644,6 +654,8 @@ export const SNAPSHOT_REFRESHED_EVENT = 'dsh-snapshot-refreshed'
 
 /** 同一键的后台刷新去重（否则一次事件风暴会把同一个接口打若干遍）。 */
 const _revalidating = new Set<string>()
+/** 冷启动回源的在途请求。失败也会摘掉，下一次读可以重试。 */
+const _inflightGets = new Map<string, Promise<unknown>>()
 
 /** 通知这个键的订阅者 + 广播该接口族（两者都是 best-effort）。 */
 function notifySnapshotRefreshed(key: string): void {

@@ -19,6 +19,7 @@ export interface DecodeImageOptions {
  */
 export declare function decodeDatBytesAsync(data: Uint8Array, aesKey: Uint8Array | string | null, xorKey: number, opts?: {
     wxgf?: WxgfTranscoderAsync;
+    snsMemory?: boolean;
 }): Promise<{
     bytes: Uint8Array;
     format: string;

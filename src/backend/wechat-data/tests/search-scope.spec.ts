@@ -374,7 +374,55 @@ describe('记录：total 与 items 必须一致（不能再出现「有 total �
       receiver_enterprise: '示例企业',
       payer_display: '付款好友',
       payer_enterprise: '示例企业',
+      amount: '',
+      pay_flow: '',
     })
+    expect(queryRecords(dec, 'transfers', 20, 0, undefined, { selfUsername: 'wxid_payer@openim' }).items[0]?.['pay_flow']).toBe('out')
+    expect(queryRecords(dec, 'transfers', 20, 0, undefined, { selfUsername: 'wxid_receiver@openim' }).items[0]?.['pay_flow']).toBe('in')
+  })
+
+  it('转账金额来自消息卡片，不在转账表里时也要带出来', () => {
+    const dec = makeRoot()
+    const general = db(dec, join('general', 'general.db'))
+    general.exec(`CREATE TABLE transferTable (
+      transfer_id TEXT, transcation_id TEXT, message_server_id INTEGER, second_message_server_id INTEGER,
+      session_name TEXT, pay_sub_type INTEGER, pay_receiver TEXT, pay_payer TEXT,
+      begin_transfer_time INTEGER, last_modified_time INTEGER, invalid_time INTEGER,
+      last_update_time INTEGER, delay_confirm_flag INTEGER)`)
+    general.prepare('INSERT INTO transferTable VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+      'T-amt', 'X', 0, 1001, 'wxid_room', 3, 'wxid_a', 'wxid_b', 30, 30, 0, 30, 0,
+    )
+    general.close()
+    const message = db(dec, join('message', 'message_0.db'))
+    message.exec('CREATE TABLE Msg_amt (local_id INTEGER, server_id INTEGER, message_content TEXT)')
+    message.prepare('INSERT INTO Msg_amt VALUES (?,?,?)').run(
+      1,
+      1001,
+      '<msg><appmsg><type>2000</type><wcpayinfo><paysubtype>3</paysubtype><feedesc>￥12.50</feedesc></wcpayinfo></appmsg></msg>',
+    )
+    message.close()
+    expect(queryRecords(dec, 'transfers', 20, 0).items[0]?.['amount']).toBe('¥12.50')
+  })
+
+  it('转账卡片是 zstd 压缩时也能读出金额', async () => {
+    const { zstdCompressSync } = await import('node:zlib')
+    const dec = makeRoot()
+    const general = db(dec, join('general', 'general.db'))
+    general.exec(`CREATE TABLE transferTable (
+      transfer_id TEXT, transcation_id TEXT, message_server_id INTEGER, second_message_server_id INTEGER,
+      session_name TEXT, pay_sub_type INTEGER, pay_receiver TEXT, pay_payer TEXT,
+      begin_transfer_time INTEGER, last_modified_time INTEGER, invalid_time INTEGER,
+      last_update_time INTEGER, delay_confirm_flag INTEGER)`)
+    general.prepare('INSERT INTO transferTable VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(
+      'T-zstd', 'X', 2002, 0, 'wxid_room', 3, 'wxid_a', 'wxid_b', 40, 40, 0, 40, 0,
+    )
+    general.close()
+    const xml = '<msg><appmsg><type>2000</type><wcpayinfo><feedesc><![CDATA[￥1500.00]]></feedesc></wcpayinfo></appmsg></msg>'
+    const message = db(dec, join('message', 'message_0.db'))
+    message.exec('CREATE TABLE Msg_zstd (local_id INTEGER, server_id INTEGER, message_content BLOB)')
+    message.prepare('INSERT INTO Msg_zstd VALUES (?,?,?)').run(1, 2002, zstdCompressSync(Buffer.from(xml)))
+    message.close()
+    expect(queryRecords(dec, 'transfers', 20, 0).items[0]?.['amount']).toBe('¥1500.00')
   })
 })
 

@@ -241,9 +241,14 @@ describe('XML 原图尺寸：横竖旋转与容差', () => {
     expect(evaluateSnsOriginal(jpeg(1750, 1300), expected).accepted).toBe(true)
   })
 
-  it('200x300 预览与超出容差的尺寸都拒绝', () => {
+  it('200x300 预览与低于 75% 容差的尺寸都拒绝', () => {
     expect(evaluateSnsOriginal(jpeg(200, 300), expected).accepted).toBe(false)
-    expect(evaluateSnsOriginal(jpeg(1650, 1200), expected).accepted).toBe(false)
+    // 2026-11-24：容差是 75%（微信「大图」实测正好是 XML 尺寸的 75%，见
+    // `SNS_ORIGINAL_DIMENSION_TOLERANCE`）。原样例 1650×1200 落在 75–85% 之间，
+    // 按现行口径**应当接受**；这里换成真正低于 75% 的一档来验「超出容差就拒绝」。
+    expect(evaluateSnsOriginal(jpeg(1400, 1000), expected).accepted).toBe(false)
+    // 反证：75% 那一档确实被接受（否则上面那条只是「越小越拒绝」的恒真判据）。
+    expect(evaluateSnsOriginal(jpeg(1500, 1125), expected).accepted).toBe(true)
   })
 })
 

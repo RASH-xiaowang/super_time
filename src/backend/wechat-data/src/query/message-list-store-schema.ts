@@ -75,6 +75,7 @@ export function ensureMessageListSchema(db: DatabaseSync): void {
     note TEXT NOT NULL DEFAULT '',
     enabled INTEGER NOT NULL DEFAULT 1,
     managed_by TEXT NOT NULL DEFAULT '',
+    app_instance_id TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
   )`)
@@ -148,6 +149,11 @@ export function ensureMessageListSchema(db: DatabaseSync): void {
   }
   if (!ruleColumns.has('managed_by')) {
     db.exec("ALTER TABLE message_list_rules ADD COLUMN managed_by TEXT NOT NULL DEFAULT ''")
+  }
+  // 托管应用实例：地址来自某个 SuperLanguage 实例的 /webhook/<token>。
+  // 实例每次启动端口可能不同，主进程会按这一列把地址同步成新端口。
+  if (!ruleColumns.has('app_instance_id')) {
+    db.exec("ALTER TABLE message_list_rules ADD COLUMN app_instance_id TEXT NOT NULL DEFAULT ''")
   }
   // 老库的唯一索引只有「会话名 + 触发对象」；默认 AI 规则必须再带账号和
   // 会话 username，否则两个账号下的同名联系人会互相覆盖。
@@ -307,6 +313,7 @@ export function rowToMessageListRule(row: Record<string, unknown>): MessageListR
     greetingText: textOf(row['greeting_text'], TEXT_MAX),
     note: textOf(row['note'], NOTE_MAX),
     enabled: numOf(row['enabled']) === 1,
+    appInstanceId: textOf(row['app_instance_id'], 64),
     createdAt: numOf(row['created_at']),
     updatedAt: numOf(row['updated_at']),
   }

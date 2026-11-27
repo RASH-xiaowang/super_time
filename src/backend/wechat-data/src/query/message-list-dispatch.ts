@@ -31,8 +31,8 @@ import {
   isFeatherResourceEndpoint,
 } from './ai-reply/provider.ts'
 import { isGroupMessageListRecord, mentionOfRecord } from './ai-reply/queue-plan.ts'
-import { automaticReplyBlock } from './agent/reply-gate.ts'
-import { degradeToText } from './agent/decision.ts'
+import { automaticReplyBlock } from './ai-reply/reply-gate.ts'
+import { degradeToText } from './message-list-text.ts'
 import { MESSAGE_LIST_ATTACHMENT_TOTAL_MAX_BYTES, decodeMessageListImageDataUrl } from './message-list-attachments.ts'
 import {
   FEATHER_REQUEST_MAX_BYTES,
@@ -272,11 +272,11 @@ function requestBody(
   if (isTokenizedWebhookEndpoint(resolvedWebhookUrl)) {
     // This invariant must hold at the request builder, not only in the caller.
     if (resourceIds.length > 0 && text !== '') {
-      throw new Error('大肥鱼一次任务只能发送正文或附件；请拆成两条消息记录后分别重发')
+      throw new Error('一次任务只能发送正文或附件；请拆成两条消息记录后分别重发')
     }
     const webhook = featherRequestOf(record, degradeToText(text), undefined, resourceIds)
     if (webhook.ok && webhook.request !== undefined) return JSON.stringify(webhook.request)
-    throw new Error(webhook.error ?? '无法组装大肥鱼请求体')
+    throw new Error(webhook.error ?? '无法组装请求体')
   }
   const legacyAttachments = [...attachments.urls, ...attachments.dataUrls]
   if (isDshBridgeEndpoint(resolvedWebhookUrl)) {
@@ -309,7 +309,7 @@ function saveDispatchResponse(
   if (status >= 200 && status < 300) {
     if (isDshBridgeEndpoint(webhookUrl) && !isDshBridgeSuccess(bodyText)) {
       const error = redactWebhookSecrets(
-        '大肥鱼桥未确认发送成功' + (bodyText === '' ? '' : '：' + bodyText),
+        '发送端未确认发送成功' + (bodyText === '' ? '' : '：' + bodyText),
         webhookUrl,
       )
       const latest = saveMessageListDispatchResult(decryptedDir, record.id, {
@@ -581,7 +581,7 @@ async function dispatchMessageListRecordUnlocked(
     // 纯附件记录会先上传到 spool，再由 resource_ids 触发。
     if (isFeather && record.images.length > 0) {
       if (text !== '') {
-        throw new Error('大肥鱼一次任务只能发送正文或附件；请拆成两条消息记录后分别重发')
+        throw new Error('一次任务只能发送正文或附件；请拆成两条消息记录后分别重发')
       }
       resourceIds = await uploadMessageListImages(
         webhookUrl,
@@ -599,7 +599,7 @@ async function dispatchMessageListRecordUnlocked(
       const bytes = Buffer.byteLength(payload, 'utf8')
       if (bytes > FEATHER_REQUEST_MAX_BYTES) {
         throw new Error(
-          `大肥鱼请求体 ${String(bytes)} 字节，超过发送程序 ${String(FEATHER_REQUEST_MAX_BYTES)} 字节上限`,
+          `请求体 ${String(bytes)} 字节，超过发送程序 ${String(FEATHER_REQUEST_MAX_BYTES)} 字节上限`,
         )
       }
     }

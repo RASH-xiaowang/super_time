@@ -281,13 +281,13 @@ function runDomPass(cfg) {
     assert(!!$('#release a[href$="/releases/tag/v1.2.1"]'), '发布说明直达 v1.2.1 Release');
     assert(!!$('#release a[href$="/releases/download/v1.2.1/Super-Time-Setup-1.2.1.exe"]'), '下载按钮指向 1.2.1 安装包');
     assert($('#setupSha') && /3be2415a7d6778768044c8f86e21eb66b3999ee791e4fa1f64176f2164109d7e/i.test($('#setupSha').textContent), '展示 1.2.1 安装包 SHA256');
-    assert(/1\.4\.1/.test($('#release').textContent), '同时标明本机产品版本 1.4.1');
-    assert(!/立即下载\s*1\.4\.1/.test($('#release').textContent), '不把未发布的 1.4.1 写成立即下载');
+    assert(/1\.4\.2/.test($('#release').textContent), '同时标明本机产品版本 1.4.2');
+    assert(!/立即下载\s*1\.4\.2/.test($('#release').textContent), '不把未发布的 1.4.2 写成立即下载');
     assert(!$('#release a[href$="/releases/latest"]'), '下载区不把 latest 当作未核对的版本入口');
     const downloadHrefs = $$('a[data-download="public-1.2.1"]').map(a => a.getAttribute('href'));
     assert(downloadHrefs.length >= 4, '主下载按钮不少于 4 处');
     assert(downloadHrefs.every(h => /\/releases\/download\/v1\.2\.1\/Super-Time-Setup-1\.2\.1\.exe$/.test(h)), '主下载按钮均指向 1.2.1 安装包');
-    assert(!/立即下载\s*1\.4\.1/.test(HTML) && !/Super-Time-Setup-1\.4\.1/.test(HTML), '全页不出现未发布的 1.4.1 安装包下载文案');
+    assert(!/立即下载\s*1\.4\.2/.test(HTML) && !/Super-Time-Setup-1\.4\.2/.test(HTML), '全页不出现未发布的 1.4.2 安装包下载文案');
     assert(!!$('meta[property="og:title"]'), '包含 Open Graph 标题');
     const dvO = (HTML.match(/<div[ >]/g) || []).length, dvC = (HTML.match(/<\/div>/g) || []).length;
     assert(dvO === dvC, 'div 标签配平（' + dvO + ' / ' + dvC + '）');

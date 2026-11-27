@@ -5,7 +5,7 @@
  * GIF、BMP 或 HEIC/AVIF。这里用最小合法容器头验证：
  *   · 各格式都能读出宽高；
  *   · HEIC/AVIF 取面积最大的 `ispe`（缩略图属性先出现时不能赢）；
- *   · XML 尺寸按长短边比较，支持横竖旋转与 15% 容差；
+ *   · XML 尺寸按长短边比较，支持横竖旋转，并收下微信那档 75% 大图；
  *   · 读不出尺寸时只按字节数做保守兜底，不假装知道分辨率。
  *
  * @vitest-environment node
@@ -151,7 +151,13 @@ describe('evaluateSnsOriginal：按 XML <size> 判定', () => {
     expect(evaluateSnsOriginal(png(1440, 1920), expected).accepted).toBe(true)
   })
 
-  it('横竖旋转按长短边比较，15% 容差边界内接受', () => {
+  it('微信大图正好是 XML 尺寸的 75% 时直接接受，不再为同一张图出网', () => {
+    expect(evaluateSnsOriginal(jpeg(1926, 1446), { width: 2568, height: 1926 }).accepted).toBe(true)
+    expect(evaluateSnsOriginal(jpeg(1440, 1918), { width: 1920, height: 2556 }).accepted).toBe(true)
+    expect(evaluateSnsOriginal(jpeg(200, 300), { width: 2568, height: 1926 }).accepted).toBe(false)
+  })
+
+  it('横竖旋转按长短边比较，容差边界内接受', () => {
     expect(evaluateSnsOriginal(jpeg(1920, 1440), expected).accepted).toBe(true)
     const minLong = Math.ceil(1920 * SNS_ORIGINAL_DIMENSION_TOLERANCE)
     const minShort = Math.ceil(1440 * SNS_ORIGINAL_DIMENSION_TOLERANCE)

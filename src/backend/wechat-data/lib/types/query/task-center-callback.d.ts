@@ -48,14 +48,14 @@ export declare function dispatchTaskCallback(decryptedDir: string, decodedDir: s
 /**
  * 投递一批 `pending` 记录。
  *
- * 只按「记录 pending + 所属任务 ready」捞（**不再按厂商列过滤**）：逐条在 JS 里用注册表
- * 判配置后投递，未配置/厂商下线的记录会被 skipped 并写明原因（**落库为 skipped**，否则
- * 同一批 pending 会每拍重复占用名额、队头阻塞）。单条失败不连坐（错误只收集前 10 条）；
- * 成功/失败/skipped 都算处理过，下一拍不会重复捞。
+ * 只按「记录 pending + 所属任务 ready」捞（**不再按厂商列过滤**）：同一批里最多
+ * {@link DISPATCH_CONCURRENCY} 条同时出网。未配置/厂商下线的记录会被 skipped 并写明原因
+ * （**落库为 skipped**，否则同一批 pending 会每拍重复占用名额、队头阻塞）。单条失败不连坐
+ * （错误只收集前 10 条）；这一批成功写满上限时立刻再捞，最多 {@link DISPATCH_DRAIN_ROUNDS} 轮。
  * @param decryptedDir - 解密数据根。
  * @param decodedDir - 图片解码缓存根。
  * @param deps - 解码 / 隐私闸 / fetch 注入。
- * @param limit - 本次最多投几条（默认 10）。
+ * @param limit - 每一轮最多捞几条（默认 10）。写满且这一轮有成功时会再捞，最多 4 轮。
  * @returns 成功/失败计数与失败原因。
  */
 export declare function dispatchPendingTaskCallbacks(decryptedDir: string, decodedDir: string, deps: TaskDispatchDeps, limit?: number): Promise<PendingDispatchResult>;

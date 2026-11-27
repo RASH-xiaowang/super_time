@@ -382,10 +382,15 @@
 /* kit 的 .dialog 是 520px 的确认框尺寸，装不下完整设置页。类名写两遍提高优先级：
    同优先级的单类选择器谁在 CSS 里靠后谁赢，而跨模块文件的顺序不可控。 */
 .settingsDialog.settingsDialog {
-  /* 设置页是「目录 + 表单工作区」：桌面档加宽到 1120，窄窗仍保留四周呼吸。 */
-  width: min(1120px, 94vw);
-  height: min(90vh, 920px);
-  max-height: 90vh;
+  /* 设置页是「目录 + 表单工作区」。外框锁成 16:10，不随某一节内容变长而撑高。 */
+  box-sizing: border-box;
+  width: min(1120px, 94vw, calc(78vh * 1.6));
+  min-width: min(720px, 94vw);
+  max-width: min(1120px, 94vw);
+  aspect-ratio: 16 / 10;
+  height: min(700px, 78vh, calc(94vw * 0.625));
+  min-height: min(450px, 78vh);
+  max-height: min(700px, 78vh);
   padding: 0;
   overflow: hidden;
 }
@@ -523,7 +528,12 @@
      不需要给标签栏让位。 */
   .settingsDialog.settingsDialog {
     width: 100%;
+    min-width: 0;
     max-width: 100%;
+    height: 82dvh;
+    min-height: 0;
+    max-height: 82dvh;
+    aspect-ratio: auto;
     padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   }
 }

@@ -146,8 +146,11 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
   }
 
   return (
+    <>
+    <button type="button" className={cssshell.drawerScrim} aria-label="关闭聊天信息" onClick={onClose} />
     <div
       className={css.drawer}
+      data-edge="drawer"
       data-side-panel-view=""
       role="dialog"
       aria-modal="true"
@@ -158,19 +161,21 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
         <span className={css.title} id={titleId}>聊天信息</span>
         <button type="button" className={css.close} title="关闭" aria-label="关闭" onClick={onClose}><IconCloseOutline16 size={15} /></button>
       </div>
-      <div className={css.body}>
-        <button
-          type="button"
-          className={css.portraitEntry}
-          data-st-portrait-entry=""
-          onClick={() => { setPortraitOpen(true) }}
-        >
-          <span>
-            <strong>客户画像与标签</strong>
-            <small>身份、互动、资金与社交事实</small>
-          </span>
-          <span className={css.portraitChevron} aria-hidden="true">›</span>
-        </button>
+      <div className={css.body} data-st-info-body="">
+        {!isEnterpriseWechatUser(session.username) && enterpriseName === '' && (
+          <button
+            type="button"
+            className={css.portraitEntry}
+            data-st-portrait-entry=""
+            onClick={() => { setPortraitOpen(true) }}
+          >
+            <span>
+              <strong>客户画像与标签</strong>
+              <small>聊天、图片、朋友圈与可核验标签</small>
+            </span>
+            <span className={css.portraitChevron} aria-hidden="true">›</span>
+          </button>
+        )}
         {loading && <ListSkeleton rows={4} />}
         {err && <div className={kitCss.error} role="alert">⚠️ {err}</div>}
         {!loading && !err && contactData && (
@@ -212,18 +217,6 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
                 </>
               )}
             </div>
-
-            {/* 区⑥ 底部动作位：全宽贴底（官方底部按钮槽；D7）。2026-10-19 起并排「新建任务」。 */}
-            <div className={css.exportRow}>
-              <div className={taskCss.drawerActions}>
-                <button type="button" className={`${css.exportAction} ${css.exportActionPrimary}`} onClick={() => { setTaskOpen(true) }}>
-                  新建任务
-                </button>
-                <button type="button" className={css.exportAction} onClick={onExport}>
-                  导出聊天记录
-                </button>
-              </div>
-            </div>
           </>
         )}
         {!loading && !err && !contactData && (
@@ -236,6 +229,19 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
           </div>
         )}
       </div>
+      {/* 底部动作位放在滚动区外面。共同的群一长，按钮若留在滚动内容里会被列表盖住。 */}
+      {!loading && !err && contactData && (
+        <div className={css.exportRow}>
+          <div className={taskCss.drawerActions}>
+            <button type="button" className={`${css.exportAction} ${css.exportActionPrimary}`} onClick={() => { setTaskOpen(true) }}>
+              新建任务
+            </button>
+            <button type="button" className={css.exportAction} onClick={onExport}>
+              导出聊天记录
+            </button>
+          </div>
+        </div>
+      )}
       {taskOpen && <TaskCreateDialog session={session} onClose={() => { setTaskOpen(false) }} />}
       <CustomerPortraitDialog
         open={portraitOpen}
@@ -244,5 +250,6 @@ export function ChatsContactInfoView({ open, session, onClose, onExport }: Chats
         onClose={() => { setPortraitOpen(false) }}
       />
     </div>
+    </>
   )
 }

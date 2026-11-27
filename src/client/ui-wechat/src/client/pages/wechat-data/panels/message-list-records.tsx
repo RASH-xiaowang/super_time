@@ -42,6 +42,11 @@ interface MessageListRecordsProps {
   status: '' | MessageListStatus
   source: '' | MessageListSource
   thumbs: Record<string, string>
+  /**
+   * 当前规则表里是否已有覆盖这条记录的规则；没有地址快照也能区分「待配置」与
+   * 「待发送」。缺省按「没有规则」处理（旧调用点/测试无需改）。
+   */
+  hasRuleFor?: (record: MessageListRecord) => boolean
   canWrite: boolean
   hasMore?: boolean
   loadingMore?: boolean
@@ -80,9 +85,11 @@ type MessageListBatchState = ReturnType<typeof useMessageListBatch>
 function MessageListRecordsHeader(
   props: MessageListRecordsProps & { batch: MessageListBatchState },
 ): React.JSX.Element {
+  const hasRuleFor = (record: MessageListRecord): boolean => props.hasRuleFor?.(record) === true
   const now = Date.now()
-  const phases = props.records.map((record) => aiReplyPhase(record, now))
+  const phases = props.records.map((record) => aiReplyPhase(record, now, hasRuleFor(record)))
   const aiWaitingConfig = phases.filter((phase) => phase === 'waiting_config').length
+  const aiQueuedSend = phases.filter((phase) => phase === 'queued_send').length
   const aiGenerating = phases.filter((phase) => (
     phase === 'generating' || phase === 'stalled'
   )).length
@@ -97,7 +104,8 @@ function MessageListRecordsHeader(
         <span><b>{props.records.length}</b> / {props.total} 已加载</span>
         <span className={css.statPending}>
           <b>{props.stats.pending}</b> 待执行
-          {aiWaitingConfig > 0 ? ` / ${String(aiWaitingConfig)} 待配置` : ''} · 当前窗口
+          {aiWaitingConfig > 0 ? ` / ${String(aiWaitingConfig)} 待配置` : ''}
+          {aiQueuedSend > 0 ? ` / ${String(aiQueuedSend)} 待发送` : ''} · 当前窗口
         </span>
         {aiGenerating > 0 && (
           <span className={css.statPending}>
@@ -308,7 +316,6 @@ function MessageListTable(
       <EmptyState
         icon="✉"
         title={hasFilter ? '没有匹配的记录' : '还没有消息记录'}
-        desc="任务命中、外部 Webhook 或手动新增后，会在这里看到每次回复的状态。"
         action={(
           <Button
             size="sm"
@@ -362,6 +369,7 @@ function MessageListTable(
                 probeBusyId={props.probeBusyId}
                 jobBusyId={props.jobBusyId}
                 thumbs={props.thumbs}
+                hasRule={props.hasRuleFor?.(record) === true}
                 onToggle={props.batch.toggle}
                 onResend={props.onResend}
                 onProbe={props.onProbe}
@@ -391,6 +399,7 @@ function MessageListTable(
         <MessageListDetailDrawer
           record={detailRecord}
           thumbs={props.thumbs}
+          hasRule={props.hasRuleFor?.(detailRecord) === true}
           onClose={() => { setDetailRecordId(null) }}
         />
       )}

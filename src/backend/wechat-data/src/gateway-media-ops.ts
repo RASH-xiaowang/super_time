@@ -58,7 +58,7 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
    * @returns EmoticonsSnapshot: emoticon items.
    */
   @Remote('getEmoticons')
-  getEmoticons(options?: { limit?: number; offset?: number }): EmoticonsSnapshot {
+  getEmoticons(options?: { limit?: number; offset?: number; includeOthers?: boolean }): Promise<EmoticonsSnapshot> {
   return this.mediaRemotes().getEmoticons(options)
   }
 
@@ -281,7 +281,7 @@ export abstract class GatewayMediaOps extends GatewayAskOps {
    * @returns 逐条结果（键 = md5），顺序与去重后的入参一致。
    */
   @Remote('getEmoticonDataUrls')
-  async getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }> }): Promise<EmoticonDataUrlsResult> {
+  async getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }>; localOnly?: boolean }): Promise<EmoticonDataUrlsResult> {
   return this.mediaRemotes().getEmoticonDataUrls(options)
   }
 

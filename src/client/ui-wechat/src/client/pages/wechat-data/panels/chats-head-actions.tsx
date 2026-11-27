@@ -81,6 +81,8 @@ export interface ChatsHeadActionsProps {
   onBackToList?: () => void
   /** 会话级自动回复：null = 加载中/不可用；单聊与群聊都显示。 */
   aiReply?: ChatAiReplyUiState
+  /** 单聊跳到这个联系人的朋友圈。不给就不画按钮；群聊没有「这个人的朋友圈」。 */
+  onOpenMoments?: (username: string) => void
 }
 
 /**
@@ -93,7 +95,7 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
     curSession, aiEligible, aiOpen, setAiOpen, setAiFull,
     analysisPaneOpen, setAnalysisPaneOpen, openCalendar, groupInfoOpen, openGroupInfo,
     setGroupInfoOpen, contactInfoOpen, setContactInfoOpen, moreOpen, setMoreOpen, exporting, editing, edits,
-    setExportOpen, openEdits, clearAllDrafts, clearDraft, onBackToList, aiReply,
+    setExportOpen, openEdits, clearAllDrafts, clearDraft, onBackToList, aiReply, onOpenMoments,
   } = props
   /** 「新建任务」弹窗（触发式任务：关键词 + 对象 + 照片档位）只在点开时渲染，不占头部布局。 */
   const [taskOpen, setTaskOpen] = useState(false)
@@ -163,6 +165,21 @@ export function ChatsHeadActions(props: ChatsHeadActionsProps): React.JSX.Elemen
                 aiReply={aiReply}
                 onOpenSettings={() => { setAiReplySettingsOpen(true) }}
               />
+              {curSession.type === 'private' && onOpenMoments && (
+                <button
+                  type="button"
+                  className={cssrows.calBtn}
+                  title="查看这个联系人的朋友圈"
+                  aria-label="查看朋友圈"
+                  onClick={() => { onOpenMoments(curSession.username) }}
+                >
+                  <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <circle cx="12" cy="12" r="8" />
+                    <circle cx="12" cy="12" r="2.2" fill="currentColor" stroke="none" />
+                  </svg>
+                  <span className={cssshell.calBtnLabel}>朋友圈</span>
+                </button>
+              )}
               <div className={cssshell.msgHeaderMoreWrap} data-st-menu="msg-header-more" ref={moreRootRef}>
                 <button
                   ref={moreTriggerRef}

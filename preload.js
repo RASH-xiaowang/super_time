@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 /**
  * 递归冻结桥面（Alpha 的 single frozen bridge 做法）。
@@ -36,6 +36,8 @@ const electronAPI = deepFreeze({
   ping: () => ipcRenderer.invoke('app:ping'),
   /** 文件选择对话框：`opts.filters` 交给主进程转给原生对话框（知识库用它传白名单）。 */
   openFile: (opts) => ipcRenderer.invoke('dialog:open-file', opts),
+  /** KB drag/drop: resolve only a native File; synthetic files yield an empty path. */
+  kbFiles: { getPathForFile: (file) => webUtils.getPathForFile(file) },
   pickDirectory: () => ipcRenderer.invoke('dialog:open-directory'),
   /** 保存对话框：只取路径，写盘由后端做（大文件不经 IPC）。 */
   saveFileDialog: (opts) => ipcRenderer.invoke('dialog:save-file', opts),
@@ -138,6 +140,42 @@ const electronAPI = deepFreeze({
     importFile: () => ipcRenderer.invoke('license:import'),
     importText: (text) => ipcRenderer.invoke('license:import-text', text),
     remove: () => ipcRenderer.invoke('license:remove'),
+  },
+  /**
+   * 被托管应用（SuperLanguage）。
+   *
+   * `summary` 是面板唯一的数据入口：授权状态、席位、实例清单与运行态都在里面。
+   * 部署/启动/发送要过功能位；`stop`/`logs`/`status` 在授权失效后仍可用，
+   * 方便用户收尾。实例的 Bearer 令牌与票据密钥**永远不经过这里**。
+   */
+  apps: {
+    summary: () => ipcRenderer.invoke('apps:summary'),
+    create: (input) => ipcRenderer.invoke('apps:create', input),
+    update: (input) => ipcRenderer.invoke('apps:update', input),
+    remove: (input) => ipcRenderer.invoke('apps:remove', input),
+    deploy: (input) => ipcRenderer.invoke('apps:deploy', input),
+    start: (input) => ipcRenderer.invoke('apps:start', input),
+    stop: (input) => ipcRenderer.invoke('apps:stop', input),
+    restart: (input) => ipcRenderer.invoke('apps:restart', input),
+    status: (input) => ipcRenderer.invoke('apps:status', input),
+    logs: (input) => ipcRenderer.invoke('apps:logs', input),
+    proxy: (input) => ipcRenderer.invoke('apps:proxy', input),
+    openDir: (input) => ipcRenderer.invoke('apps:open-dir', input),
+    seedCaps: (input) => ipcRenderer.invoke('apps:seed-caps', input),
+    /** 局域网实例：立即补推一次票据。 */
+    pushTicket: (input) => ipcRenderer.invoke('apps:push-ticket', input),
+    /**
+     * 「下游 Webhook 地址选托管应用」：只返回**脱敏**地址（令牌变 `***`）。
+     * 真实 `/webhook/<token>` 由主进程在保存时现取，渲染层永远拿不到实例令牌。
+     */
+    webhookTargets: () => ipcRenderer.invoke('apps:webhook-targets'),
+    saveRule: (input) => ipcRenderer.invoke('apps:save-rule', input),
+    saveAiReplyWebhook: (input) => ipcRenderer.invoke('apps:save-ai-reply-webhook', input),
+    onEvent: (listener) => {
+      const wrapped = (_event, payload) => listener(payload)
+      ipcRenderer.on('apps:event', wrapped)
+      return () => ipcRenderer.removeListener('apps:event', wrapped)
+    },
   },
   /** 诊断日志（M6）：用户报障时把落盘日志导出来。 */
   diag: {

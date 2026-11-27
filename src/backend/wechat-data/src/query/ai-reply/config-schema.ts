@@ -125,6 +125,16 @@ export function ensureChatAiReplySchema(db: DatabaseSync): void {
   )
   addColumnIfMissing(
     db,
+    'safety_handoff',
+    "ALTER TABLE chat_ai_reply_settings ADD COLUMN safety_handoff TEXT NOT NULL DEFAULT ''",
+  )
+  addColumnIfMissing(
+    db,
+    'safety_blocked',
+    "ALTER TABLE chat_ai_reply_settings ADD COLUMN safety_blocked TEXT NOT NULL DEFAULT ''",
+  )
+  addColumnIfMissing(
+    db,
     'pending_cursor',
     "ALTER TABLE chat_ai_reply_settings ADD COLUMN pending_cursor TEXT NOT NULL DEFAULT ''",
   )

@@ -6,7 +6,7 @@
  * {@link RpaVendorAdapter}；核心管道（`dispatch.ts`）只认这个接口，不认识具体厂商。
  */
 import type { RpaVendorDescriptor, RpaTriggerConfig } from '../../types-rpa.ts';
-import type { TaskTriggerImage } from '../../types.ts';
+import type { TaskTriggerImage, TaskTriggerText } from '../../types.ts';
 import type { RetryFetch } from '../../net/fetch-retry.ts';
 /**
  * 一张触发图片的**投递形态**（2026-10-23）：引用 + 短时签名直链。
@@ -39,6 +39,8 @@ export interface RpaRecordContext {
     triggeredAt: number;
     /** 触发图片引用（Webhook 按需解码；RPA 的图片类来源按需签短时直链）。 */
     images: TaskTriggerImage[];
+    /** 触发时携带的文本消息（时间正序；只含触发人发的文本）。缺省 = 未配置。 */
+    texts?: TaskTriggerText[];
 }
 /** 一次投递的完整上下文（模板占位符的顶层根）。 */
 export interface RpaInvocationContext {

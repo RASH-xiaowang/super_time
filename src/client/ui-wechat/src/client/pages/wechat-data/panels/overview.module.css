@@ -189,6 +189,15 @@
   background: var(--nm-bg-0);
   min-width: 0;
 }
+.opsMetricGrid {
+  /* 画布单列扣除 .canvasCard 的 20px 内边距后略小于 3*120px，通用 auto-fit
+     minmax(120px) 会把这三张只剩指标的卡折成两列，删小字后留下一整行空高。 */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+.opsMetricGrid .metric {
+  padding: 6px 8px;
+}
 .metricValue {
   font-size: 16px;
   font-weight: 600;
@@ -662,6 +671,7 @@
 /* ── 响应式 ──────────────────────────────────────────────── */
 @media (max-width: 900px) {
   .metricGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .opsMetricGrid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .trendGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .skeletonRows { grid-template-columns: minmax(0, 1fr); }
 }

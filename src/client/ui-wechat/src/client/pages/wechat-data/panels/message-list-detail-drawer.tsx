@@ -21,6 +21,8 @@ export interface MessageListDetailDrawerProps {
   record: MessageListRecord | null
   /** 本机解码图片缓存，与列表行共用。 */
   thumbs: Record<string, string>
+  /** 当前规则表里是否已有覆盖这条记录的规则；用于区分「待配置」与「待发送」。 */
+  hasRule?: boolean
   onClose: () => void
 }
 
@@ -131,7 +133,6 @@ function DetailBody(props: {
       )}
 
       {record.source === 'ai_reply' && <MessageListTraceSection recordId={record.id} />}
-      {record.source === 'ai_reply' && <MessageListTraceSection recordId={record.id} />}
 
       <section className={css.section} aria-label="关键时间">
         <h3 className={css.sectionTitle}>关键时间</h3>
@@ -204,7 +205,9 @@ function DetailBody(props: {
 export function MessageListDetailDrawer(
   props: MessageListDetailDrawerProps,
 ): React.JSX.Element {
-  const model = props.record === null ? null : messageListDetailModel(props.record)
+  const model = props.record === null
+    ? null
+    : messageListDetailModel(props.record, Date.now(), props.hasRule === true)
   return (
     <Drawer
       open={model !== null}

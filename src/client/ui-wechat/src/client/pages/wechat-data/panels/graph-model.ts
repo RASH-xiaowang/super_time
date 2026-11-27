@@ -239,15 +239,12 @@ export const ENTITY_KIND_LABEL: Record<string, string> = {
 export const SELF_ID = 'self'
 
 /**
- * 社区色盘（10 色）：微信灰阶为主 + 微信绿/灰蓝少量强调。
- *
- * 为什么不再用霓虹盘：图谱节点属于「内容」，颜色只承担「区分圈子」这一件事；
- * 旧盘是蓝/紫/粉高饱和色，整张图看起来像霓虹灯。现在 8 档中性灰 + 2 个品牌色，
- * 相邻档刻意留出可辨识的明度差。未分组（-1）仍回落到中性灰 `#9aa0a6`。
+ * 社区色盘：低饱和的灰绿、灰蓝、陶土，用来给圈子铺底，不给头像套鲜艳描边。
+ * 未分组（-1）仍是中性灰。
  */
 export const COMMUNITY_COLORS = [
-  '#07c160', '#576b95', '#9aa0a6', '#7f8794', '#b2b6bd',
-  '#6b7280', '#8c939d', '#a5abb3', '#767e8a', '#98a0aa',
+  '#3f8f72', '#5d7ea6', '#b08a62', '#6e8f6a', '#8a739c',
+  '#4e8c96', '#a36d62', '#7d8a58', '#6a7f99', '#9a7468',
 ]
 
 /** 社区色:未分组(-1)→ 中性灰 */
@@ -385,6 +382,137 @@ export function firstCharKey(label: string): string {
   return ''
 }
 
+const REMARK_STEM_SPLIT = /[_—–\-|｜/／]+/
+
+/**
+ * 备注里用分隔符写下的单位。`法院_梧州万秀_会计小郭` → `法院_梧州万秀`。
+ * 最后一段通常是人名，不拿来分组；没有分隔符的班级编号仍走 `remark_group`。
+ * @param label - 节点上显示的备注或昵称。
+ * @returns 至少两字的单位名；不像单位备注时返回空串。
+ */
+export function remarkStemKey(label: string): string {
+  const parts = (label ?? '').trim().split(REMARK_STEM_SPLIT).map((part) => part.trim()).filter((part) => part !== '')
+  if (parts.length < 2) return ''
+  const stem = parts.slice(0, -1).join('_')
+  const letters = stem.replace(/[\s\-_—–~～·、,，.。:：;；/|()（）【】#*+"'“”‘’]/g, '')
+  if ([...letters].length < 2) return ''
+  return stem
+}
+
+/** 同一备注分组里要连线的人。超过 80 人时按 id 取前 80，保证每次连的是同一批。 */
+export function remarkLinkGroups<T extends { id: string }>(
+  nodes: readonly T[],
+  keyOf: (node: T) => string | undefined,
+  limit = 80,
+): Array<{ key: string; ids: string[] }> {
+  const byKey = new Map<string, T[]>()
+  for (const node of nodes) {
+    const key = keyOf(node)?.trim() ?? ''
+    if (key === '') continue
+    const list = byKey.get(key)
+    if (list) list.push(node)
+    else byKey.set(key, [node])
+  }
+  const groups: Array<{ key: string; ids: string[] }> = []
+  for (const [key, list] of byKey) {
+    if (list.length < 2) continue
+    const ranked = [...list].sort((a, b) => a.id.localeCompare(b.id))
+    const ids = ranked.slice(0, limit).map((node) => node.id)
+    if (ids.length >= 2) groups.push({ key, ids })
+  }
+  groups.sort((a, b) => a.key.localeCompare(b.key))
+  return groups
+}
+
+/** 不超过这个人数的同班、同单位，每两个人都连一条线。再大就只连成一张能走到的网。 */
+const REMARK_CLIQUE_LIMIT = 8
+
+/** 单位名的上一级。`工商银行_南宁分行` 与 `工商银行_玉林分行` 都归到「工商银行」；「法院」这种两字泛称不合并。 */
+export function remarkParentKey(label: string): string {
+  const stem = remarkStemKey(label)
+  if (stem === '') return ''
+  const head = stem.split('_')[0] ?? ''
+  if (head === '' || head === stem || [...head].length < 4) return ''
+  return head
+}
+
+export interface RemarkIslandCounts {
+  group: Map<string, number>
+  stem: Map<string, number>
+  parent: Map<string, number>
+}
+
+/** 统计备注分组人数。父级只统计没有更具体分组的人，避免分行被并回总行。 */
+export function remarkIslandCounts(nodes: readonly Pick<GNode, 'kind' | 'label' | 'remarkGroup'>[]): RemarkIslandCounts {
+  const group = new Map<string, number>()
+  const stem = new Map<string, number>()
+  const looseParent = new Map<string, number>()
+  for (const node of nodes) {
+    if (node.kind !== 'person' && node.kind !== 'group') continue
+    const grouped = node.remarkGroup?.trim() ?? ''
+    if (grouped) group.set(grouped, (group.get(grouped) ?? 0) + 1)
+    const stemmed = remarkStemKey(node.label)
+    if (stemmed) stem.set(stemmed, (stem.get(stemmed) ?? 0) + 1)
+  }
+  for (const node of nodes) {
+    if (node.kind !== 'person' && node.kind !== 'group') continue
+    const grouped = node.remarkGroup?.trim() ?? ''
+    if (grouped && (group.get(grouped) ?? 0) >= 2) continue
+    const stemmed = remarkStemKey(node.label)
+    if (stemmed && (stem.get(stemmed) ?? 0) >= 2) continue
+    const parent = remarkParentKey(node.label)
+    if (parent) looseParent.set(parent, (looseParent.get(parent) ?? 0) + 1)
+  }
+  return { group, stem, parent: looseParent }
+}
+
+/**
+ * 这个人该进哪座备注岛。
+ * 班级编号优先于单位，单位优先于上一级；单独一个人不占一座岛。
+ */
+export function remarkIslandKey(
+  node: Pick<GNode, 'kind' | 'label' | 'remarkGroup'>,
+  counts: RemarkIslandCounts,
+): string {
+  if (node.kind !== 'person' && node.kind !== 'group') return ''
+  const grouped = node.remarkGroup?.trim() ?? ''
+  if (grouped && (counts.group.get(grouped) ?? 0) >= 2) return grouped
+  const stemmed = remarkStemKey(node.label)
+  if (stemmed && (counts.stem.get(stemmed) ?? 0) >= 2) return stemmed
+  const parent = remarkParentKey(node.label)
+  if (parent && (counts.parent.get(parent) ?? 0) >= 2) return parent
+  return ''
+}
+
+/**
+ * 把同一备注分组连起来。
+ * 小组两两相连；大组只建连通网，避免一个 40 人的班画出几百条线。
+ */
+export function linkRemarkClusters(
+  nodes: ReadonlyArray<{ id: string; label: string; remark_group?: string }>,
+  addPair: (a: string, b: string, note: string) => void,
+  addTree: (ids: string[], note: string) => void,
+): void {
+  const link = (keyOf: (node: { id: string; label: string; remark_group?: string }) => string | undefined): void => {
+    for (const group of remarkLinkGroups(nodes, keyOf)) {
+      if (group.ids.length <= REMARK_CLIQUE_LIMIT) {
+        for (let i = 0; i < group.ids.length; i++) {
+          for (let j = i + 1; j < group.ids.length; j++) {
+            const left = group.ids[i]
+            const right = group.ids[j]
+            if (left !== undefined && right !== undefined) addPair(left, right, group.key)
+          }
+        }
+      } else {
+        addTree(group.ids, group.key)
+      }
+    }
+  }
+  link((node) => node.remark_group)
+  link((node) => (node.remark_group ? undefined : remarkStemKey(node.label)))
+  link((node) => (node.remark_group ? undefined : remarkParentKey(node.label)))
+}
+
 /** 消息量(亲密度代理)→ 权重:好友至少 100、非好友 80,叠加消息量(上限 1000) */
 function personWeight(isFriend: boolean, msgCount: number): number {
   const base = isFriend ? FRIEND_BASE_WEIGHT : NON_FRIEND_WEIGHT
@@ -405,23 +533,104 @@ function radiusBySqrt(value: number, divisor: number, min: number, max: number):
   return min + t * (max - min)
 }
 
+/** 只靠共同群凑出来的一圈，超过这个人数就不再当成一座岛。 */
+const COMMON_ISLAND_LIMIT = 8
+
 /**
- * 加权 Louvain 社区检测(确定性贪心):节点反复评估迁入邻居社区的
- * 模块度增益,只接受正增益移动。相比标签传播,「我」的枢纽边不再把
- * 所有人吸进同一个社区——共同群结构能拆出真正的社交圈子。
- * 孤立节点与成员数 <3 的社区标 -1(中性灰,与晕影成员数阈值一致)。
+ * 社交图谱的分组就是岛屿的名单。
+ * 备注分组优先；没有备注时，直接来往成组，一小圈共同群也可以成组。
+ * 太大的共同群不单独成岛，那些人也不再收成「其他」。
  */
-export function detectCommunities(nodes: GNode[], edges: GEdge[]): number {
-  if (nodes.length === 0) return 0
+function assignPersonIslands(nodes: GNode[], edges: GEdge[]): number {
+  const counts = remarkIslandCounts(nodes)
+  const keys = nodes.map((node) => remarkIslandKey(node, counts))
+  const parent = nodes.map((_, index) => index)
+  const find = (index: number): number => {
+    let cursor = index
+    while (parent[cursor] !== cursor) cursor = parent[cursor] as number
+    parent[index] = cursor
+    return cursor
+  }
+  const unite = (left: number, right: number): void => {
+    const a = find(left)
+    const b = find(right)
+    if (a !== b) parent[a] = b
+  }
+  const indexOf = new Map(nodes.map((node, index) => [node.id, index]))
+  const free = (index: number): boolean => {
+    const node = nodes[index]
+    return !!node && node.kind !== 'self' && node.id !== SELF_ID && keys[index] === ''
+  }
+  for (const edge of edges) {
+    if (edge.kind !== 'social') continue
+    const a = indexOf.get(edge.source)
+    const b = indexOf.get(edge.target)
+    if (a === undefined || b === undefined || a === b || !free(a) || !free(b)) continue
+    unite(a, b)
+  }
+  const socialRoot = parent.map((_, index) => find(index))
+  const socialSize = new Map<number, number>()
+  for (let index = 0; index < nodes.length; index++) {
+    if (!free(index)) continue
+    const root = socialRoot[index] ?? index
+    socialSize.set(root, (socialSize.get(root) ?? 0) + 1)
+  }
+  for (const edge of edges) {
+    if (edge.kind !== 'common') continue
+    const a = indexOf.get(edge.source)
+    const b = indexOf.get(edge.target)
+    if (a === undefined || b === undefined || a === b || !free(a) || !free(b)) continue
+    if ((socialSize.get(socialRoot[a] ?? a) ?? 1) > 1 || (socialSize.get(socialRoot[b] ?? b) ?? 1) > 1) continue
+    unite(a, b)
+  }
+  const members = new Map<number, number[]>()
+  for (let index = 0; index < nodes.length; index++) {
+    if (!free(index)) continue
+    const root = find(index)
+    const list = members.get(root)
+    if (list) list.push(index)
+    else members.set(root, [index])
+  }
+  for (const node of nodes) node.community = -1
+  const named = [...new Set(keys.filter((key) => key !== ''))].sort((a, b) => a.localeCompare(b))
+  const namedId = new Map(named.map((key, index) => [key, index]))
+  keys.forEach((key, index) => {
+    const node = nodes[index]
+    const id = namedId.get(key)
+    if (node && id !== undefined) node.community = id
+  })
+  let next = named.length
+  for (const [root, list] of members) {
+    const first = list[0] ?? root
+    const fromSocial = (socialSize.get(socialRoot[first] ?? first) ?? 1) > 1
+    if (list.length < 2 || (!fromSocial && list.length > COMMON_ISLAND_LIMIT)) continue
+    const id = next++
+    for (const index of list) {
+      const node = nodes[index]
+      if (node) node.community = id
+    }
+  }
+  return next
+}
+
+/**
+ * 笔记和文档仍用模块度分圈。人的分组不走这里，避免共同群把不同单位粘成一座岛。
+ */
+function louvainCommunities(nodes: GNode[], edges: GEdge[]): number {
+  const structural = edges.filter((edge) => edge.kind !== 'initial' && edge.kind !== 'intimacy')
   const n = nodes.length
   const idx = new Map<string, number>(nodes.map((g, i) => [g.id, i]))
   const adj = new Map<number, Map<number, number>>()
   for (let i = 0; i < n; i++) adj.set(i, new Map())
   let m2 = 0
-  for (const e of edges) {
+  for (const e of structural) {
     const a = idx.get(e.source)
     const b = idx.get(e.target)
     if (a === undefined || b === undefined || a === b) continue
+    const nodeA = nodes[a]
+    const nodeB = nodes[b]
+    if (!nodeA || !nodeB) continue
+    if (nodeA.kind === 'self' || nodeB.kind === 'self' || nodeA.id === SELF_ID || nodeB.id === SELF_ID) continue
     const wa = adj.get(a)
     const wb = adj.get(b)
     if (!wa || !wb) continue
@@ -473,7 +682,7 @@ export function detectCommunities(nodes: GNode[], edges: GEdge[]): number {
     }
     if (!moved) break
   }
-  // 孤立节点(无共同群边)与 <3 人社区 → -1 中性灰
+  // 孤立节点标 -1。两个人的共同关系也算一个圈子，否则成对的人没有颜色、也不会被拉开。
   const memberCount = new Map<number, number>()
   for (let i = 0; i < n; i++) {
     const c = comm.get(i) ?? -1
@@ -486,7 +695,7 @@ export function detectCommunities(nodes: GNode[], edges: GEdge[]): number {
     const g = nodes[i]
     if (!g) continue
     const c = comm.get(i) ?? -1
-    if ((nodeW.get(i) ?? 0) === 0 || (memberCount.get(c) ?? 0) < 3) {
+    if ((nodeW.get(i) ?? 0) === 0 || (memberCount.get(c) ?? 0) < 2) {
       g.community = -1
       continue
     }
@@ -496,12 +705,19 @@ export function detectCommunities(nodes: GNode[], edges: GEdge[]): number {
   return k
 }
 
+/** 人按分组上岛；笔记和文档仍按模块度分圈。 */
+export function detectCommunities(nodes: GNode[], edges: GEdge[]): number {
+  if (nodes.length === 0) return 0
+  if (nodes.some((node) => node.kind === 'person' || node.kind === 'group')) return assignPersonIslands(nodes, edges)
+  return louvainCommunities(nodes, edges)
+}
+
 /**
  * 「总人数」口径：当前模式 + 过滤条件下**真正可能进图**的节点（不含群与「我」）。
  *
  * 必须与 `buildGraph` 的筛选完全一致（同一份实现），否则「节点上限默认 = 30%」
  * 会按「通讯录全量」算（3002）而不是「当前过滤下能显示的人」（如仅好友时 289），
- * 默认值恒大于可用节点数 ⇒ 等于没限制。默认值取它的 30%，见 `defaultNodeLimit`。
+ * 默认值恒大于可用节点数 ⇒ 等于没限制。默认画出有来往的核心圈，见 `coreNodeLimit`。
  */
 export function rawCandidateNodes<T extends { kind: string; is_friend?: boolean }>(
   env: { nodes: ReadonlyArray<T> } | null | undefined,
@@ -536,15 +752,47 @@ export function eligibleCandidateCount(
 }
 
 /**
- * 默认「节点上限」：总人数 × 30%（四舍五入，至少 1 个）。
- *
- * 产品要求（2026-10-18）：初始只显示三成的人，先看清最密的核心圈，再按需拖大；
- * 之前是 `min(250, 全部)`，小图等于全量、大图恒为 250。30% 之下常见规模
- * （仅好友 289 人 → 87 个）力导向与头像加载都轻；超过头像预算 320 的部分
- * 按既有的 `avatarBudget` 降级为圆盘，不改变节点数。
+ * 旧的「总人数 × 30%」。保留给仍要按比例估算的调用；社交图谱默认改走 {@link coreNodeLimit}。
+ * @param totalPeople - 当前过滤下可进图的人数。
+ * @returns 至少 1。
  */
 export function defaultNodeLimit(totalPeople: number): number {
   return Math.max(1, Math.round(Math.max(0, totalPeople) * 0.3))
+}
+
+/** 头像预算内能看清的人数。核心圈超过这个数时，先画消息量最高的这部分。 */
+export const CORE_NODE_CAP = 320
+
+/**
+ * 默认节点上限：有消息往来、或已经出现在观测边上的人全部画上。
+ *
+ * 没有来往的联系人留在图外，并由页面写明还藏着多少人。核心圈本身超过
+ * {@link CORE_NODE_CAP} 时，只先画这么多，避免头像和力导向一起失控。
+ * @param env - 图谱快照。节点需要 `id` / `msg_count`，边需要 `source` / `target`。
+ * @param s - 当前模式与「仅好友」。
+ * @returns 至少 1，不超过候选人数，也不超过 {@link CORE_NODE_CAP}。
+ */
+export function coreNodeLimit(
+  env: {
+    nodes: ReadonlyArray<{ id?: string; kind: string; is_friend?: boolean; msg_count?: number }>
+    edges?: ReadonlyArray<{ source?: unknown; target?: unknown }>
+  } | null | undefined,
+  s: Pick<GraphSettings, 'mode' | 'friendsOnly'>,
+): number {
+  const candidates = rawCandidateNodes(env, s)
+  if (candidates.length === 0) return 1
+  const linked = new Set<string>()
+  for (const edge of env?.edges ?? []) {
+    if (typeof edge.source === 'string') linked.add(edge.source)
+    if (typeof edge.target === 'string') linked.add(edge.target)
+  }
+  let core = 0
+  for (const node of candidates) {
+    const id = node.id ?? ''
+    if ((node.msg_count ?? 0) > 0 || (id !== '' && linked.has(id))) core += 1
+  }
+  const size = core === 0 ? Math.min(candidates.length, 48) : core
+  return Math.max(1, Math.min(candidates.length, size, CORE_NODE_CAP))
 }
 
 interface RawGraphEdgeInput {
@@ -1158,7 +1406,7 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
    * 全局 pair-work 预算都写入 coverage。后端已有同义权威关系时不再生成客户端
    * 副本，既避免重复边，也让“权威数据覆盖了多少推导”可审计。
    */
-  interface CommonPairAccumulator { first: string; second: string; weight: number; evidence: Set<string> }
+  interface CommonPairAccumulator { first: string; second: string; weight: number; evidence: Set<string>; guaranteed: boolean }
   const commonPairs = new Map<string, CommonPairAccumulator>()
   const addDerivedPairs = (
     rawList: readonly string[],
@@ -1172,6 +1420,7 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
     const members = list.length > CLIENT_COMMON_PAIR_MEMBER_LIMIT
       ? list.slice(0, CLIENT_COMMON_PAIR_MEMBER_LIMIT)
       : list
+    const guaranteed = members.length <= REMARK_CLIQUE_LIMIT
     let truncated = members.length < list.length
     pairLoop:
     for (let i = 0; i < members.length; i++) {
@@ -1196,12 +1445,14 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
         if (acc) {
           acc.weight += 1
           acc.evidence.add(evidence)
+          if (guaranteed) acc.guaranteed = true
         } else {
           commonPairs.set(key, {
             first: ai < bj ? ai : bj,
             second: ai < bj ? bj : ai,
             weight: 1,
             evidence: new Set([evidence]),
+            guaranteed,
           })
         }
       }
@@ -1219,21 +1470,18 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
   }
   const derivedCommon = [...commonPairs.values()]
     .filter((pair) => pair.weight >= s.minCommon)
-    .sort((a, b) => b.weight - a.weight || a.first.localeCompare(b.first) || a.second.localeCompare(b.second))
+    .sort((a, b) => Number(b.guaranteed) - Number(a.guaranteed) || b.weight - a.weight || a.first.localeCompare(b.first) || a.second.localeCompare(b.second))
   derivedCoverage.commonGeneratedPairs = derivedCommon.length
   derivedCoverage.commonBelowThresholdPairs = Math.max(0, commonPairs.size - derivedCommon.length)
   derivedCoverage.truncated = derivedCoverage.pairWorkExhausted
     || derivedCoverage.commonGroup.truncatedSources > 0
     || derivedCoverage.commonMember.truncatedSources > 0
 
-  /**
-   * 推导层只占后端观测边之外的余量。观测边本身是权威数据，不因 6000 条显示上限被删；
-  * 若后端一次返回超过上限，模型仍完整保留，画布可选择截断绘制。
-  */
   const observedCap = Math.min(OBSERVED_EDGE_CAP, edgeDensityCap(nodes.length))
-  const addObservedDerived = (draft: RelationDraft): RelationAddResult & { droppedByEdgeBudget: boolean } => {
+  const addObservedDerived = (draft: RelationDraft, keep = false): RelationAddResult & { droppedByEdgeBudget: boolean } => {
     const key = pairKey(draft.source, draft.target)
-    if (!pairBuckets.has(key) && pairBuckets.size >= observedCap) {
+    const cap = observedCap + (keep ? 400 : 0)
+    if (!pairBuckets.has(key) && pairBuckets.size >= cap) {
       graphCoverage.droppedEdges += 1
       return {
         pairAdded: false,
@@ -1258,15 +1506,11 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
         derivedCoverage.intimacySuppressedByAuthoritative += 1
         continue
       }
+      const messages = Math.max(0, Math.round(n.msg_count ?? 0))
       const result = addObservedDerived({
-        source: SELF_ID, target: n.id,
-        weight: n.is_friend === true && !isGroup ? Math.max(1, n.group_count ?? 0) : Math.max(1, n.msg_count ?? 0),
-        // 亲密度距离只随亲密度变化;「连线长度」由仿真侧统一应用
-        dist: 340 - t * 260,
-        strength: 0.02 + t * 0.16,
-        kind: 'intimacy',
-        bidirectional: true,
-        origin: 'derived',
+        source: SELF_ID, target: n.id, weight: Math.max(messages, 1), dist: 340 - t * 260, strength: 0.02 + t * 0.16,
+        kind: 'intimacy', bidirectional: true, origin: 'derived', evidenceCount: 1,
+        evidence: [isGroup ? `这个群里的消息 ${messages} 条` : `和我的消息 ${messages} 条`],
       })
       if (result.suppressedByAuthoritative) {
         derivedCoverage.intimacySuppressedByAuthoritative += 1
@@ -1290,7 +1534,7 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       origin: 'derived',
       evidence: [...p.evidence],
       evidenceCount: p.evidence.size,
-    })
+    }, p.guaranteed)
     if (result.suppressedByAuthoritative) {
       derivedCoverage.commonSuppressedByAuthoritative += 1
     } else if (result.droppedByEdgeBudget) {
@@ -1329,10 +1573,12 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
    * 返回 `added` 表示新增视觉点对，`merged` 表示该点对已有观测/其他关系但本次语义
    * 已成功并入，`ignored` 才是非法端点、自连、重复关系或额度已满。
    */
-  const addInferred = (a: string, b: string, kind: 'class' | 'initial'): InferredAddResult => {
+  const addInferred = (a: string, b: string, kind: 'class' | 'initial', note?: string): InferredAddResult => {
     if (!a || !b || a === b) return 'ignored'
     const key = pairKey(a, b)
-    if (!pairBuckets.has(key) && pairBuckets.size >= edgeDensityCap(nodes.length)) return 'ignored'
+    // 同备注的人必须连上。共同群点对会先把密度额度占满，班级边若守同一道上限就会整组消失。
+    const cap = edgeDensityCap(nodes.length) + (kind === 'class' ? 800 : 0)
+    if (!pairBuckets.has(key) && pairBuckets.size >= cap) return 'ignored'
     const result = addRelation({
       source: a,
       target: b,
@@ -1341,6 +1587,7 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       kind,
       bidirectional: true,
       origin: 'derived',
+      ...(note ? { evidence: [note], evidenceCount: 1 } : {}),
     })
     if (!result.relationAdded && !pairHasRelation(key, kind)) return 'ignored'
     if (kind === 'initial') {
@@ -1375,19 +1622,19 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
    *   更优先的边占了，于是那一条被去重掉）。`class` 层不用它：那边 `n-1` 是硬约束。
    * @returns 实际新增的**视觉边**条数；合并到已有点对的语义不占额度。
    */
-  const addAnchorTree = (ids: string[], kind: 'class' | 'initial', coverAll = false): number => {
+  const addAnchorTree = (ids: string[], kind: 'class' | 'initial', coverAll = false, note?: string): number => {
     // 锚点数 ≥1 且 ≤ n-1：保证「锚之间串起来 + 其余各挂一条」正好是 n-1 条
     const anchors = ids.slice(0, Math.min(CLASS_ANCHORS, Math.max(1, ids.length - 1)))
     const before = pairBuckets.size
-    for (let i = 1; i < anchors.length; i++) addInferred(anchors[0] as string, anchors[i] as string, kind)
+    for (let i = 1; i < anchors.length; i++) addInferred(anchors[0] as string, anchors[i] as string, kind, note)
     const rest = ids.slice(anchors.length)
     rest.forEach((id, i) => {
       const preferred = anchors[i % anchors.length] as string
-      if (addInferred(preferred, id, kind) !== 'ignored') return
+      if (addInferred(preferred, id, kind, note) !== 'ignored') return
       if (!coverAll) return
       // 首选锚点已连通 → 依次试其余锚点
       for (let k = 1; k < anchors.length; k++) {
-        if (addInferred(anchors[(i + k) % anchors.length] as string, id, kind) !== 'ignored') return
+        if (addInferred(anchors[(i + k) % anchors.length] as string, id, kind, note) !== 'ignored') return
       }
     })
     // coverAll 兜底扫描：**锚点链本身也可能整条被更强边占掉**（真机实测：不加这一步，
@@ -1397,23 +1644,19 @@ export function buildGraph(env: GraphBuildInput | null, s: GraphSettings): Built
       for (const id of ids) {
         if (initialCovered.has(id)) continue
         for (const other of ids) {
-          if (other !== id && addInferred(other, id, kind) !== 'ignored') break
+          if (other !== id && addInferred(other, id, kind, note) !== 'ignored') break
         }
       }
     }
     return pairBuckets.size - before
   }
 
-  // 同备注编号边(class)：同样按余量截断。真机全量视图 class 上限只有 77 条、远没到额度，
-  // 但额度必须由公式给出，不能靠「实测它很小」来保证 —— 备注里带编号的人一多，它就会
-  // 独自吃掉整个额度、把后面的首字层挤成 0。整组放不下就跳过**整组**（用 continue 而不是
-  // break：后面还有小组合适放），这样「每个被处理的组恰好 n−1 条」这条硬约束不会被从中间截断。
   if (s.mode === 'people' && s.remarkClass) {
-    let left = edgeHeadroom(nodes.length, pairBuckets.size)
-    for (const ids of keyedGroups(n => n.remark_group)) {
-      if (ids.length - 1 > left) continue
-      left -= addAnchorTree(ids, 'class')
-    }
+    linkRemarkClusters(
+      top,
+      (a, b, note) => { addInferred(a, b, 'class', note) },
+      (ids, note) => { addAnchorTree(ids, 'class', false, note) },
+    )
   }
 
   // 首字连边(initial)：先问余量，再决定生成多少 —— 额度来自 graph-budget（与绘制层同源）。

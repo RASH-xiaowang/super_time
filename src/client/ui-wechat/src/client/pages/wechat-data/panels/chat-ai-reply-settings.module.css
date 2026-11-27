@@ -204,6 +204,20 @@
   font-weight: 650;
 }
 
+.safetyLines {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.safetyLines span {
+  padding: 1px 8px;
+  border-radius: var(--nm-r-pill);
+  background: color-mix(in srgb, var(--nm-danger) 12%, transparent);
+  color: var(--nm-text-2);
+  font-size: var(--nm-fs-xs);
+}
+
 .webhookStatus {
   margin-left: auto;
   padding: 2px var(--nm-s-2);
@@ -250,17 +264,7 @@
   flex: 1;
 }
 
-/* 双类名提权，稳过 kit Dialog 的 520px 默认宽度。 */
-.settingsDialog.settingsDialog {
-  width: min(680px, calc(100vw - 32px));
-}
-
 @media (max-width: 560px) {
-  .settingsDialog.settingsDialog {
-    width: 100%;
-    max-width: 100%;
-  }
-
   .webhookRow {
     align-items: stretch;
     flex-direction: column;

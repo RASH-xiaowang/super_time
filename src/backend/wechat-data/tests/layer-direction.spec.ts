@@ -92,7 +92,12 @@ const KEYS_GLUE_ALLOW = new Set<string>([])
  * （消息列表投递、消息列表健康探测、定时总结推送）必须是**同一把尺子** —— 各写一份就会出现
  * 「这里能存、那里拒绝」或者「某条路径把 token 原样写进日志」。放行它不会把上层依赖带进 query。
  */
-const QUERY_GLUE_ALLOW = new Set(['types.ts', 'types-rpa.ts', 'types-analysis.ts', 'net/fetch-retry.ts', 'net/rpa-media.ts', 'net/webhook-endpoint.ts'])
+const QUERY_GLUE_ALLOW = new Set([
+  'types.ts', 'types-rpa.ts', 'types-analysis.ts',
+  // 2026-11-24：本地工具清单的契约（`query/local-tools.ts` 只读它，不反向依赖任何上层）。
+  'types-local-tools.ts',
+  'net/fetch-retry.ts', 'net/rpa-media.ts', 'net/webhook-endpoint.ts',
+])
 
 /** 一条解析出来的包内依赖边。 */
 interface Edge {

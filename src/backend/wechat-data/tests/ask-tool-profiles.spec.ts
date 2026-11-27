@@ -135,7 +135,7 @@ describe('AnswerProfile：白名单与边界', () => {
     ].sort())
     // 联系人/朋友圈/收藏/文件/知识库/会话列表都不该出现在会话内问答里；
     // get_moments_stats 是朋友圈统计（天然跨会话），同样不允许。
-    for (const name of ['search_kb', 'list_sessions', 'search_contacts', 'search_moments', 'get_moments_stats', 'search_favorites', 'search_files', 'search_records']) {
+    for (const name of ['search_kb', 'list_sessions', 'search_contacts', 'get_social_summary', 'search_moments', 'get_moments_stats', 'search_favorites', 'search_files', 'search_records']) {
       expect(isToolAllowed(profile, name), `${name} 不该被允许`).toBe(false)
     }
   })
@@ -509,6 +509,45 @@ describe('AnswerProfile：执行期范围强制', () => {
         requested: '456@chatroom',
       })
     }
+  })
+
+  it('锁定群时，群名收敛为当前群；对不上的显示名仍然拒绝', () => {
+    const named = enforceProfileScope(
+      'wechat-ask',
+      'get_group_detail',
+      { group: '【官方】DeepSeek交流105群' },
+      {
+        decryptedDir: '/tmp/test-profile',
+        scope: { username: '123@chatroom', displayName: '【官方】DeepSeek交流105群' },
+      },
+    )
+    expect(named.ok).toBe(true)
+    if (named.ok) {
+      expect(named.args['group']).toBe('123@chatroom')
+      expect(named.adjustments.some(item => item.field === 'group')).toBe(true)
+    }
+
+    // 没有显示名时，非账号标识按当前群收敛，不能把整轮证据判成越权。
+    const unlabeled = enforceProfileScope(
+      'session-ask',
+      'get_group_detail',
+      { group: '项目群' },
+      ctx('123@chatroom'),
+    )
+    expect(unlabeled.ok).toBe(true)
+    if (unlabeled.ok) expect(unlabeled.args['group']).toBe('123@chatroom')
+
+    const otherName = enforceProfileScope(
+      'session-ask',
+      'get_group_detail',
+      { group: '别的群' },
+      {
+        decryptedDir: '/tmp/test-profile',
+        scope: { username: '123@chatroom', displayName: '项目群' },
+      },
+    )
+    expect(otherName.ok).toBe(false)
+    if (!otherName.ok) expect(otherName.error.errorCode).toBe('scope_violation')
   })
 
   it('会话内问答锁定 search_revoked 的上下文范围（工具内部按 session_username 过滤）', () => {

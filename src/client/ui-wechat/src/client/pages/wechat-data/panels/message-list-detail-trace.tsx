@@ -63,6 +63,65 @@ function TextBlock(props: {
   )
 }
 
+/** 失败码 → 中文说明。查不到原因时原样显示，便于对照后端码排查。 */
+const TOOL_CODE_LABEL: Record<string, string> = {
+  tool_network: '网络不通（DNS 解析或连接失败）',
+  tool_timeout: '超时未返回',
+  tool_unavailable: '工具内部异常',
+  tool_bad_response: '服务端返回的不是合法数据（可能是错误页）',
+  tool_result_budget: '结果过长被截断',
+  invalid_tool_arguments: '参数不合法',
+  unknown_tool: '没有这个工具',
+  weather_provider_not_configured: '未选择天气数据源',
+  weather_license_mode_required: '未选择天气使用方式',
+  weather_key_missing: '商用模式缺少 API Key',
+  weather_city_not_in_target: '目标消息里没有提到这个城市（不允许猜位置）',
+  city_not_in_target: '目标消息里没有提到这个城市（不允许猜位置）',
+  region_not_in_target: '目标消息里没有提到这个地区',
+  weather_city_not_found: '地名解析不到（换个更完整的城市名）',
+  weather_city_ambiguous: '城市重名，需要补充省份',
+  weather_date_target_mismatch: '日期与消息里说的不一致',
+  weather_date_out_of_range: '日期超出可查范围（今天起 7 天内）',
+  weather_current_unavailable: '实时观测暂不可用',
+  weather_forecast_unavailable: '预报里没有这一天',
+  weather_forecast_stale_or_timezone: '返回的时区/日期与本地不一致',
+  weather_forecast_incomplete: '预报数据不完整',
+  search_provider_not_configured: '未选择搜索服务',
+  search_key_missing: '缺少搜索 API Key',
+  search_query_not_public_target: '检索词不在目标消息里（不允许外传）',
+  url_not_in_target: '链接不在目标消息里（不允许读别的网址）',
+  public_url_blocked: '链接被安全策略拦下',
+  public_dns_blocked: '主机解析到内网地址，已拒绝',
+  public_redirect_limit: '跳转次数过多',
+  public_content_type: '返回的不是文本或 JSON',
+  public_body_limit: '返回内容过大',
+}
+
+function toolCodeLabel(code: string | undefined): string {
+  if (code === undefined || code === '') return ''
+  return TOOL_CODE_LABEL[code] ?? code
+}
+
+/** 本轮工具调用明细（没有调用时整块不渲染）。 */
+function ToolCalls(props: { tools: ChatAiReplyTraceView['tools'] }): React.JSX.Element | null {
+  if (props.tools.length === 0) return null
+  return (
+    <div className={css.traceToolList}>
+      {props.tools.map((tool, index) => {
+        const label = toolCodeLabel(tool.code)
+        return (
+          <div className={css.traceTool} key={String(index)} data-ok={tool.ok ? 'true' : undefined}>
+            <code className={css.traceToolName}>{tool.name}</code>
+            <span className={css.traceToolState}>{tool.ok ? '成功' : '失败'}</span>
+            {!tool.ok && label !== '' && <span className={css.traceToolCode}>{label}</span>}
+            <span className={css.traceToolElapsed}>{tool.elapsedMs} ms</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 function TraceBody(props: { trace: ChatAiReplyTraceView }): React.JSX.Element {
   const { trace } = props
   return (
@@ -108,6 +167,21 @@ function TraceBody(props: { trace: ChatAiReplyTraceView }): React.JSX.Element {
 
       {trace.error !== '' && (
         <p className={css.traceError}>{trace.error}</p>
+      )}
+
+      {/*
+        工具调用单列一块：它回答了「为什么这条回复看起来没查数据」。
+        以前这些信息只被拼进「已生成」那一行的 detail 文本（`tools=weather:unavailable`），
+        界面上既没单独渲染、也看不到失败原因。
+      */}
+      {trace.tools.length > 0 && (
+        <div className={css.traceTools}>
+          <span className={css.traceToolsTitle}>
+            工具调用
+            <span className={css.traceCount}>{String(trace.tools.length)} 次</span>
+          </span>
+          <ToolCalls tools={trace.tools} />
+        </div>
       )}
 
       <TextBlock title="上下文（发给模型的历史对话）" value={trace.context} open />

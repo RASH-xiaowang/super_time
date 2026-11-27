@@ -179,6 +179,18 @@ describe('消息记录详情抽屉', () => {
     expect(text).not.toContain('删除')
   })
 
+  it('回复过程只渲染一次（同一条记录不能出现两段重复留痕）', async () => {
+    await render([baseRecord()])
+    await click(openTrigger())
+    const panel = dialog()
+    // 2026-11-24 实测：抽屉里把 `<MessageListTraceSection>` 连着写了两遍，
+    // 于是同一份留痕在详情里出现两次（用户看到「两段重复的回复过程」）。
+    const headings = [...(panel?.querySelectorAll('h3') ?? [])]
+      .filter((el) => (el.textContent ?? '').trim() === '回复过程')
+    expect(headings, '「回复过程」出现了多次').toHaveLength(1)
+    expect(panel?.querySelectorAll('[aria-label="回复过程"]').length).toBe(1)
+  })
+
   it('群聊首条显示 @提问者', async () => {
     await render([baseRecord({
       id: 21,

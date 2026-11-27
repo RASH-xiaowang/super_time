@@ -50,7 +50,11 @@ namespace {
 
 const wchar_t kMainClass[] = L"SuperTimeLicenseStudio";
 const wchar_t kScrollClass[] = L"SuperTimeLicenseStudioScroll";
+const wchar_t kAppClass[] = L"SuperTimeLicenseStudioApp";
 const wchar_t kTitle[] = L"Super Time 授权签发台";
+
+/** 延迟初始化：窗口显示之后再调发证引擎（见 CreateMainUi 里那段注释）。 */
+constexpr UINT kInitMessage = WM_APP + 1;
 
 enum Ids {
   kIdKeyStatus = 1001,
@@ -77,7 +81,23 @@ enum Ids {
   kIdFeatureCount,
   kIdBtnVerify,
   kIdVerifyStatus,
+  /** 「应用托管额度…」：打开模态小窗编辑实例数 / 每小时上限 / 允许能力。 */
+  kIdBtnAppQuota,
   kIdFeatureBase = 2000
+};
+
+/**
+ * 应用托管额度小窗的控件 id。
+ *
+ * 只在这个小窗里唯一即可；`IDOK` / `IDCANCEL` 刻意用系统值 —— 这样
+ * `IsDialogMessageW` 才会把 Enter / Esc 映射到确定 / 取消。
+ */
+enum AppDlgIds {
+  kIdDlgHint = 501,
+  kIdDlgInstances,
+  kIdDlgQuota,
+  kIdDlgCapBase = 520,
+  kIdDlgReset = 580
 };
 
 std::wstring Utf8ToWide(const std::string& s) {
@@ -292,23 +312,56 @@ EngineResult RunEngine(const Paths& paths, const std::vector<std::wstring>& args
   }
   CloseHandle(inW);
 
-  auto readAll = [](HANDLE h) {
-    std::string s;
-    char buf[4096];
-    DWORD n = 0;
-    while (ReadFile(h, buf, sizeof(buf), &n, nullptr) && n) s.append(buf, n);
-    return s;
+  /**
+   * 非阻塞地把管道里**已有**的字节读出来。
+   *
+   * 为什么不直接 `ReadFile` 到底：那会一直等到写端关闭。发证引擎是 node 子进程，
+   * 实测在部分机器上它打印完 JSON 后仍会多停留（父进程一直等到 30 秒超时才发现
+   * 输出早就齐了）。PeekNamedPipe + 只读 available 字节可以让「读」与「等退出」解耦。
+   */
+  auto drainAvailable = [](HANDLE h, std::string* out) {
+    for (;;) {
+      DWORD available = 0;
+      if (!PeekNamedPipe(h, nullptr, 0, nullptr, &available, nullptr) || available == 0) return;
+      char buf[4096];
+      DWORD want = available < sizeof(buf) ? available : static_cast<DWORD>(sizeof(buf));
+      DWORD got = 0;
+      if (!ReadFile(h, buf, want, &got, nullptr) || got == 0) return;
+      out->append(buf, got);
+    }
   };
-  // Wait with timeout; still drain pipes after.
-  WaitForSingleObject(pi.hProcess, 30000);
-  std::string stdoutText = readAll(outR);
-  out.stderrText = readAll(errR);
-  DWORD code = 1;
-  GetExitCodeProcess(pi.hProcess, &code);
-  if (code == STILL_ACTIVE) {
-    TerminateProcess(pi.hProcess, 1);
-    out.error = "发证引擎超时";
+
+  std::string stdoutText;
+  std::string stderrText;
+  const ULONGLONG started = GetTickCount64();
+  bool timedOut = false;
+  for (;;) {
+    drainAvailable(outR, &stdoutText);
+    drainAvailable(errR, &stderrText);
+    // 引擎的契约是「打印一个 JSON 对象」：看到收尾的 `}` 就认为结果已完整，
+    // 不必再等子进程自觉退出（`issue` 的文件写入发生在这行输出之前）。
+    std::string trimmed = stdoutText;
+    while (!trimmed.empty() && (trimmed.back() == '\n' || trimmed.back() == '\r' || trimmed.back() == ' ')) {
+      trimmed.pop_back();
+    }
+    if (!trimmed.empty() && trimmed.back() == '}') break;
+    if (WaitForSingleObject(pi.hProcess, 40) == WAIT_OBJECT_0) break;
+    if (GetTickCount64() - started > 15000) {
+      timedOut = true;
+      break;
+    }
   }
+  // 收口：把残留字节读完，然后结束可能还在空转的子进程。
+  drainAvailable(outR, &stdoutText);
+  drainAvailable(errR, &stderrText);
+  DWORD code = 0;
+  if (GetExitCodeProcess(pi.hProcess, &code) && code == STILL_ACTIVE) {
+    TerminateProcess(pi.hProcess, timedOut ? 1 : 0);
+    drainAvailable(outR, &stdoutText);
+    drainAvailable(errR, &stderrText);
+  }
+  if (timedOut) out.error = "发证引擎超时（15 秒未返回结果）";
+  out.stderrText = stderrText;
   CloseHandle(outR);
   CloseHandle(errR);
   CloseHandle(pi.hThread);
@@ -327,7 +380,7 @@ EngineResult RunEngine(const Paths& paths, const std::vector<std::wstring>& args
     } catch (const std::exception& ex) {
       out.error = std::string("无法解析引擎输出：") + ex.what();
       if (!stdoutText.empty()) out.error += "\n" + stdoutText.substr(0, 400);
-      if (!out.stderrText.empty()) out.error += "\n" + out.stderrText.substr(0, 400);
+      if (!stderrText.empty()) out.error += "\n" + stderrText.substr(0, 400);
     }
   }
   return out;
@@ -391,16 +444,39 @@ struct App {
   HWND featureCount = nullptr;
   HWND edition = nullptr;
   HWND btnIssue = nullptr;
+  HWND btnAppQuota = nullptr;
   HFONT font = nullptr;
   Json meta;
   std::vector<FeatureCtl> features;
   int scrollY = 0;
   int contentH = 0;
   int dpi = 96;
+  /**
+   * 应用托管额度（对应 payload `apps.superlanguage`）。
+   *
+   * `appInstances == 0` 表示「跟随席位」—— engine 会回落到 `seats`，
+   * 这是最不容易签错的默认值（客户改席位数时实例数跟着走）。
+   * `appCaps` 为空表示「还没取过默认值」；`EnsureAppDefaults` 会按功能目录填满。
+   */
+  int appInstances = 0;
+  int appQuota = 0;
+  bool appCapsLoaded = false;
+  std::map<std::string, bool> appCaps;
   int Scale(int v) const { return MulDiv(v, dpi, 96); }
 };
 
 App g;
+
+/** 「应用托管额度」模态小窗的状态。 */
+struct AppDialogState {
+  HWND wnd = nullptr;
+  bool open = false;
+};
+
+AppDialogState gAppDlg;
+
+/** 额度小窗里的能力复选框：cap id → 控件。 */
+std::vector<std::pair<std::string, HWND>> gAppCapBoxes;
 
 void RecreateFont(HWND hwnd) {
   if (g.font) DeleteObject(g.font);
@@ -431,6 +507,9 @@ void RebuildFeatures();
 void UpdateFeatureCount();
 void RefreshKeys();
 void Relayout();
+void SyncAppControls();
+void SyncFeatureScroll();
+void ScrollFeatureIntoView(const std::string& featureId);
 
 void LoadMeta() {
   auto r = RunEngine(g.paths, {L"meta"});
@@ -515,6 +594,7 @@ void RebuildFeatures() {
   g.contentH = y;
   UpdateFeatureCount();
   Relayout();
+  SyncAppControls();
 }
 
 std::vector<std::string> SelectedFeatures() {
@@ -584,6 +664,298 @@ void SelectCoreFeatures() {
   SetFeatureSelection(ids);
 }
 
+// ── 应用托管额度 ─────────────────────────────────────────────────────────────
+//
+// 额度对应 payload 的 `apps.superlanguage`（见 src/license/schema.js 与 service.js）：
+//   maxInstances   允许绑定的 SuperLanguage 实例数（缺省 = seats）
+//   caps           实例可用的能力位（search / send / attachments / mention）
+//   maxJobsPerHour 每小时任务上限
+//
+// 这里只是**编辑界面**：真正的校验与默认值在 engine.js 的 buildAppsSection 与
+// service.js 的 getAppEntitlement 里，界面算错也不会签出非法证。
+
+/** 「应用托管」功能位是否已勾选（未勾选时 engine 会拒绝 apps 段）。 */
+bool AppFeatureChecked() {
+  for (const auto& f : g.features) {
+    if (f.box && f.id == "apps-superlanguage") {
+      return SendMessageW(f.box, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    }
+  }
+  return false;
+}
+
+int SeatValue() {
+  try {
+    int v = std::stoi(GetWindowTextUtf8(GetDlgItem(g.wnd, kIdSeats)));
+    return v >= 1 ? v : 1;
+  } catch (...) {
+    return 1;
+  }
+}
+
+/** 能力默认值只在第一次打开时取：之后用户取消勾选不能被悄悄改回来。 */
+void EnsureAppDefaults() {
+  if (g.appCapsLoaded) return;
+  g.appCaps.clear();
+  const Json& caps = g.meta.get("appCapabilities");
+  for (size_t i = 0; i < caps.a.size(); i++) {
+    g.appCaps[caps.at(i).str("id")] = true;
+  }
+  if (g.appQuota <= 0) g.appQuota = g.meta.integer("defaultAppMaxJobsPerHour", 120);
+  g.appCapsLoaded = true;
+}
+
+int EffectiveAppInstances() {
+  return g.appInstances > 0 ? g.appInstances : SeatValue();
+}
+
+/** 按钮文字带上当前额度，避免「签完才发现实例数是 1」。 */
+void UpdateAppButtonText() {
+  if (!g.btnAppQuota) return;
+  std::wstring text = L"应用托管额度…";
+  if (AppFeatureChecked()) {
+    text += L"（" + std::to_wstring(EffectiveAppInstances()) + L" 实例";
+    if (g.appQuota > 0) text += L" / " + std::to_wstring(g.appQuota) + L" 条/时";
+    text += L"）";
+  }
+  SetWindowTextW(g.btnAppQuota, text.c_str());
+}
+
+void SyncAppControls() {
+  if (g.btnAppQuota) {
+    // 始终可点：未开放功能位时点它会给「要现在开放吗？」的引导，
+    // 比禁用一个找不到原因的按钮更有用。
+    EnableWindow(g.btnAppQuota, TRUE);
+  }
+  UpdateAppButtonText();
+}
+
+/** 把某个功能位滚进可视区（布局规则与 SyncFeatureScroll 完全一致）。 */
+void ScrollFeatureIntoView(const std::string& featureId) {
+  if (!g.featureHost) return;
+  int y = g.Scale(8);
+  bool afterItem = false;
+  int targetTop = -1;
+  int targetBottom = -1;
+  for (auto& f : g.features) {
+    if (f.title && !f.box) {
+      if (afterItem) y += g.Scale(8);
+      y += g.Scale(24);
+      afterItem = false;
+    } else if (f.box) {
+      if (f.id == featureId) {
+        targetTop = y;
+        targetBottom = y + g.Scale(22);
+      }
+      y += g.Scale(22);
+      afterItem = true;
+    }
+  }
+  if (targetTop < 0) return;
+  RECT rc{};
+  GetClientRect(g.featureHost, &rc);
+  const int view = rc.bottom - rc.top;
+  const int maxScroll = std::max(0, g.contentH - view);
+  if (targetBottom > g.scrollY + view || targetTop < g.scrollY) {
+    g.scrollY = std::max(0, std::min(targetTop - g.Scale(40), maxScroll));
+    SyncFeatureScroll();
+  }
+}
+
+void CreateAppDlgUi(HWND dlg) {
+  const int m = g.Scale(14);
+  int y = g.Scale(12);
+  RECT rc{};
+  GetClientRect(dlg, &rc);
+  const int W = rc.right - rc.left;
+  const int inner = W - m * 2;
+
+  const wchar_t* hint =
+      L"为「应用托管」开放 SuperLanguage 实例额度。\n"
+      L"实例数填 0 或留空 = 跟随上面的席位数；每个实例需要独立目录与席位。\n"
+      L"能力是允许的上限，Super Time 里还能对单个实例再收窄。";
+  HWND h = AddChild(dlg, L"STATIC", hint, SS_LEFT | SS_NOPREFIX, kIdDlgHint, m, y, inner, g.Scale(58));
+  (void)h;
+  y += g.Scale(62);
+
+  int labelW = g.Scale(150);
+  int editW = g.Scale(120);
+  AddChild(dlg, L"STATIC", L"实例数（0 = 跟随席位）", SS_LEFT | SS_NOPREFIX, 0, m, y + g.Scale(3), labelW, g.Scale(18));
+  HWND inst = AddChild(dlg, L"EDIT", L"", ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP | WS_BORDER,
+                       kIdDlgInstances, m + labelW, y, editW, g.Scale(22), WS_EX_CLIENTEDGE);
+  SetWindowTextW(inst, std::to_wstring(g.appInstances).c_str());
+  y += g.Scale(30);
+
+  AddChild(dlg, L"STATIC", L"每小时任务上限", SS_LEFT | SS_NOPREFIX, 0, m, y + g.Scale(3), labelW, g.Scale(18));
+  HWND quota = AddChild(dlg, L"EDIT", L"", ES_NUMBER | ES_AUTOHSCROLL | WS_TABSTOP | WS_BORDER,
+                        kIdDlgQuota, m + labelW, y, editW, g.Scale(22), WS_EX_CLIENTEDGE);
+  SetWindowTextW(quota, std::to_wstring(g.appQuota > 0 ? g.appQuota : 120).c_str());
+  y += g.Scale(34);
+
+  AddChild(dlg, L"BUTTON", L"允许的能力", BS_GROUPBOX, 0, m, y, inner, g.Scale(120));
+  int bx = m + g.Scale(12);
+  int by = y + g.Scale(22);
+  int cellW = (inner - g.Scale(24)) / 2;
+  gAppCapBoxes.clear();
+  const Json& caps = g.meta.get("appCapabilities");
+  int id = kIdDlgCapBase;
+  for (size_t i = 0; i < caps.a.size(); i++) {
+    const std::string capId = caps.at(i).str("id");
+    std::wstring label = Utf8ToWide(caps.at(i).str("label", capId));
+    int col = static_cast<int>(i) % 2;
+    int row = static_cast<int>(i) / 2;
+    HWND box = AddChild(dlg, L"BUTTON", label.c_str(), BS_AUTOCHECKBOX | WS_TABSTOP, id++,
+                        bx + col * cellW, by + row * g.Scale(24), cellW, g.Scale(22));
+    auto it = g.appCaps.find(capId);
+    bool on = it == g.appCaps.end() ? true : it->second;
+    SendMessageW(box, BM_SETCHECK, on ? BST_CHECKED : BST_UNCHECKED, 0);
+    gAppCapBoxes.push_back({capId, box});
+  }
+  y += g.Scale(126);
+
+  AddChild(dlg, L"BUTTON", L"恢复默认", BS_PUSHBUTTON | WS_TABSTOP, kIdDlgReset, m, y, g.Scale(100), g.Scale(28));
+  int okW = g.Scale(90);
+  AddChild(dlg, L"BUTTON", L"取消", BS_PUSHBUTTON | WS_TABSTOP, IDCANCEL,
+           W - m - okW, y, okW, g.Scale(28));
+  AddChild(dlg, L"BUTTON", L"确定", BS_DEFPUSHBUTTON | WS_TABSTOP, IDOK,
+           W - m - okW * 2 - g.Scale(8), y, okW, g.Scale(28));
+}
+
+/** 只读取、不校验：非法输入留给 engine 报错（错误文案与主程序同源）。 */
+void ReadAppDialog(HWND dlg) {
+  int inst = 0;
+  try { inst = std::stoi(GetWindowTextUtf8(GetDlgItem(dlg, kIdDlgInstances))); } catch (...) { inst = 0; }
+  g.appInstances = std::max(0, std::min(inst, 500));
+  int quota = 0;
+  try { quota = std::stoi(GetWindowTextUtf8(GetDlgItem(dlg, kIdDlgQuota))); } catch (...) { quota = 0; }
+  g.appQuota = quota > 0 ? std::min(quota, 100000) : 0;
+  g.appCaps.clear();
+  for (const auto& item : gAppCapBoxes) {
+    g.appCaps[item.first] = SendMessageW(item.second, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  }
+  g.appCapsLoaded = true;
+}
+
+void ResetAppDialog(HWND dlg) {
+  g.appCapsLoaded = false;
+  g.appQuota = 0;
+  EnsureAppDefaults();
+  SetWindowTextW(GetDlgItem(dlg, kIdDlgInstances), L"0");
+  SetWindowTextW(GetDlgItem(dlg, kIdDlgQuota), std::to_wstring(g.appQuota).c_str());
+  for (const auto& item : gAppCapBoxes) {
+    SendMessageW(item.second, BM_SETCHECK, BST_CHECKED, 0);
+  }
+}
+
+LRESULT CALLBACK AppDlgProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+  switch (msg) {
+    case WM_CREATE:
+      CreateAppDlgUi(hwnd);
+      return 0;
+    case WM_COMMAND: {
+      int id = LOWORD(wParam);
+      if (id == kIdDlgReset) {
+        ResetAppDialog(hwnd);
+        return 0;
+      }
+      if (id == IDOK) {
+        ReadAppDialog(hwnd);
+        gAppDlg.open = false;
+        return 0;
+      }
+      if (id == IDCANCEL) {
+        gAppDlg.open = false;
+        return 0;
+      }
+      return 0;
+    }
+    case WM_CLOSE:
+      // 关闭等同于取消：不写回 g.app*。
+      gAppDlg.open = false;
+      return 0;
+    case WM_CTLCOLORSTATIC: {
+      HDC hdc = (HDC)wParam;
+      SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+      return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+    }
+    case WM_CTLCOLORBTN: {
+      HDC hdc = (HDC)wParam;
+      SetBkColor(hdc, GetSysColor(COLOR_BTNFACE));
+      return (LRESULT)GetSysColorBrush(COLOR_BTNFACE);
+    }
+  }
+  return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/**
+ * 打开「应用托管额度」模态小窗。
+ *
+ * 自建模态循环（不用资源脚本的 DialogBox）：本程序原本就没有 .rc 对话框模板，
+ * 手写窗口更省事；Enter/Esc 由 IsDialogMessageW 按 IDOK/IDCANCEL 处理。
+ */
+void ShowAppDialog() {
+  if (gAppDlg.open || !g.wnd) return;
+  if (!AppFeatureChecked()) {
+    // 先把它滚进视野再问：用户第一次找这个功能时通常不知道它在列表最底部。
+    ScrollFeatureIntoView("apps-superlanguage");
+    const int ret = MessageBoxW(
+        g.wnd,
+        L"这张证还没有开放「应用托管实例」功能位 —— 没有它，Super Time 不能部署或启动 SuperLanguage。\n\n"
+        L"要现在开放吗？开放后可以在「应用托管额度…」里设置实例数与能力。",
+        kTitle, MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON1);
+    if (ret != IDYES) return;
+    for (auto& f : g.features) {
+      if (f.box && f.id == "apps-superlanguage") {
+        SendMessageW(f.box, BM_SETCHECK, BST_CHECKED, 0);
+      }
+    }
+    UpdateFeatureCount();
+    SyncAppControls();
+  }
+  EnsureAppDefaults();
+  gAppDlg.open = true;
+  EnableWindow(g.wnd, FALSE);
+
+  RECT mrc{};
+  GetWindowRect(g.wnd, &mrc);
+  int w = g.Scale(560);
+  int h = g.Scale(430);
+  int x = mrc.left + ((mrc.right - mrc.left) - w) / 2;
+  int y = mrc.top + ((mrc.bottom - mrc.top) - h) / 2;
+  HWND dlg = CreateWindowExW(WS_EX_DLGMODALFRAME, kAppClass, L"应用托管额度",
+                             WS_POPUP | WS_CAPTION | WS_SYSMENU,
+                             x, y, w, h, g.wnd, nullptr, GetModuleHandleW(nullptr), nullptr);
+  gAppDlg.wnd = dlg;
+  if (!dlg) {
+    gAppDlg.open = false;
+    EnableWindow(g.wnd, TRUE);
+    return;
+  }
+  ShowWindow(dlg, SW_SHOW);
+  SetFocus(GetDlgItem(dlg, kIdDlgInstances));
+
+  MSG msg;
+  while (gAppDlg.open && GetMessageW(&msg, nullptr, 0, 0)) {
+    if (msg.message == WM_QUIT) {
+      // 别把退出消息吞掉：交还主循环。
+      PostQuitMessage((int)msg.wParam);
+      break;
+    }
+    if (!IsDialogMessageW(dlg, &msg)) {
+      TranslateMessage(&msg);
+      DispatchMessageW(&msg);
+    }
+  }
+  if (gAppDlg.wnd) {
+    DestroyWindow(gAppDlg.wnd);
+    gAppDlg.wnd = nullptr;
+  }
+  gAppDlg.open = false;
+  EnableWindow(g.wnd, TRUE);
+  SetActiveWindow(g.wnd);
+  SyncAppControls();
+}
+
 std::string EditionValue() {
   int sel = (int)SendMessageW(g.edition, CB_GETCURSEL, 0, 0);
   const Json& eds = g.meta.get("editions");
@@ -611,9 +983,22 @@ void RefreshKeys() {
   if (!k.str("privatePath").empty()) os << k.str("privatePath") << "\r\n";
   else if (!k.str("privateError").empty()) os << k.str("privateError") << "\r\n";
   bool match = k.boolean("matchClient") && k.boolean("matchPrivate");
-  os << "公钥一致性：" << (match ? "客户端与 vendor-keys 一致" : "不一致，可能导致 signature_invalid") << "\r\n";
-  os << "私钥匹配：" << (k.boolean("matchPrivate") ? "是" : "否")
-     << "  ·  客户端匹配：" << (k.boolean("matchClient") ? "是" : "否");
+  bool derivedOk = k.boolean("matchDerivedClient", false);
+  if (!k.boolean("hasPublic")) {
+    // vendor-keys 只是厂商留档；真正决定能否被主程序验过的是「私钥 ↔ 客户端内嵌公钥」。
+    os << "公钥一致性：vendor-keys 里没有公钥文件（可点「同步客户端公钥」重建）\r\n";
+    os << (derivedOk
+             ? "私钥与客户端公钥：一致（签出的证能被当前客户端验证）\r\n"
+             : "私钥与客户端公钥：不一致，签出的证会 signature_invalid\r\n");
+  } else if (!match) {
+    os << "公钥一致性：不一致，签出的证会 signature_invalid\r\n";
+  } else {
+    os << "公钥一致性：客户端与 vendor-keys 一致\r\n";
+  }
+  if (k.boolean("hasPublic")) {
+    os << "私钥匹配：" << (k.boolean("matchPrivate") ? "是" : "否")
+       << "  ·  客户端匹配：" << (k.boolean("matchClient") ? "是" : "否");
+  }
   SetStatus(g.keyStatus, os.str());
 }
 
@@ -680,6 +1065,21 @@ Json ReadForm() {
   Json feats = Json::array();
   for (const auto& id : SelectedFeatures()) feats.push(Json::string(id));
   form["features"] = feats;
+  // 额度段只在勾了「应用托管」时写：未勾选时 engine 会直接拒绝（见 buildAppsSection），
+  // 界面这一侧也一并挡住，免得把一张注定失败的证签出来。
+  if (AppFeatureChecked()) {
+    EnsureAppDefaults();
+    Json apps = Json::object();
+    if (g.appInstances > 0) apps["maxInstances"] = Json::numberInt(g.appInstances);
+    if (g.appQuota > 0) apps["maxJobsPerHour"] = Json::numberInt(g.appQuota);
+    Json caps = Json::array();
+    for (const auto& item : g.appCaps) {
+      if (item.second) caps.push(Json::string(item.first));
+    }
+    // 空数组也照发：engine 会明确报「应用能力至少选择一项」，比悄悄用默认值诚实。
+    apps["caps"] = caps;
+    form["apps"] = apps;
+  }
   return form;
 }
 
@@ -732,6 +1132,18 @@ void OnIssue() {
     if (i) os << "、";
     os << r.json.get("featureLabels").at(i).as_string();
   }
+  const Json& apps = payload.get("apps").get("superlanguage");
+  if (!apps.is_null()) {
+    os << "\r\n应用托管：实例 " << apps.integer("maxInstances", 1)
+       << " 个 · 每小时 " << apps.integer("maxJobsPerHour", 0) << " 条";
+    const Json& caps = apps.get("caps");
+    os << " · 能力 ";
+    for (size_t i = 0; i < caps.a.size(); i++) {
+      if (i) os << "/";
+      os << caps.at(i).as_string();
+    }
+    if (apps.boolean("standalone", false)) os << " · 允许脱离 Super Time 独立运行";
+  }
   SetStatus(g.issueStatus, os.str());
 }
 
@@ -764,6 +1176,22 @@ void OnVerify() {
     if (i) os << "、";
     os << labels.at(i).as_string();
   }
+  const Json& appSec = payload.get("apps").get("superlanguage");
+  if (!appSec.is_null()) {
+    os << "\r\n应用托管额度：实例 " << appSec.integer("maxInstances", payload.integer("seats", 1))
+       << " 个 · 每小时 " << appSec.integer("maxJobsPerHour", 0) << " 条";
+    const Json& caps = appSec.get("caps");
+    if (!caps.a.empty()) {
+      os << " · 能力 ";
+      for (size_t i = 0; i < caps.a.size(); i++) {
+        if (i) os << "/";
+        os << caps.at(i).as_string();
+      }
+    }
+  } else {
+    // 没有额度段 ≠ 不能托管：getAppEntitlement 会回落到 seats 与全部能力。
+    os << "\r\n应用托管额度：未写额度段（实例数跟随席位，能力全开）";
+  }
   SetStatus(g.verifyStatus, os.str());
 }
 
@@ -786,7 +1214,6 @@ void SyncFeatureScroll() {
 
   // Move children relative to scroll
   HDWP hdwp = BeginDeferWindowPos(32);
-  HWND child = GetWindow(g.featureHost, GW_CHILD);
   // We stored positions at create time; easier to walk features + headers with remembered layout.
   // Recreate positions from a simple pass: headers and checkboxes were created top-to-bottom.
   // Use stored Y from creation? We didn't keep original Y. Re-run placement.
@@ -930,7 +1357,7 @@ void Relayout() {
   int lx = m + g.Scale(12);
   int lw = leftW - g.Scale(24);
   int ly = bodyY + g.Scale(22);
-  int lh = g.Scale(20), eh = g.Scale(22), row = g.Scale(42);
+  int lh = g.Scale(20), eh = g.Scale(22);
   // labels are id-100 offset? We'll look up by stored positions via GetWindow + text.
   // Simpler: enumerate known label statics by consecutive IDs 4001+
   struct Field { int labelId; int editId; int h; };
@@ -959,6 +1386,7 @@ void Relayout() {
   move(kIdBtnCore, lx + g.Scale(138) + (b2 + gap) * 2, ly, b2, bh);
   ly += bh + g.Scale(8);
   move(kIdBtnIssue, lx, ly, g.Scale(130), bh);
+  move(kIdBtnAppQuota, lx + g.Scale(138), ly, std::max(g.Scale(160), lw - g.Scale(138)), bh);
   ly += bh + g.Scale(8);
   int issueStatusH = std::max(g.Scale(80), (bodyY + issueH) - g.Scale(12) - ly);
   move(kIdIssueStatus, lx, ly, lw, issueStatusH);
@@ -1003,7 +1431,7 @@ void CreateMainUi(HWND hwnd) {
   AddChild(hwnd, L"BUTTON", L"签发许可证", BS_GROUPBOX, 3002, 0, 0, 100, 100);
   const wchar_t* labels[] = {
     L"设备指纹", L"主机名（可选）", L"客户名称", L"公司", L"邮箱",
-    L"版本", L"有效天数（0 = 永久）", L"席位", L"最低应用版本", L"备注"
+    L"版本", L"有效天数（0 = 永久）", L"席位（= 应用实例数上限）", L"最低应用版本", L"备注"
   };
   int labelIds[] = {4001,4002,4003,4004,4005,4006,4007,4008,4009,4010};
   int editIds[] = {kIdFingerprint,kIdHostname,kIdName,kIdCompany,kIdEmail,0,kIdDays,kIdSeats,kIdAppVer,kIdNotes};
@@ -1027,6 +1455,7 @@ void CreateMainUi(HWND hwnd) {
   AddChild(hwnd, L"BUTTON", L"基础浏览", BS_PUSHBUTTON | WS_TABSTOP, kIdBtnData, 0, 0, 80, 24);
   AddChild(hwnd, L"BUTTON", L"仅基础", BS_PUSHBUTTON | WS_TABSTOP, kIdBtnCore, 0, 0, 80, 24);
   g.btnIssue = AddChild(hwnd, L"BUTTON", L"签发并保存", BS_DEFPUSHBUTTON | WS_TABSTOP, kIdBtnIssue, 0, 0, 80, 24);
+  g.btnAppQuota = AddChild(hwnd, L"BUTTON", L"应用托管额度…", BS_PUSHBUTTON | WS_TABSTOP, kIdBtnAppQuota, 0, 0, 160, 24);
   g.issueStatus = AddChild(hwnd, L"EDIT", L"",
                            ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | WS_BORDER, kIdIssueStatus,
                            0, 0, 80, 40, WS_EX_CLIENTEDGE);
@@ -1045,14 +1474,22 @@ void CreateMainUi(HWND hwnd) {
                             0, 0, 80, 40, WS_EX_CLIENTEDGE);
 
   Relayout();
-  LoadMeta();
-  RefreshKeys();
+  // 引擎调用（LoadMeta / RefreshKeys）会**同步**等待 node 子进程（最长 30 秒）。
+  // 原来这两行写在 WM_CREATE 里，于是窗口要等 node 返回才真正显示 —— 机器上装了
+  // 实时扫描 / 冷启动慢时表现为「进程在、界面不出来」，看起来就像程序没启动。
+  // 改成窗口显示之后再补：先出界面（各控件显示「正在读取…」占位），随后填内容。
+  PostMessageW(hwnd, kInitMessage, 0, 0);
 }
 
 LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
   switch (msg) {
     case WM_CREATE:
       CreateMainUi(hwnd);
+      return 0;
+    case kInitMessage:
+      // 窗口已显示后再调引擎：慢的时候用户看到的是「正在读取密钥状态…」而不是空屏。
+      LoadMeta();
+      RefreshKeys();
       return 0;
     case WM_DPICHANGED: {
       g.dpi = HIWORD(wParam);
@@ -1078,6 +1515,11 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_COMMAND: {
       int id = LOWORD(wParam);
       int code = HIWORD(wParam);
+      // 席位改了要重算「应用托管」按钮上的实例数（0 = 跟随席位）。
+      if (id == kIdSeats && code == EN_CHANGE) {
+        UpdateAppButtonText();
+        return 0;
+      }
       if (code == BN_CLICKED) {
         switch (id) {
           case kIdBtnRefresh: RefreshKeys(); break;
@@ -1089,8 +1531,13 @@ LRESULT CALLBACK MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
           case kIdBtnCore: SelectCoreFeatures(); break;
           case kIdBtnIssue: OnIssue(); break;
           case kIdBtnVerify: OnVerify(); break;
+          case kIdBtnAppQuota: ShowAppDialog(); break;
           default:
-            if (id >= kIdFeatureBase) UpdateFeatureCount();
+            if (id >= kIdFeatureBase) {
+              UpdateFeatureCount();
+              // 勾/取消「应用托管」会改变额度按钮的可用状态与文案。
+              SyncAppControls();
+            }
             break;
         }
       }
@@ -1120,6 +1567,7 @@ int RunSmoke(const Paths& paths, const std::wstring& outFile) {
   } else {
     report["product"] = Json::string(meta.json.str("product"));
     report["featureCount"] = Json::numberInt((int)meta.json.get("featureCatalog").a.size());
+    report["appCapabilityCount"] = Json::numberInt((int)meta.json.get("appCapabilities").a.size());
     report["engine"] = Json::string(WideToUtf8(paths.engineJs));
     report["node"] = Json::string(WideToUtf8(paths.nodeExe));
   }
@@ -1188,13 +1636,32 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR cmdLine, int show) {
   sc.hbrBackground = GetSysColorBrush(COLOR_WINDOW);
   RegisterClassExW(&sc);
 
+  WNDCLASSEXW ac = wc;
+  ac.lpfnWndProc = AppDlgProc;
+  ac.lpszClassName = kAppClass;
+  ac.hbrBackground = GetSysColorBrush(COLOR_BTNFACE);
+  ac.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
+  RegisterClassExW(&ac);
+
   HWND hwnd = CreateWindowExW(
     0, kMainClass, kTitle, WS_OVERLAPPEDWINDOW | WS_VISIBLE,
     CW_USEDEFAULT, CW_USEDEFAULT, 1180, 900,
     nullptr, nullptr, inst, nullptr);
   if (!hwnd) return 1;
   g.dpi = GetDpiForWindow(hwnd);
-  ShowWindow(hwnd, show);
+  // nCmdShow 不可尽信：从隐藏控制台 / 服务化启动器拉起时它可能是 SW_HIDE，
+  // 窗口就永远不出现（实测过一次，表现为「进程在、界面没了」）。这个工具只有一个窗口，
+  // 最小化启动没有任何意义，所以只保留「最大化」，其余一律按普通显示。
+  const int showCmd = show == SW_SHOWMAXIMIZED ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+  ShowWindow(hwnd, showCmd);
+  // 第一次 ShowWindow 会被 STARTUPINFO 的 wShowWindow **覆盖**（Win32 的规定行为）：
+  // 由隐藏控制台 / 服务化启动器拉起时那个值常是 SW_HIDE，于是窗口永远不出现。
+  // 第二次调用才按参数执行；再补一次 SWP_SHOWWINDOW 兜底。
+  if (!IsWindowVisible(hwnd)) {
+    ShowWindow(hwnd, SW_SHOWNORMAL);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+  }
+  SetForegroundWindow(hwnd);
   UpdateWindow(hwnd);
 
   MSG msg;

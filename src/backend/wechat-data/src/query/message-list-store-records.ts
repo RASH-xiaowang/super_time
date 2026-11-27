@@ -493,6 +493,8 @@ export interface TaskGreetingInput {
   targetUsername: string
   images: MessageListImage[]
   triggeredAt: number
+  /** 任务上配置的问候语。空串不写入。 */
+  greetingText: string
 }
 
 /**
@@ -507,6 +509,8 @@ export function insertTaskTriggerGreeting(
   const triggerId = positiveId(input.triggerId)
   const taskId = positiveId(input.taskId)
   if (triggerId <= 0 || taskId <= 0) return { ok: false, error: '任务触发记录无效' }
+  const greetingText = textOf(input.greetingText, TEXT_MAX)
+  if (greetingText === '') return { ok: false, error: '未配置问候语' }
   const targetName = textOf(input.targetName, NAME_MAX)
   const rule = matchMessageListRuleAt(db, input.chatName, targetName)
   const validatedImages = validateMessageListImages(input.images, { mode: 'local' })
@@ -515,7 +519,7 @@ export function insertTaskTriggerGreeting(
     replyId: generateReplyId(),
     chatName: textOf(input.chatName, NAME_MAX),
     targetName,
-    text: textOf(rule?.greetingText, TEXT_MAX) || '你好',
+    text: greetingText,
     images: validatedImages.images,
     triggeredAt: Math.max(0, numOf(input.triggeredAt, Date.now())) || Date.now(),
     source: 'first_trigger',

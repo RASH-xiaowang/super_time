@@ -18,6 +18,7 @@
 import { resolveImageKeyPair } from './image-key.ts'
 import { fetchEmoticonRemote, noteEmoticonMissBatch } from './media-image.ts'
 import { decodeEmoticonDataUrlAsync } from './media-image-async.ts'
+import { savedEmoticonRelPath } from './emoticon-archive.ts'
 import type { EmoticonDataUrlsResult } from '../types.ts'
 
 /**
@@ -46,7 +47,27 @@ export async function fetchEmoticonDataUrlsBatch(
   decodedDir: string,
   base: string | undefined,
   items: ReadonlyArray<{ md5: string; emojiUrl?: string }> | undefined,
+  localOnly = false,
 ): Promise<EmoticonDataUrlsResult> {
+  const seenFirst = new Set<string>()
+  const dedupFirst: Array<{ m: string }> = []
+  for (const it of Array.isArray(items) ? items : []) {
+    const m = (it?.md5 ?? '').trim().toLowerCase()
+    if (m === '' || seenFirst.has(m)) continue
+    seenFirst.add(m)
+    dedupFirst.push({ m })
+  }
+  // 网格只问「硬盘上有没有这张」。有文件就回相对路径，不读进 base64，也不出网。
+  if (localOnly) {
+    return {
+      items: dedupFirst.map((d) => {
+        const file = savedEmoticonRelPath(decodedDir, d.m)
+        if (file === '') return { md5: d.m, error: '尚未落盘' }
+        const ext = file.slice(file.lastIndexOf('.') + 1)
+        return { md5: d.m, file, format: ext === 'jpeg' ? 'jpg' : ext }
+      }),
+    }
+  }
   const { aesKey, xorKey } = resolveImageKeyPair(decryptedDir)
   // 去重（同一个表情在一屏里出现多次是常态），并保留原始大小写供远端 URL 使用。
   const seen = new Set<string>()
@@ -66,7 +87,8 @@ export async function fetchEmoticonDataUrlsBatch(
     const d = dedup[i]!
     const local = await decodeEmoticonDataUrlAsync(decryptedDir, decodedDir, base, d.m, aesKey, xorKey)
     if (local.url) {
-      out[i] = { md5: d.m, dataUrl: local.url, ...(local.format ? { format: local.format } : {}) }
+      const file = savedEmoticonRelPath(decodedDir, d.m)
+      out[i] = { md5: d.m, dataUrl: local.url, ...(file !== '' ? { file } : {}), ...(local.format ? { format: local.format } : {}) }
       continue
     }
     out[i] = { md5: d.m, error: local.error ?? '本地解码失败' }
@@ -83,8 +105,9 @@ export async function fetchEmoticonDataUrlsBatch(
       const remote = await fetchEmoticonRemote(d.url as string, decodedDir, d.m,
         base ? { wechatBaseDir: base } : {})
       const prev = out[idx]?.error ?? '本地解码失败'
+      const file = remote.url ? savedEmoticonRelPath(decodedDir, d.m) : ''
       out[idx] = remote.url
-        ? { md5: d.m, dataUrl: remote.url, ...(remote.format ? { format: remote.format } : {}) }
+        ? { md5: d.m, dataUrl: remote.url, ...(file !== '' ? { file } : {}), ...(remote.format ? { format: remote.format } : {}) }
         : { md5: d.m, error: prev + '；' + (remote.error ?? '远端取图失败') }
     }))
   }

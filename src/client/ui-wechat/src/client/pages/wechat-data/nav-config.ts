@@ -30,7 +30,7 @@ export type WechatTab =
   | 'overview' | 'ask' | 'chats' | 'graph' | 'knowledge' | 'kb' | 'monitor' | 'contacts' | 'portraits' | 'moments'
   | 'favorites' | 'emoticons' | 'files' | 'records' | 'ledger' | 'storage' | 'bizchats'
   | 'servicechats' | 'kefu' | 'annual' | 'period' | 'dailysummary' | 'hook' | 'privacy'
-  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'taskinfo' | 'agentdesk' | 'messagelist' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles'
+  | 'revoked' | 'backup' | 'settings' | 'oplog' | 'tasks' | 'taskinfo' | 'messagelist' | 'groupinsights' | 'health' | 'momentsinsights' | 'privacytrust' | 'assetinsights' | 'officialassets' | 'mediaassets' | 'calls' | 'kbfiles' | 'localtools' | 'apps'
 
 export interface NavItem {
   tab: WechatTab
@@ -44,21 +44,24 @@ export interface NavItem {
 const filled = (inner: string): string => `<g fill="currentColor" stroke="none">${inner}</g>`
 
 /**
- * 侧栏分组（2026-09-30 信息架构合并：**9 组 → 5 组**）。
+ * 侧栏分组（2026-11-24：**5 组 → 6 组**）。
  *
- * 合并原则（用户："帮我看一下哪些界面可以合并在一起" → "全部做完"）：
- *   · **空壳分组取消**：报告与总结（只剩「总结」）、资金（只剩「资金往来」）、
- *     隐私与安全（只剩「隐私体检」）分别并进相邻组；
- *   · **归组错位纠正**：知识库从「联系人与社交」移到概览组（它服务问答/RAG，不是社交）；
- *     朋友圈洞察从「洞察与行动」移到「关系与社交」（与朋友圈同源）；
- *   · hidden 项**一律保留**：`TAB_LABELS` 由本数组构建，删条目 = 删掉那个 tab 的标题。
+ * 组名只写一件事。原先「概览 · 问答 · 总结」把三件事串进标题，
+ * 「行动与维护」又把待办、发出的消息、本机工具、托管程序和日志堆在一起。
+ * 按用户要做的事重排，条目本身不改名、不隐藏：
+ *   · **概览**：先看全局，再提问、出报告、把结论沉淀进知识库；
+ *   · **消息**：读会话、看群；
+ *   · **联系人**：通讯录、客户档案、朋友圈；
+ *   · **资产**：收藏、文件、资金；
+ *   · **任务**：从聊天里长出来的待办、监听任务，以及发出去的消息；
+ *   · **系统**：本机工具、托管的程序、操作记录。
  *
- * 内容级合并（通话记录搬进会话页、操作日志搬进设置、朋友圈洞察做成朋友圈分段、
- * 资产两页合并成 Tab）属于各页实现的改动，另行分批 —— 本轮只动**分组结构**。
+ * hidden 项仍跟它的可见父项走，一条都不能删：`TAB_LABELS` 由本数组构建，
+ * 删条目等于删掉那个 tab 的标题，深链会静默落回「数据总览」。
  */
 export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<NavItem> }> = [
   {
-    label: '概览 · 问答 · 总结',
+    label: '概览',
     items: [
       // 数据总览：三根递增的圆角柱 —— 填充重量与微信官方字形一致
       { tab: 'overview', label: '数据总览', icon: filled('<path d="M5.2 13.2h3.4a1.4 1.4 0 0 1 1.4 1.4v5.2a1.4 1.4 0 0 1-1.4 1.4H5.2a1.4 1.4 0 0 1-1.4-1.4v-5.2a1.4 1.4 0 0 1 1.4-1.4zM10.3 8.4h3.4a1.4 1.4 0 0 1 1.4 1.4v10a1.4 1.4 0 0 1-1.4 1.4h-3.4a1.4 1.4 0 0 1-1.4-1.4v-10a1.4 1.4 0 0 1 1.4-1.4zM15.4 3.6h3.4a1.4 1.4 0 0 1 1.4 1.4v14.8a1.4 1.4 0 0 1-1.4 1.4h-3.4a1.4 1.4 0 0 1-1.4-1.4V5a1.4 1.4 0 0 1 1.4-1.4z"/>') },
@@ -120,7 +123,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     ],
   },
   {
-    label: '会话与消息',
+    label: '消息',
     items: [
       // 聊天会话：微信官方聊天气泡 —— 横向胶囊体（短边半圆）+ 左下一小截尾巴。
       // 官方气泡比我首版画的圆角矩形「胖」得多：rx 取到短边的一半才是那个形。
@@ -144,7 +147,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     ],
   },
   {
-    label: '关系与社交',
+    label: '联系人',
     items: [
       // 通讯录：微信官方字形是「人像 + 右侧通讯录条目行」，不是单独一个人像 ——
       // 只画人像会和「联系人」类的其它图标撞脸，右侧三行才是通讯录的语义。
@@ -185,7 +188,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     ],
   },
   {
-    label: '资产与资金',
+    label: '资产',
     items: [
       // 收藏与表情：微信官方「收藏」是**立方体轮廓**（等距立方 + 内部三条棱），
       // 不是五角星。这是整排里唯一一条线稿 —— 官方本身是描边形，所以这里刻意不用
@@ -210,7 +213,7 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
     ],
   },
   {
-    label: '行动与维护',
+    label: '任务',
     items: [
       // 待办日程：圆角方块挖空对勾（完成态）
       { tab: 'tasks', label: '待办日程', icon: filled('<path fill-rule="evenodd" d="M4.8 3.4h14.4A2.4 2.4 0 0 1 21.6 5.8v12.4a2.4 2.4 0 0 1-2.4 2.4H4.8a2.4 2.4 0 0 1-2.4-2.4V5.8a2.4 2.4 0 0 1 2.4-2.4zM9.6 16.8l-4.4-4.4-1.5 1.5 5.9 5.9L21 8.4l-1.5-1.5z"/>') },
@@ -219,10 +222,21 @@ export const NAV_GROUPS: ReadonlyArray<{ label: string; items: ReadonlyArray<Nav
       // 图标：三行清单（触发条件）+ 右侧闪电（触发语义）。清单条与闪电之间留出空隙，
       // 17px 下不会糊成一团；闪电坐标落在 15.5~20.9，不与清单条（x ≤ 12.8）相交。
       { tab: 'taskinfo', label: '任务信息', icon: filled('<path d="M3.4 6.2h9.4a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2zM3.4 11.4h7.2a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2zM3.4 16.6h8.4a1.1 1.1 0 0 1 0 2.2H3.4a1.1 1.1 0 0 1 0-2.2z"/><path d="M18.9 3.2l-3.4 6.1h2.4l-1.3 5.3 3.6-6.3h-2.4z"/>') },
-      { tab: 'agentdesk', label: 'AI 队友', icon: filled('<path d="M12 3.2l1.5 4.4 4.5.5-3.4 3 1.1 4.4L12 13.2 8.3 15.5l1.1-4.4-3.4-3 4.5-.5z"/>') },
       // 消息列表：三条已发送消息 + 右侧状态勾。它记录「回复发没发出去」，
       // 与任务信息（配置监听规则）和聊天会话（阅读原始消息）都不是同一件事。
       { tab: 'messagelist', label: '消息列表', icon: filled('<path d="M5.2 3.2h13.6A2.2 2.2 0 0 1 21 5.4v13.2a2.2 2.2 0 0 1-2.2 2.2H5.2A2.2 2.2 0 0 1 3 18.6V5.4a2.2 2.2 0 0 1 2.2-2.2zM6.6 7.2h7.8a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM6.6 11.2h5.8a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM6.6 15.2h4.2a1 1 0 0 1 0 2H6.6a1 1 0 0 1 0-2zM17.1 13.1l1.3 1.3 2.4-2.7 1.4 1.2-3.9 4.3-2.6-2.7z"/>') },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
+      // 本地工具（2026-11-24）：本项目全部可调用工具的清单（问答检索 / AI 回复 /
+      // 出网触发 / 本机能力）。图标是填充式扳手：开口朝右上，握把向左下 ——
+      // 与「任务信息」的闪电、「消息列表」的清单条在 17px 下也能分开。
+      { tab: 'localtools', label: '本地工具', icon: filled('<path d="M14.7 2.9a5.9 5.9 0 0 0-5.2 8.6l-6 6a2.3 2.3 0 0 0 0 3.3l.7.7a2.3 2.3 0 0 0 3.3 0l6-6a5.9 5.9 0 0 0 7.6-7.4l-3.2 3.2-2.4-.6-.6-2.4z"/>') },
+      // 应用托管（2026-11-24）：2×2 应用格子 —— 右上角刻意留空，读成「待托管的实例」。
+      // 它管理的是**别的程序**（SuperLanguage），与工具清单、任务、消息列表都不是一回事。
+      { tab: 'apps', label: '应用托管', icon: filled('<path d="M4.4 3.2h5.2A1.2 1.2 0 0 1 10.8 4.4v5.2a1.2 1.2 0 0 1-1.2 1.2H4.4a1.2 1.2 0 0 1-1.2-1.2V4.4a1.2 1.2 0 0 1 1.2-1.2zM14.4 3.2h5.2a1.2 1.2 0 0 1 1.2 1.2v5.2a1.2 1.2 0 0 1-1.2 1.2h-5.2a1.2 1.2 0 0 1-1.2-1.2V4.4a1.2 1.2 0 0 1 1.2-1.2zM4.4 13.2h5.2a1.2 1.2 0 0 1 1.2 1.2v5.2a1.2 1.2 0 0 1-1.2 1.2H4.4a1.2 1.2 0 0 1-1.2-1.2v-5.2a1.2 1.2 0 0 1 1.2-1.2z"/><path d="M13.6 14.1h1.8v2.2h2.2v1.8h-2.2v2.2h-1.8v-2.2h-2.2v-1.8h2.2z"/>') },
       // 操作日志：填充圆环 + 两根指针（挖空区里再挖出指针，走 evenodd 的三重交叉）
       { tab: 'oplog', label: '操作日志', icon: filled('<path fill-rule="evenodd" d="M12 2.2a9.8 9.8 0 1 0 0 19.6 9.8 9.8 0 0 0 0-19.6zm0 2.4a7.4 7.4 0 1 1 0 14.8 7.4 7.4 0 0 1 0-14.8zM11.2 7.2h1.6v5.6h-1.6zM12 11.2h4.4v1.6H12z"/>') },
       // 隐私体检 2026-09 一度也进过弹窗，现按「只读数据视图回主界面」迁回来：

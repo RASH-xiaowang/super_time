@@ -28,6 +28,9 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { PrivacyGateFn } from '../gateway-privacy.ts'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
+import { readReplyToolsConfig } from '../config/wechat-config.ts'
+import { runReplyWithTools, replyToolInputCost, REPLY_TOOL_INPUT_LIMIT, REPLY_TOOL_RESULT_RESERVE, REPLY_TOOL_RULES } from '../query/reply-tools/runtime.ts'
+import type { ReplyToolRunResult } from '../query/reply-tools/runtime.ts'
 
 /**
  * 首 token 超时（D1，2026-09-28 性能修复）。
@@ -196,11 +199,13 @@ async function suggestRepliesOf(
   const sel = defaultModel?.currentSelection()
   if (!sel || !sel.provider || !sel.model) return { ok: false, error: 'LLM/模型不可用' }
   const modelLabel = sel.provider + '/' + sel.model
+  const toolConfig = readReplyToolsConfig(rc.dirs().decrypted)
+  const toolCapability = [toolConfig.weatherProvider, toolConfig.weatherAccess, Boolean(toolConfig.weatherApiKey), toolConfig.searchProvider, Boolean(toolConfig.searchApiKey)].join(':')
   const cacheKey = replySuggestCacheKey({
     talker,
     targetLocalId,
     kbId,
-    model: modelLabel,
+    model: modelLabel + '|tools-v1:' + toolCapability,
     want,
     lines,
   })
@@ -211,7 +216,7 @@ async function suggestRepliesOf(
       return {
         ok: true,
         replies: cached.replies,
-        messageCount: count,
+        messageCount: cached.trace?.contextLines.length ?? count,
         kbSnippetCount: 0,
         cached: true,
         ...(cached.trace === undefined ? {} : { trace: cached.trace }),
@@ -242,15 +247,23 @@ async function suggestRepliesOf(
       )
     : { snippets: [], note: '' }
   const snippets = kb.snippets
-  const prompt = buildReplyPrompt(lines, snippets, want, targetLine)
+  const promptLines = [...lines]
+  const promptSnippets = snippets.map(s => s.slice(0, 1000)).slice(0, 3)
+  const systemPrompt = '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。'
+  let prompt = buildReplyPrompt(promptLines, promptSnippets, want, targetLine)
+  // Reserve tool schemas/results inside the SAME hard input ceiling, never raise it.
+  const cost = (): number => replyToolInputCost(systemPrompt + REPLY_TOOL_RULES, [createUserMessage({ content: [{ type: 'text', text: prompt }], source: { kind: 'plugin', plugin: 'dsh-wechat-data' } })])
+  while (cost() + REPLY_TOOL_RESULT_RESERVE > REPLY_TOOL_INPUT_LIMIT && (promptLines.length > 1 || promptSnippets.length > 0)) {
+    if (promptLines.length > 1) promptLines.shift()
+    else promptSnippets.pop()
+    prompt = buildReplyPrompt(promptLines, promptSnippets, want, targetLine)
+  }
   const [gated] = rc.privacyGate('suggest_reply', { sessions: 1, messages: count }, [prompt])
   const sentPrompt = gated ?? prompt
-  const systemPrompt = '你是微信聊天助手。只输出候选回复本身，不要解释、不要客套，也不要复述上下文。'
   const userMsg = createUserMessage({
     content: [{ type: 'text', text: sentPrompt }],
     source: { kind: 'plugin', plugin: 'dsh-wechat-data' },
   })
-  const assembler = new BlockAssembler()
   const opts: GenerateOptions = {
     provider: sel.provider, model: sel.model, messages: [userMsg],
     system: systemPrompt,
@@ -264,29 +277,36 @@ async function suggestRepliesOf(
     maxTokens: REPLY_SUGGEST_MAX_TOKENS,
   }
   const startedAt = Date.now()
+  let toolRun: ReplyToolRunResult
   try {
-    for await (const chunk of streamWithDeadline<StreamChunk>(
-      llm.stream(opts),
-      FIRST_TOKEN_TIMEOUT_MS,
-    )) assembler.push(chunk)
+    toolRun = await runReplyWithTools({
+      llm: { stream: options => streamWithDeadline<StreamChunk>(llm.stream(options), FIRST_TOKEN_TIMEOUT_MS) },
+      options: opts,
+      context: { publicText: targetLine || latestPeer, config: toolConfig },
+      outputMode: 'candidates',
+    })
   } catch (e) {
     rc.op('task', 'suggest_replies', 'fail', talker, (e as Error).message)
     return { ok: false, error: (e as Error).message }
   }
   const elapsedMs = Date.now() - startedAt
-  const raw = assembler.blocks().map(b => (b.type === 'text' ? b.text : '')).join('').trim()
+  const raw = toolRun.text
   const replies = parseReplyCandidates(raw, want)
   // 留痕在**解析之后**组装：即使候选为空，详情里也要能看到模型的原始输出，
   // 否则「模型没给出可用的候选」这句话无法自证。
   const trace: ReplyTrace = {
-    systemPrompt,
+    systemPrompt: toolRun.systemPrompt,
     userPrompt: sentPrompt,
-    contextLines: lines,
-    kbSnippets: snippets,
-    rawOutput: raw,
+    contextLines: promptLines,
+    kbSnippets: promptSnippets,
+    rawOutput: toolRun.modelText,
+    toolEvidenceGuarded: toolRun.modelText !== toolRun.text,
     model: sel.provider + '/' + sel.model,
     elapsedMs,
     redacted: sentPrompt !== prompt,
+    toolCalls: toolRun.observations,
+    toolSources: toolRun.sources,
+    ...(toolRun.degraded ? { toolDegraded: toolRun.degraded } : {}),
   }
   if (replies.length === 0) {
     rc.op('task', 'suggest_replies', 'fail', talker, '模型没给出可用的候选')
@@ -302,8 +322,8 @@ async function suggestRepliesOf(
       const base: ReplySuggestResult = {
         ok: true,
         replies,
-        messageCount: count,
-        kbSnippetCount: snippets.length,
+        messageCount: promptLines.length,
+        kbSnippetCount: promptSnippets.length,
         trace,
         cached: false,
       }

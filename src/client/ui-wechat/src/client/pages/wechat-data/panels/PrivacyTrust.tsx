@@ -22,18 +22,7 @@ const LOCAL_FEATURES = [
   '待办提取（本地关键词匹配，不调用模型）',
 ]
 
-/** 模型用途与内容投递分别说明；这些文字不是额外的出网开关。 */
-const AI_FEATURES: ReadonlyArray<{ name: string; desc: string }> = [
-  { name: '微信问答', desc: '聊天与知识库命中片段发给所选模型；查询优化、向量检索与精排按各自模型配置发送查询或候选文本' },
-  { name: '每日总结', desc: '收集当日消息后调用所选模型生成要点' },
-  { name: '周期总结', desc: '收集区间消息后调用所选模型生成要点' },
-  { name: '群总结任务', desc: '按任务收集指定群消息调用模型；保存推送地址的已启用任务还会将总结正文和 target 发往 Webhook（不额外附带原始消息）' },
-  { name: '消息分析', desc: 'analyze_message：点击分析时发送该消息及之前最多 20 条上下文；语音先在本机转写' },
-  { name: '推荐回复 / AI回复', desc: '所选模型接收当前会话上下文及按配置启用的知识库片段、图片等；AI回复默认关闭，生成正文先落消息列表再按规则投递' },
-  { name: 'AI 队友记忆与提案', desc: '开启 AI回复后，用户级与当前会话记忆作为不可信背景经 ai_reply_analyze 进入模型提示词；只标记采纳不发送，Webhook 发送才投递提案正文；群聊知识库回复保留为待确认草稿' },
-  { name: '知识库模型处理', desc: '文件摘要、实体抽取、向量索引与链接建议会按各自功能发送文件正文、摘要或查询文本' },
-  { name: 'AI 年度叙述', desc: '按月整理的聊天材料送至所选模型生成年度叙述' },
-]
+const AI_FEATURES = ['微信问答', '每日总结', '周期总结', '群总结任务', '消息分析', '推荐回复 / AI回复', '知识库模型处理', 'AI 年度叙述']
 
 /**
  * 审计里的功能 key（后端 `privacyGate(feature, …)` 的第一个参数）→ 界面中文名。
@@ -47,11 +36,12 @@ const FEATURE_LABELS: Readonly<Record<string, string>> = {
   period_summary: '周期总结',
   summary_task: '群总结任务',
   analyze_message: '消息分析',
-  ai_reply_analyze: 'AI回复（含队友记忆）',
+  ai_reply_analyze: 'AI回复',
   task_callback: '消息列表回复投递',
   suggest_reply: '推荐回复',
   annual_narrative: 'AI 年度叙述',
   ask_optimize: '问答查询优化',
+  portrait_personality: '人物性格',
   ask_embed: '聊天向量检索',
   ask_rerank: '问答精排',
   kb_embed: '知识库向量处理',
@@ -59,9 +49,6 @@ const FEATURE_LABELS: Readonly<Record<string, string>> = {
   kb_extract: '知识库实体抽取',
   kb_link_suggest: '知识库链接建议',
 }
-
-/** 非模型网络面同样登记，不能把头像宣称为唯一例外。 */
-const AVATAR_NOTE = '此外还有任务触发投递、消息列表下游 Webhook、远程头像/图片/视频、地图底图、语音模型下载，以及连接测试与余额查询；范围与时机见启动隐私声明。没有全局出网开关。'
 
 /**
  * Render the privacy & trust panel.
@@ -138,18 +125,13 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
 
   return (
     <div className={embedded ? css.embedded : kitCss.panelShell}>
-      <PanelHeader title="数据边界与出网" desc="数据边界 · AI 出网说明 · 敏感信息扫描结果" />
+      <PanelHeader title="数据边界与出网" />
 
       {/* 卡片区改用**等宽瀑布流画布**（2026-11-19，与「年度报告」「数据总览」同一套）。
           这几张卡的高度差异很大：「数据边界」是三段长文、「隐私体检」常常只有一行摘要，
           旧的两列栅格会把它们拉成等高，矮卡下方留白。
           导出进度与页头留在画布外 —— 它们是面板级动作，不该参与摆放。 */}
       <CardCanvas year={0} scope="privacy-trust">
-        <CanvasCard id="trust-boundary" title="数据边界">
-        <p className={css.lead}>微信数据在本机解析/入库/分析；检索统计、导出、图谱、备份等均为纯本地操作。启用不同 AI 功能时，聊天上下文、知识库材料、图片或队友记忆可能按对应功能说明发送到所选模型；可在模型设置中更换服务商，不代表阻止出网。</p>
-        <p className={css.lead}>{AVATAR_NOTE}</p>
-      </CanvasCard>
-
       <CanvasCard id="trust-guard" title="防护设置">
         {state ? (
           <div className={css.toggles}>
@@ -170,16 +152,15 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
 
         <CanvasCard id="trust-ai" title="AI 功能（出网）">
           <div className={css.aiList}>
-            {AI_FEATURES.map(f => (
-              <div key={f.name} className={css.aiRow}>
-                <span className={css.aiName}>☁️ {f.name}</span>
-                <span className={kitCss.textMeta}>{f.desc}</span>
+            {AI_FEATURES.map(name => (
+              <div key={name} className={css.aiRow}>
+                <span className={css.aiName}>{name}</span>
               </div>
             ))}
           </div>
         </CanvasCard>
 
-      <CanvasCard id="trust-audit" title="AI 出站审计" extra={<span className={kitCss.textCaption}>每次放行的功能、次数与字符数</span>}>
+      <CanvasCard id="trust-audit" title="AI 出站审计">
         {!state ? (
           <LoadingState variant="compact" label="设置加载中…" />
         ) : (
@@ -210,21 +191,18 @@ export function PrivacyTrustPanel({ embedded = false }: { embedded?: boolean } =
           详情回那一页看 —— 这正是「内容重复」在这次精简里被砍掉的第一处。 */}
       <CanvasCard id="trust-scan" title="隐私体检（敏感信息扫描）">
         {loading && !scan && <LoadingState variant="compact" label="扫描结果加载中…" />}
-        {!loading && !scan && !error && <div className={kitCss.emptyInline}>尚无扫描结果 —— 侧栏「隐私体检」页点一次扫描即可</div>}
+        {!loading && !scan && !error && <div className={kitCss.emptyInline}>还没有扫描结果</div>}
         {error && <ErrorState message={error} />}
         {scan && (
           <div className={css.scanSummary}>
             <span><b>{scan.total_hits}</b> 命中</span>
             <span><b>{scan.involved_sessions}</b> 会话</span>
-            <span className={kitCss.textCaption}>分类明细与高风险联系人见侧栏「隐私体检」</span>
           </div>
         )}
       </CanvasCard>
       </CardCanvas>
 
       <ExportProgressStatus state={exportTask.state} />
-
-      <p className={css.footnote}>说明：敏感字段打码与 AI 调用审计均为本机即时生效；本地模型优先切换为后续项。应用内已没有任何出网开关（2026-09-30 起全部移除）。审计记录的是**被放行去出站**的调用次数与字符数（含随后因密钥/网络被模型方拒绝的）。</p>
     </div>
   )
 }

@@ -10,7 +10,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react'
 import { apiGetAvatarsLocal } from '../api.ts'
 import { createRestartableTimer, type RestartableTimer } from './timers.ts'
-import { loadSavedPositions, previewLayout, runLayout, savePositions, warmLayoutIterations, type GridPos } from './graph-layout.ts'
+import { loadSavedPositions, previewLayout, runLayout, savePositions, socialLookStale, warmLayoutIterations, type GridPos } from './graph-layout.ts'
 import { SELF_ID, communityColor, groupCommunities, neighboursOf, type BuiltGraph, type GNode, type GraphSettings } from './graph-model.ts'
 import { PARAM_PREVIEW_BLEND, blendPositions, createPositionMotion, forcePreviewIntervalMs, stepPositionMotion, type PositionMotion } from './graph-motion.ts'
 import {
@@ -21,9 +21,11 @@ import {
   drawHoverBubble,
   drawScene,
   fitCamera,
+  frameEdges,
   graphTheme,
   hasAvatar,
   nodeRadius,
+  pickEdge,
   pickNode,
   relaxCollisions,
   revealProgressMap,
@@ -72,6 +74,11 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
   /** 节点坐标（可变：拖拽直接改它）。初值取上次落盘的布局，进面板即原地恢复。 */
   const positionsRef = useRef<Map<string, Point>>(new Map(loadSavedPositions(positionScope)))
+  const dropStaleLookRef = useRef(socialLookStale(positionScope))
+  if (dropStaleLookRef.current) {
+    dropStaleLookRef.current = false
+    positionsRef.current = new Map()
+  }
   const radiiRef = useRef<Map<string, number>>(new Map())
   const camRef = useRef<Camera>({ x: 0, y: 0, k: 1 })
   const sizeRef = useRef<ViewSize>({ w: 0, h: 0 })
@@ -452,16 +459,20 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
 
   // 布局调度：结构（图 / 六个力度参数）变了才重排，并合并连续变化。
   const forceKey = forceKeyOf(settings)
+  const shapeKey = settings.islandShape
   // 初值必须是 null：GraphCanvas 只在数据落地后才挂载，若把首帧 graph 当成“上一次”，
   // 首次布局永远不会被调度。后续再比较引用即可区分结构变化与力度变化。
   const previousGraphRef = useRef<BuiltGraph | null>(null)
   const previousForceKeyRef = useRef<string | null>(null)
+  const previousShapeRef = useRef<string | null>(null)
   useEffect(() => {
     const graphChanged = previousGraphRef.current !== graph
     const forceChanged = previousForceKeyRef.current !== forceKey
+    const shapeChanged = previousShapeRef.current !== null && previousShapeRef.current !== shapeKey
     previousGraphRef.current = graph
     previousForceKeyRef.current = forceKey
-    if (!graphChanged && !forceChanged) return
+    previousShapeRef.current = shapeKey
+    if (!graphChanged && !forceChanged && !shapeChanged) return
     // 结构变化时旧过渡的节点 id 已经不可信；力度变化时先由预览接管。
     if (graphChanged) {
       motionRef.current = null
@@ -470,9 +481,9 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         previewFrameRef.current = 0
       }
     }
-    if (forceChanged && !graphChanged && !propsRef.current.settings.lockLayout) runForcePreview()
-    // 锁定布局只禁止自动重排，不阻止图结构自己完成首次安置。
-    if (forceChanged && !graphChanged && propsRef.current.settings.lockLayout) return
+    if (forceChanged && !graphChanged && !shapeChanged && !propsRef.current.settings.lockLayout) runForcePreview()
+    // 锁定布局只禁止自动重排，不阻止图结构自己完成首次安置，也不挡住形状切换。
+    if (forceChanged && !graphChanged && !shapeChanged && propsRef.current.settings.lockLayout) return
     if (!layoutTimerRef.current) {
       layoutTimerRef.current = createRestartableTimer({
         delayMs: RELAYOUT_SETTLE_MS,
@@ -480,7 +491,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       })
     }
     layoutTimerRef.current.restart()
-  }, [graph, forceKey, relayoutNow, runForcePreview])
+  }, [graph, forceKey, shapeKey, relayoutNow, runForcePreview])
   // 卸载要做两件事：① 清掉**这一张图**的排程；② 关掉**共享的**布局 worker。
   // P3-13：`disposeLayoutWorker()` 早就定义了，但全仓没有一处调用 ——
   // 于是每开一次图谱就多一个活着的 worker（模块级实例 + 线程），关掉页签也不释放。
@@ -535,6 +546,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       previewFrameRef.current = 0
     }
     positionsRef.current = new Map(loadSavedPositions(positionScope))
+    if (socialLookStale(positionScope)) positionsRef.current = new Map()
     needsFitRef.current = true
   }, [positionScope])
 
@@ -676,7 +688,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
       }
       // 建物理世界：弹簧自然长度取**按下瞬间的实际长度** ⇒ 此刻是零力状态，
       // 所以不拖动时图不会自己动起来（否则每次开始拖都会先抖一下再稳定）。
-      const simWorld = createPhysicsWorld(p.graph, positionsRef.current, radiiRef.current)
+      const drawn = frameEdges(p.graph.edges, p.graph.nodes).drawn
+      const simWorld = createPhysicsWorld({ ...p.graph, edges: drawn }, positionsRef.current, radiiRef.current)
       // 固定/锁定节点当锚点：在模拟里不动，也不参与质心约束
       anchorNodes(simWorld, p.pinnedIds ?? [])
       simRef.current = { world: simWorld, id: hit, target: { x: pos?.x ?? 0, y: pos?.y ?? 0 }, releasedAt: 0 }
@@ -747,8 +760,16 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
         simRef.current = null
       }
     } else if (!drag.moved) {
-      // 点空白处清除选中（改前 ECharts 版只在点中节点时回调，点空白什么都不做）
-      propsRef.current.onSelect(null)
+      const world = screenToWorld(camRef.current, sizeRef.current, drag.startX, drag.startY)
+      const edge = pickEdge(
+        propsRef.current.graph.edges,
+        positionsRef.current,
+        camRef.current,
+        world.x,
+        world.y,
+      )
+      if (edge && propsRef.current.onSelectEdge) propsRef.current.onSelectEdge(edge)
+      else propsRef.current.onSelect(null)
     }
     scheduleFrame()
   }
@@ -961,8 +982,8 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle, GraphCanvasProps>(funct
   /** 网格底纹仍由 CSS 画（与改前一致），画布本身透出它。 */
   const gridBg = settings.showGrid
     ? (dark
-      ? 'radial-gradient(circle at 1px 1px, rgba(150,170,190,0.12) 1px, transparent 0) 0 0 / 24px 24px'
-      : 'radial-gradient(circle at 1px 1px, rgba(70,90,110,0.14) 1px, transparent 0) 0 0 / 24px 24px')
+      ? 'radial-gradient(circle at 1px 1px, rgba(255,255,255,0.04) 1px, transparent 0) 0 0 / 28px 28px, #141414'
+      : 'radial-gradient(circle at 1px 1px, rgba(90,80,70,0.05) 1px, transparent 0) 0 0 / 28px 28px, #f7f6f3')
     : undefined
 
   return (

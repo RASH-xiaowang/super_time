@@ -3,8 +3,7 @@
  *
  * 这一域是用户显式创建的**触发式任务**：某会话（单聊/群聊 + 群内目标用户）的消息命中
  * 关键词时，记一条「触发记录」，已完善（`ready`）的任务再按**触发方式**送出：内置
- * `webhook`（整条记录 JSON POST）或注册表里的某个 RPA 厂商（影刀 / UiPath / 阿里云 /
- * 来也 / 实在 / 八爪鱼……，见 `rpa/registry.ts` 与 `RpaVendorDescriptor`）。触发方式是
+ * `webhook`（整条记录 JSON POST）或八爪鱼 RPA（见 `rpa/registry.ts`）。触发方式是
  * 描述符驱动的：非敏感配置存 `trigger_config`、凭据存 `trigger_secret`（**永不回读原文**），
  * 旧列 `callback_url` / `bazhuayu_flow_id` / `bazhuayu_api_key` 只在迁移窗口内双写/回退读。
  * 与相邻三个 store 的分工（别混）：
@@ -36,8 +35,11 @@ import type { DatabaseSync } from './db-open.ts'
 import { queryMessages } from './messages.ts'
 import { contactMeta } from './meta.ts'
 import { canonicalChatReference, isMessageTableHash } from './message-identity.ts'
+import { ensureTaskMessageListRule } from './message-list-store-rules.ts'
 import { findVendor } from './rpa/registry.ts'
 import { storeExists, taskDbPath } from './task-db.ts'
+// 触发记录的 images/texts 解析在兄弟文件（M21 行数上限：主文件只留 CRUD 与校验）。
+import { parseTriggerImages, parseTriggerTexts } from './task-center-trigger-parse.ts'
 import {
   applySecretInput,
   defaultConfigFor,
@@ -67,6 +69,7 @@ import type {
   TaskTriggerQuery,
   TaskTriggerRecord,
   TaskTriggerSnapshot,
+  TaskTriggerText,
 } from '../types.ts'
 import {
   cleanTaskBatchIds,
@@ -91,12 +94,16 @@ export type { ScanTaskTriggersOptions } from './task-center-scan.ts'
 export { dispatchPendingTaskCallbacks, dispatchTaskCallback } from './task-center-callback.ts'
 export type { PendingDispatchResult, TaskDispatchDeps, TaskDispatchOptions } from './task-center-callback.ts'
 export { storeExists, taskDbPath }
+// 触发记录的 images/texts 解析在兄弟文件（M21 行数上限）。
+export { parseTriggerImages, parseTriggerTexts } from './task-center-trigger-parse.ts'
 /** 单个关键词 trim 后的最大字符数。 */
 const KEYWORD_MAX_LEN = 64
 /** 一个任务最多几个去重后的关键词。 */
 const KEYWORD_MAX = 20
 /** 触发图片张数上限（0 = 不带图片）。 */
 const PHOTO_LIMIT_MAX = 9
+/** 触发时携带的文本条数上限（0 = 不带文本）。 */
+const TEXT_LIMIT_MAX = 9
 /** 触发记录默认 / 最大返回条数。 */
 const TRIGGER_QUERY_DEFAULT = 100
 const TRIGGER_QUERY_MAX = 200
@@ -143,7 +150,10 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     target_name TEXT NOT NULL DEFAULT '',
     keywords TEXT NOT NULL DEFAULT '[]',
     photo_limit INTEGER NOT NULL DEFAULT 0,
+    text_limit INTEGER NOT NULL DEFAULT 0,
     mention_me_only INTEGER NOT NULL DEFAULT 0,
+    greeting_enabled INTEGER NOT NULL DEFAULT 0,
+    greeting_text TEXT NOT NULL DEFAULT '',
     trigger_method TEXT NOT NULL DEFAULT 'webhook',
     bazhuayu_flow_id TEXT NOT NULL DEFAULT '',
     bazhuayu_api_key TEXT NOT NULL DEFAULT '',
@@ -169,6 +179,7 @@ export function ensureTaskSchema(db: DatabaseSync): void {
     keyword TEXT NOT NULL DEFAULT '',
     text TEXT NOT NULL DEFAULT '',
     images TEXT NOT NULL DEFAULT '[]',
+    texts TEXT NOT NULL DEFAULT '[]',
     message_local_id INTEGER NOT NULL,
     message_sort_seq INTEGER NOT NULL,
     triggered_at INTEGER NOT NULL,
@@ -200,16 +211,20 @@ export function ensureTaskSchema(db: DatabaseSync): void {
  */
 const TASK_INFO_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
   ['mention_me_only', 'ALTER TABLE task_info ADD COLUMN mention_me_only INTEGER NOT NULL DEFAULT 0'],
+  ['text_limit', 'ALTER TABLE task_info ADD COLUMN text_limit INTEGER NOT NULL DEFAULT 0'],
   ['trigger_method', "ALTER TABLE task_info ADD COLUMN trigger_method TEXT NOT NULL DEFAULT 'webhook'"],
   ['bazhuayu_flow_id', "ALTER TABLE task_info ADD COLUMN bazhuayu_flow_id TEXT NOT NULL DEFAULT ''"],
   ['bazhuayu_api_key', "ALTER TABLE task_info ADD COLUMN bazhuayu_api_key TEXT NOT NULL DEFAULT ''"],
   ['trigger_config', "ALTER TABLE task_info ADD COLUMN trigger_config TEXT NOT NULL DEFAULT '{}'"],
   ['trigger_secret', "ALTER TABLE task_info ADD COLUMN trigger_secret TEXT NOT NULL DEFAULT '{}'"],
   ['trigger_vendor_version', "ALTER TABLE task_info ADD COLUMN trigger_vendor_version TEXT NOT NULL DEFAULT ''"],
+  ['greeting_enabled', 'ALTER TABLE task_info ADD COLUMN greeting_enabled INTEGER NOT NULL DEFAULT 0'],
+  ['greeting_text', "ALTER TABLE task_info ADD COLUMN greeting_text TEXT NOT NULL DEFAULT ''"],
 ]
 
 /** `task_triggers` 的历史补列清单（外部任务 id + 派发租约/围栏）。 */
 const TASK_TRIGGER_COLUMN_MIGRATIONS: ReadonlyArray<readonly [string, string]> = [
+  ['texts', "ALTER TABLE task_triggers ADD COLUMN texts TEXT NOT NULL DEFAULT '[]'"],
   ['external_task_id', "ALTER TABLE task_triggers ADD COLUMN external_task_id TEXT NOT NULL DEFAULT ''"],
   ['callback_lease_owner', "ALTER TABLE task_triggers ADD COLUMN callback_lease_owner TEXT NOT NULL DEFAULT ''"],
   ['callback_lease_until', 'ALTER TABLE task_triggers ADD COLUMN callback_lease_until INTEGER NOT NULL DEFAULT 0'],
@@ -258,38 +273,6 @@ function parseStringArray(raw: unknown): string[] {
   }
 }
 
-/** 触发图片数组解析（逐项校验形状，坏项丢弃）。 */
-function parseTriggerImages(raw: unknown): TaskTriggerImage[] {
-  const text = taskCellStr(raw)
-  if (text === '') return []
-  try {
-    const value = JSON.parse(text) as unknown
-    if (!Array.isArray(value)) return []
-    const out: TaskTriggerImage[] = []
-    for (const item of value) {
-      if (typeof item !== 'object' || item === null) continue
-      const row = item as Record<string, unknown>
-      const localId = taskCellNum(row['localId'])
-      if (localId <= 0) continue
-      const image: TaskTriggerImage = {
-        localId,
-        createTime: taskCellNum(row['createTime']),
-        sender: taskCellStr(row['sender']),
-      }
-      const senderUsername = taskCellStr(row['senderUsername'])
-      if (senderUsername !== '') image.senderUsername = senderUsername
-      const senderEnterpriseName = taskCellStr(row['senderEnterpriseName'])
-      if (senderEnterpriseName !== '') image.senderEnterpriseName = senderEnterpriseName
-      const md5 = taskCellStr(row['md5'])
-      if (md5 !== '') image.md5 = md5
-      out.push(image)
-    }
-    return out
-  } catch {
-    return []
-  }
-}
-
 /** `task_triggers` 行 → 契约里的 `TaskTriggerRecord`。 */
 export function rowToTrigger(
   r: Record<string, unknown>,
@@ -311,6 +294,7 @@ export function rowToTrigger(
     keyword: taskCellStr(r['keyword']),
     text: taskCellStr(r['text']),
     images: parseTriggerImages(r['images']),
+    texts: parseTriggerTexts(r['texts']),
     messageLocalId: taskCellNum(r['message_local_id']),
     messageSortSeq: taskCellNum(r['message_sort_seq']),
     triggeredAt: taskCellNum(r['triggered_at']),
@@ -439,7 +423,10 @@ export function rowToTask(
     targetName: taskCellStr(r['target_name']),
     keywords: parseStringArray(r['keywords']),
     photoLimit: taskCellNum(r['photo_limit']),
+    textLimit: taskCellNum(r['text_limit']),
     mentionMeOnly: taskCellNum(r['mention_me_only']) === 1,
+    greetingEnabled: taskCellNum(r['greeting_enabled']) === 1,
+    greetingText: taskCellStr(r['greeting_text']),
     triggerMethod,
     triggerConfig,
     triggerSecretSet: secretSet,
@@ -606,7 +593,10 @@ interface ResolvedTaskFields {
   targetName: string
   keywords: string[]
   photoLimit: number
+  textLimit: number
   mentionMeOnly: boolean
+  greetingEnabled: boolean
+  greetingText: string
   triggerMethod: string
   triggerConfig: RpaTriggerConfig
   /** 凭据原文（只写库用，**绝不出本文件 / 不进任何快照**）。 */
@@ -716,11 +706,24 @@ function resolveTaskFields(
   const photoLimit = input?.photoLimit === undefined
     ? existingPhotoLimit
     : clampTaskInt(input.photoLimit, 0, 0, PHOTO_LIMIT_MAX)
+  const existingTextLimit = existing === undefined ? 0 : taskCellNum(existing['text_limit'])
+  const textLimit = input?.textLimit === undefined
+    ? existingTextLimit
+    : clampTaskInt(input.textLimit, 0, 0, TEXT_LIMIT_MAX)
   // 「仅匹配 @我」只对群聊生效：单聊没有结构化群 @ 列表，强行存 true 会永久不触发。
   const existingMentionMeOnly = existing === undefined ? false : taskCellNum(existing['mention_me_only']) === 1
   const mentionMeOnly = chatType === 'group' && (input?.mentionMeOnly === undefined
     ? existingMentionMeOnly
     : input.mentionMeOnly === true)
+  const existingGreetingEnabled = existing === undefined ? false : taskCellNum(existing['greeting_enabled']) === 1
+  const greetingEnabled = input?.greetingEnabled === undefined
+    ? existingGreetingEnabled
+    : input.greetingEnabled === true
+  const existingGreetingText = existing === undefined ? '' : taskCellStr(existing['greeting_text'])
+  const greetingText = input?.greetingText === undefined
+    ? existingGreetingText
+    : (typeof input.greetingText === 'string' ? input.greetingText.trim().slice(0, 4000) : '')
+  if (greetingEnabled && greetingText === '') return { error: '开启消息队列后需要填写问候语' }
   const explicitName = typeof input?.name === 'string' ? input.name.trim() : ''
   const existingName = existing === undefined ? '' : taskCellStr(existing['name'])
   const name = explicitName !== ''
@@ -753,7 +756,7 @@ function resolveTaskFields(
   return {
     fields: {
       chatUsername, chatName, chatType, targetUsername, targetName,
-      keywords, photoLimit, mentionMeOnly, triggerMethod,
+      keywords, photoLimit, textLimit, mentionMeOnly, greetingEnabled, greetingText, triggerMethod,
       triggerConfig: validated.config, triggerSecrets: secretsResult.secrets,
       triggerVendorVersion: vendor.descriptor.version, status, name,
     },
@@ -764,6 +767,18 @@ function resolveTaskFields(
  * 计算要落库的凭据原文（已保存 + 本次输入 + 旧入参别名）。
  * @returns `secrets` 或中文错误。
  */
+/** 补消息列表规则。失败不撤销已写好的任务。 */
+function ensureTaskQueueRule(db: DatabaseSync, chatName: string, targetName: string): void {
+  try {
+    ensureTaskMessageListRule(db, {
+      chatName,
+      targetName: targetName !== '' ? targetName : chatName,
+    })
+  } catch {
+    // 规则没写上时任务仍然保留；用户可在消息列表里补同一对会话和对象。
+  }
+}
+
 function buildResolvedSecrets(
   input: TaskInfoInput,
   existing: Record<string, unknown> | undefined,
@@ -828,32 +843,37 @@ export function saveTaskInfo(decryptedDir: string, input: TaskInfoInput, selfUse
           : taskCellNum(existing['last_scan_seq'])
         db.prepare(`UPDATE task_info SET
           name = ?, chat_username = ?, chat_name = ?, chat_type = ?, target_username = ?, target_name = ?,
-          keywords = ?, photo_limit = ?, mention_me_only = ?, trigger_method = ?, trigger_config = ?,
+          keywords = ?, photo_limit = ?, text_limit = ?, mention_me_only = ?, greeting_enabled = ?, greeting_text = ?,
+          trigger_method = ?, trigger_config = ?,
           trigger_secret = ?, trigger_vendor_version = ?, callback_url = ?, bazhuayu_flow_id = ?,
           bazhuayu_api_key = ?, status = ?, last_scan_seq = ?, updated_at = ?
           WHERE id = ?`).run(
           fields.name, fields.chatUsername, fields.chatName, fields.chatType,
           fields.targetUsername, fields.targetName, JSON.stringify(fields.keywords), fields.photoLimit,
-          fields.mentionMeOnly ? 1 : 0, fields.triggerMethod, JSON.stringify(fields.triggerConfig),
+          fields.textLimit, fields.mentionMeOnly ? 1 : 0, fields.greetingEnabled ? 1 : 0, fields.greetingText,
+          fields.triggerMethod, JSON.stringify(fields.triggerConfig),
           JSON.stringify(fields.triggerSecrets), fields.triggerVendorVersion, legacy.callbackUrl,
           legacy.bazhuayuFlowId, legacy.bazhuayuApiKey, fields.status, watermark, now, id,
         )
+        ensureTaskQueueRule(db, fields.chatName, fields.targetName)
         return { ok: true, id, status: fields.status }
       }
       // 新建：水位初始化成该会话当前最大 sort_seq（避免一启用就回扫历史）。
       const watermark = currentMaxSortSeq(decryptedDir, fields.chatUsername, selfUsername)
       const info = db.prepare(`INSERT INTO task_info
-        (name, chat_username, chat_name, chat_type, target_username, target_name, keywords, photo_limit,
-         mention_me_only, trigger_method, trigger_config, trigger_secret, trigger_vendor_version,
+        (name, chat_username, chat_name, chat_type, target_username, target_name, keywords, photo_limit, text_limit,
+         mention_me_only, greeting_enabled, greeting_text, trigger_method, trigger_config, trigger_secret, trigger_vendor_version,
          callback_url, bazhuayu_flow_id, bazhuayu_api_key,
          status, last_scan_seq, created_at, updated_at, trigger_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)`).run(
         fields.name, fields.chatUsername, fields.chatName, fields.chatType,
         fields.targetUsername, fields.targetName, JSON.stringify(fields.keywords), fields.photoLimit,
-        fields.mentionMeOnly ? 1 : 0, fields.triggerMethod, JSON.stringify(fields.triggerConfig),
+        fields.textLimit, fields.mentionMeOnly ? 1 : 0, fields.greetingEnabled ? 1 : 0, fields.greetingText,
+        fields.triggerMethod, JSON.stringify(fields.triggerConfig),
         JSON.stringify(fields.triggerSecrets), fields.triggerVendorVersion, legacy.callbackUrl,
         legacy.bazhuayuFlowId, legacy.bazhuayuApiKey, fields.status, watermark, now, now,
       )
+      ensureTaskQueueRule(db, fields.chatName, fields.targetName)
       return { ok: true, id: taskCellNum(info.lastInsertRowid), status: fields.status }
     })
   } catch (e) {
@@ -911,8 +931,7 @@ export function setTaskInfoStatus(
 }
 
 /**
- * 删除任务。**触发记录刻意保留**：任务删了，记录仍是已经发生过的事实，
- * 前端也能凭记录里的快照字段继续展示（见 `types-taskcenter.ts` 的 `task_name` 注释）。
+ * 删除任务，并在同一事务里删掉它的全部触发记录。
  * @param decryptedDir - 解密数据根。
  * @param id - 任务 id。
  * @returns 写结果（失败带中文 error）。
@@ -925,8 +944,20 @@ export function deleteTaskInfo(decryptedDir: string, id: number): TaskInfoMutati
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       ensureTaskSchema(db)
-      const info = db.prepare('DELETE FROM task_info WHERE id = ?').run(taskId)
-      return Number(info.changes) > 0 ? { ok: true, id: taskId } : { ok: false, error: '任务不存在' }
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        const info = db.prepare('DELETE FROM task_info WHERE id = ?').run(taskId)
+        if (Number(info.changes) <= 0) {
+          db.exec('ROLLBACK')
+          return { ok: false, error: '任务不存在' }
+        }
+        db.prepare('DELETE FROM task_triggers WHERE task_id = ?').run(taskId)
+        db.exec('COMMIT')
+        return { ok: true, id: taskId }
+      } catch (e) {
+        try { db.exec('ROLLBACK') } catch { /* 回滚失败时把原错误抛出去 */ }
+        throw e
+      }
     })
   } catch (e) {
     return { ok: false, error: '删除任务失败：' + taskErrorText(e) }
@@ -934,10 +965,10 @@ export function deleteTaskInfo(decryptedDir: string, id: number): TaskInfoMutati
 }
 
 /**
- * 批量删除任务配置。与单条删除同一语义：**触发记录刻意保留**，它们是已经发生过的事实。
+ * 批量删除任务，并在同一事务里删掉这些任务的全部触发记录。
  * @param decryptedDir - 解密数据根。
  * @param rawIds - 任务 id 列表（运行时未受类型保护）。
- * @returns 实际删除行数；空选择 / 非法 id / 超过上限时整单失败。
+ * @returns 实际删除的任务行数；空选择 / 非法 id / 超过上限时整单失败。
  */
 export function deleteTaskInfos(decryptedDir: string, rawIds: unknown): TaskBatchMutationResult {
   const cleaned = cleanTaskBatchIds(rawIds)
@@ -947,10 +978,19 @@ export function deleteTaskInfos(decryptedDir: string, rawIds: unknown): TaskBatc
   try {
     return withWritableDb(taskDbPath(decryptedDir), (db) => {
       ensureTaskSchema(db)
-      const result = db.prepare(
-        'DELETE FROM task_info WHERE id IN (' + sqlPlaceholders(cleaned.ids.length) + ')',
-      ).run(...cleaned.ids)
-      return { ok: true, removed: Number(result.changes) }
+      const placeholders = sqlPlaceholders(cleaned.ids.length)
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        db.prepare('DELETE FROM task_triggers WHERE task_id IN (' + placeholders + ')').run(...cleaned.ids)
+        const removed = Number(db.prepare(
+          'DELETE FROM task_info WHERE id IN (' + placeholders + ')',
+        ).run(...cleaned.ids).changes)
+        db.exec('COMMIT')
+        return { ok: true, removed }
+      } catch (e) {
+        try { db.exec('ROLLBACK') } catch { /* 回滚失败时把原错误抛出去 */ }
+        throw e
+      }
     })
   } catch (e) {
     return { ok: false, removed: 0, error: '批量删除任务失败：' + taskErrorText(e) }
@@ -960,8 +1000,8 @@ export function deleteTaskInfos(decryptedDir: string, rawIds: unknown): TaskBatc
 /**
  * 批量删除触发记录，并在**同一事务**里重算受影响任务的统计缓存。
  *
- * `deleteTaskInfos` 刻意保留触发记录，所以这里要让任务行的 `trigger_count` /
- * `last_triggered_at` 重新等于记录表事实；否则删了记录，左栏仍显示旧的触发次数。
+ * 删掉记录后，把还在的任务的 `trigger_count` / `last_triggered_at` 重新算成记录表事实；
+ * 否则左栏仍显示旧的触发次数。
  * 任一步失败都回滚，不能留下「记录删了、统计没更新」的半完成状态。
  * @param decryptedDir - 解密数据根。
  * @param rawIds - 触发记录 id 列表（运行时未受类型保护）。

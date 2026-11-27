@@ -217,13 +217,18 @@ describe('AI 回复待配置状态', () => {
     const recordId = state.recordId ?? 0
     const fetchImpl = vi.fn(async () => new Response('{"ok":true}', { status: 200 }))
 
-    expect(saveMessageListRule(decrypted, {
+    const saved = saveMessageListRule(decrypted, {
       chatName: '小王',
       targetName: '小王',
       webhookUrl: 'https://downstream.example/ai',
-    }).ok).toBe(true)
+    })
+    expect(saved.ok).toBe(true)
+    // 回填条数要回给网关：有值时才需要立刻调度一拍投递。
+    expect(saved.backfilled).toBe(1)
     expect(getMessageListRecord(decrypted, recordId)?.webhookUrl)
       .toBe('https://downstream.example/ai')
+    // 回填时顺手清掉「未匹配到 Webhook」的旧结论：规则已经能投递，不能继续挂失败文案。
+    expect(getMessageListRecord(decrypted, recordId)?.error).toBe('')
 
     const restarted = createChatAiReplyRunner(makeDeps(dispatchViaMessageList(fetchImpl)))
     await restarted.scan()

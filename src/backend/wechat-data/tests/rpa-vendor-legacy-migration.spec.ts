@@ -15,11 +15,6 @@ import type {
   RpaVendorAdapter,
 } from '../src/query/rpa/types.ts'
 import { adapter as bazhuayu } from '../src/query/rpa/vendors/bazhuayu.ts'
-import { adapter as yingdao } from '../src/query/rpa/vendors/yingdao.ts'
-import { adapter as uipath } from '../src/query/rpa/vendors/uipath.ts'
-import { adapter as aliyunRpa } from '../src/query/rpa/vendors/aliyun-rpa.ts'
-import { adapter as laiye } from '../src/query/rpa/vendors/laiye.ts'
-import { adapter as shizai } from '../src/query/rpa/vendors/shizai.ts'
 
 interface HttpCall {
   body: string
@@ -105,12 +100,6 @@ describe('旧版参数映射统一迁移到附加参数', () => {
     legacy_content: '你好 RPA',
     legacy_at: '张三',
   }
-  const expectedArray = [
-    { name: 'legacy_room', value: '测试群' },
-    { name: 'legacy_content', value: '你好 RPA' },
-    { name: 'legacy_at', value: '张三' },
-  ]
-
   const cases: Array<{
     name: string
     adapter: RpaVendorAdapter
@@ -127,130 +116,6 @@ describe('旧版参数映射统一迁移到附加参数', () => {
       responder: { body: { flowProcessNo: 'proc-legacy' } },
       businessCallIndex: 0,
       read: (call) => bodyJson(call)['params'],
-      expected: expectedObject,
-    },
-    {
-      name: '影刀 RPA（paramMap → params[]）',
-      adapter: yingdao,
-      ctx: makeCtx(
-        {
-          baseUrl: 'https://api.yingdao.com',
-          robotUuid: 'robot-1',
-          accountName: 'admin@fckj',
-          priority: 'middle',
-          paramMap: legacy,
-        },
-        { accessKeyId: 'ak-1', accessKeySecret: 'sk-1' },
-      ),
-      responder: (_call, index) => (
-        index === 0
-          ? { body: { code: 200, data: { accessToken: 'tok-1', expiresIn: 7200 } } }
-          : { body: { code: 200, data: { jobUuid: 'job-legacy' } } }
-      ),
-      businessCallIndex: 1,
-      read: (call) => bodyJson(call)['params'],
-      expected: [
-        { name: 'legacy_room', value: '测试群', type: 'str' },
-        { name: 'legacy_content', value: '你好 RPA', type: 'str' },
-        { name: 'legacy_at', value: '张三', type: 'str' },
-      ],
-    },
-    {
-      name: 'UiPath（inputArgumentsMap → InputArguments）',
-      adapter: uipath,
-      ctx: makeCtx(
-        {
-          deployment: 'cloud',
-          baseUrl: 'https://cloud.uipath.com',
-          organizationName: 'myorg',
-          tenantName: 'mytenant',
-          folderKey: 'folder-key-1',
-          releaseKey: 'release-key-1',
-          strategy: 'ModernJobsCount',
-          jobsCount: 1,
-          authMode: 'pat',
-          inputArgumentsMap: legacy,
-        },
-        { pat: 'pat-token-1' },
-      ),
-      responder: { body: { value: [{ Key: 'job-legacy', State: 'Pending' }] } },
-      businessCallIndex: 0,
-      read: (call) => {
-        const startInfo = bodyJson(call)['startInfo'] as Record<string, unknown>
-        return JSON.parse(String(startInfo['InputArguments']))
-      },
-      expected: expectedObject,
-    },
-    {
-      name: '阿里云 RPA（appParamsMap → AppParams）',
-      adapter: aliyunRpa,
-      ctx: makeCtx(
-        {
-          apiFamily: 'service',
-          baseUrl: 'https://console-rpa.aliyun.com',
-          appId: 'app-1',
-          appVersion: '1.0.0',
-          allocateMode: 'auto',
-          packId: 'pack-1',
-          taskPriority: 85,
-          appParamsMap: legacy,
-        },
-        { accessKeyId: 'ak-1', accessKeySecret: 'sk-1' },
-      ),
-      responder: { body: { code: 0, success: true, data: { TaskId: 'task-legacy' } } },
-      businessCallIndex: 0,
-      read: (call) => JSON.parse(new URLSearchParams(call.body).get('AppParams') ?? 'null'),
-      expected: expectedArray,
-    },
-    {
-      name: '来也 RPA（parameterMap → parameters[]）',
-      adapter: laiye,
-      ctx: makeCtx(
-        {
-          baseUrl: 'https://rpa.example.com:8182',
-          flowName: 'finance_report_flow',
-          assignType: 'automatic',
-          priority: 'high',
-          parameterMap: legacy,
-        },
-        { token: 'rk-company-abc' },
-      ),
-      responder: {
-        body: {
-          jsonrpc: '2.0',
-          id: '7:11',
-          result: JSON.stringify({ return: { code: '0', data: { taskIds: [1] } } }),
-        },
-      },
-      businessCallIndex: 0,
-      read: (call) => {
-        const body = bodyJson(call)
-        const params = body['params'] as Record<string, unknown>
-        const args = params['arguments'] as Record<string, unknown>
-        return args['parameters']
-      },
-      expected: [
-        { parameterName: 'legacy_room', parameterType: 'string', parameterValue: '测试群' },
-        { parameterName: 'legacy_content', parameterType: 'string', parameterValue: '你好 RPA' },
-        { parameterName: 'legacy_at', parameterType: 'string', parameterValue: '张三' },
-      ],
-    },
-    {
-      name: '实在智能 RPA（inputParamMap → inputParam）',
-      adapter: shizai,
-      ctx: makeCtx(
-        {
-          baseUrl: 'https://z-commander-api.ai-indeed.com',
-          jobUuid: 'job-uuid-1',
-          keyHeader: 'X-App-Key',
-          secretHeader: 'X-App-Secret',
-          inputParamMap: legacy,
-        },
-        { appKey: 'ak-key-1', appSecret: 'as-secret-1' },
-      ),
-      responder: { body: { code: 0, data: { works: [{ workUuid: 'work-legacy' }] } } },
-      businessCallIndex: 0,
-      read: (call) => bodyJson(call)['inputParam'],
       expected: expectedObject,
     },
   ]

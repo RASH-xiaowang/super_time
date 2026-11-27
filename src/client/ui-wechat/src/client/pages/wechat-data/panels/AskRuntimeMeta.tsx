@@ -271,7 +271,7 @@ export function AskResources({ turn, defaultOpen = false }: {
   if (resources.length === 0) return null
   const shownResources = allResources ? resources : resources.slice(0, RESOURCE_PREVIEW)
   return (
-    <section className={css.resourceSection} aria-label="本轮相关资源">
+    <section className={css.resourceSection} data-block="data" aria-label="本轮相关资源">
       <button
         type="button"
         className={css.sectionHead}

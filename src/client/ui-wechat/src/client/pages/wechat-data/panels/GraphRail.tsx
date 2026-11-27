@@ -164,8 +164,16 @@ export interface GraphRailProps {
   runAnimation: () => void
   /** 打开某个节点的聊天（可选）。 */
   onOpenChat?: ((username: string) => void) | undefined
+  /** 打开通讯录好友的客户画像。 */
+  onOpenPortrait?: ((username: string) => void) | undefined
+  /** 当前要展开依据的那条线。 */
+  selectedEdge?: GEdge | null
+  /** 选中一条线，展开它的关系依据。 */
+  onSelectEdge?: ((edge: GEdge) => void) | undefined
   /** 收起面板。 */
   onClose: () => void
+  /** 群 id → 群名。关系依据里的群号靠它变成群名。 */
+  groupNames?: Record<string, string> | undefined
 }
 
 /** 知识类节点（笔记 / 待补 / 文件 / 章节 / 实体）没有「查看聊天」。 */
@@ -181,8 +189,15 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
     isKnowledgeMode, selfUsername = '', selected, detailRequest, selAvatar, selectedGroupNames, selectedClass, selectedConnections,
     communities, focusCommunity, topFriends, topNotes, knowledge, settings, isDefaultSettings, pinned,
     patch, setMode, selectNode, clearSelection, focusNode, togglePin, setFocusCommunity, setHoverCommunity,
-    openNoteEditor, removeNote, newNote, relayout, clearPinned, restoreDefaults, runAnimation, onOpenChat, onClose,
+    openNoteEditor, removeNote, newNote, relayout, clearPinned, restoreDefaults, runAnimation, onOpenChat, onOpenPortrait, selectedEdge, onSelectEdge, onClose,
+    graph, groupNames,
   } = p
+  const labelOf = (id: string): string => {
+    if (id === 'self') return '我'
+    const node = graph.nodes.find((item) => item.id === id)
+    if (node) return withEnterprise(node.label, node.enterpriseName)
+    return groupNames?.[id] ?? id
+  }
 
   /**
    * 侧栏视图（2026-10-18 用户反馈）：参数是参数、节点详情是详情，不再把详情塞进
@@ -227,11 +242,14 @@ export function GraphRail(p: GraphRailProps): React.JSX.Element {
             openNoteEditor={openNoteEditor}
             newNote={newNote}
             onOpenChat={onOpenChat}
+            onOpenPortrait={onOpenPortrait}
+            selectedEdge={selectedEdge ?? null}
+            onSelectEdge={onSelectEdge}
+            labelOf={labelOf}
           />
         ) : (
           <div className={css.railSection}>
-            <div className={css.railTitle}>未选中节点</div>
-            <div className={kitCss.textMeta}>在图谱里点击任意节点，这里显示它的关系、共同群聊与可执行操作；调参请切「图谱参数」。</div>
+            <div className={css.railTitle}>未选中</div>
           </div>
         )
       ) : (

@@ -22,60 +22,45 @@ const read = (f: string): string => readText(join(HERE, f))
 const annualCss = read('annual.module.css')
 const annualTsx = read('Annual.tsx')
 
-/**
- * 从 `<PanelHeader` 的起点找出这个 JSX 元素自己的结尾（自闭合的 `/>`）。
- *
- * 为什么不能直接找「下一个 `/>`」：`title={<>…<span/>…</>}` 这种写法里，
- * **嵌套元素也有自己的 `/>`**，直接找会切在它那里 —— 于是 `desc=` 落在切片之外，
- * 一个明明有 desc 的面板会被报成"缺失"（第一版就是这么误报 4 个文件的）。
- *
- * 规则：以 `{` / `}` 的配对深度为界，**深度为 0 处的 `/>`** 才是本元素的结尾
- * （属性值里的嵌套 JSX 一律包在 `{…}` 里）。找不到就返回 -1，调用方会因此变红 ——
- * 宁可炸，也不要静默切一小段导致误判。
- * @param src - 源文件文本。
- * @param start - `<PanelHeader` 的起始下标。
- * @returns 结尾 `/>` 里那个 `/` 的下标；找不到返回 -1。
- */
-function jsxElementEnd(src: string, start: number): number {
-  let depth = 0
-  for (let i = start; i < src.length; i++) {
-    const c = src.charAt(i)
-    if (c === '{') depth++
-    else if (c === '}') depth--
-    else if (c === '/' && src.charAt(i + 1) === '>' && depth === 0) return i
-  }
-  return -1
-}
-
-/**
- * 明确豁免 `desc` 的面板：用户对个别面板另有「页头压到两行」的要求，
- * 描述被收进标题的 `title`（悬停即见）。每条都要写出覆盖它的那份守卫。
- */
-const DESC_EXEMPT: Readonly<Record<string, string>> = {
-  'kb-files-panel.tsx': '2026-10-17 用户要求页头只占两行：描述收进 KbTitleRow 的 title，'
-    + '由 kb-reader.wiring.spec.ts「描述收进 title，不再占独立一行」钉住',
-}
-
-describe('U12 · 页头口径：有 PanelHeader 就要有 desc', () => {
-  it('每个用 PanelHeader 的面板都传了 desc（或显式展开 header 属性）', () => {
+describe('U12 · 页头不铺功能说明', () => {
+  it('页头可以没有 desc，说明性长句不再写在标题下面', () => {
     const files = readdirSync(HERE).filter((f) => f.endsWith('.tsx'))
     atLeast(files.length, 25, 'panels 下的 tsx 文件数')
-    const missing: string[] = []
-    let heads = 0
-    for (const f of files) {
-      const src = read(f)
-      let i = src.indexOf('<PanelHeader')
-      while (i >= 0) {
-        const slash = jsxElementEnd(src, i)
-        expect(slash, `${f}: 找不到 PanelHeader 元素的结尾 —— 写法变了，本用例的扫描规则要跟着改`).toBeGreaterThan(i)
-        const seg = src.slice(i, slash)
-        if (!/\bdesc=/.test(seg) && !seg.includes('{...') && DESC_EXEMPT[f] === undefined) missing.push(f)
-        heads++
-        i = src.indexOf('<PanelHeader', slash)
+    const narration = [
+      '一屏纵览',
+      '只检索本机，回答带来源',
+      '只分析通讯录好友',
+      '本机聊天记录的年度回顾',
+      '命中关键词后记录触发',
+      '从最近 7 天聊天提取',
+      '本地笔记：新建',
+      '定时总结任务 + 总结阅览',
+      '按时间范围总结聊天',
+      '基于微信 general.db',
+      '来自消息资源库的只读统计',
+      '数据边界 · AI 出网说明',
+      'Super Time 统一授权',
+      '任务首次触发、局域网',
+      '按日期区间汇总聊天要点',
+      '图片 / 文件 / 视频规模',
+      '仅记录操作元数据',
+      '解密库/索引/插件存储',
+      '本地快照（目录拷贝',
+      '本地检测 · 数据库密钥',
+      'gh_* 账号消息',
+      '本地解码 · 无注入',
+      '扫描手机号 / 身份证',
+      '语音/视频通话统计（来自消息库',
+    ]
+    const hits: string[] = []
+    const visibleOf = (src: string): string => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    for (const file of files) {
+      const src = visibleOf(read(file))
+      for (const phrase of narration) {
+        if (src.includes(phrase)) hits.push(`${file}: ${phrase}`)
       }
     }
-    atLeast(heads, 25, '扫到的 <PanelHeader 用法数（低于下限说明扫描失效，这条守卫是空的）')
-    expect(missing, `这些面板的页头缺少 desc：${missing.join(', ')}`).toEqual([])
+    expect(hits, `这些说明还留在界面上：\n${hits.join('\n')}`).toEqual([])
   })
 })
 
@@ -106,25 +91,19 @@ describe('U3 · 骨架与真实栅格同形（列宽下限必须逐字对齐）'
   })
 })
 
-describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
-  it('撤回消息：说明为空的三类原因，并给出下一步动作', () => {
+describe('U14 · 空态只留标题和动作', () => {
+  it('撤回消息：标题和刷新，不再铺三种原因', () => {
     const src = read('Revoked.tsx')
-    expect(src).toContain('rvLand')
-    expect(src, '没有区分"为什么为空"').toContain('本机确实没人撤回过')
-    expect(src, '缺少下一步动作').toContain('刷新重读')
-    expect(src).toContain('去数据配置')
+    expect(src).toContain('暂无撤回消息记录')
+    expect(src).toContain('刷新重读')
+    expect(src).not.toContain('本机确实没人撤回过')
+    expect(src).not.toContain('归档没赶上')
   })
 
-  it('总结工作台：未生成时给出三步与"会得到什么"（含模型状态）', () => {
-    // 2026-10-17：`PeriodSummary.tsx` 与 `DailySummary.tsx` 已合并成 `SummaryWorkbench.tsx`，
-    // 空态 / 统计卡 / 历史列表又拆到 `SummaryParts.tsx`（单函数 250 行棘轮）。
-    // 空态口径不变（三步 + 模型状态 + 去配置出口），只是换了文件。
-    const src = read('SummaryWorkbench.tsx')
+  it('总结工作台：未生成时只留标题和生成按钮', () => {
     const parts = read('SummaryParts.tsx')
-    expect(parts).toContain('emptySteps')
     expect(parts).toContain('还没有这一段的总结')
-    expect(src, '没有读模型配置').toMatch(/await apiGetLlmConfig\(\)/)
-    // 与每日总结同一口径：跳「设置 → AI 大模型」
+    expect(parts).not.toContain('emptySteps')
     expect(parts).toMatch(/onOpenSettings\?\.\('ai'\)/)
   })
 
@@ -135,20 +114,12 @@ describe('U14 · 空态要做成"有信息的落地"，不是一行字', () => {
     expect(shell).toContain('<SummaryWorkbench onOpenSettings={onOpenSettings} />')
   })
 
-  it('群聊公告：空态要说明"为什么可能为空"（公告本来就不是每个群都有）', () => {
-    const src = read('GroupInsights.tsx')
-    expect(src).toContain('暂无群公告')
-    // 只写「暂无群公告」会让人以为是数据丢了 —— 实测本机 53 个群里只有 8 个有公告
-    expect(src, '没有说明覆盖率').toContain('六分之一')
-    expect(src, '没有给出另一种可能（入群前的公告未同步）').toContain('入群之前')
-    // ⚠️ JSX 文本里不能出现 markdown 强调符，否则会原样渲染成星号
-    expect(src, 'JSX 文案里混进了 markdown 星号').not.toContain('**六分之一**')
-  })
-
-  it('表情包：空态要给出归因，而不是只写「暂无表情包」', () => {
-    const src = read('Emoticons.tsx')
-    expect(src, '没有说明数据来自哪里').toContain('表情包来自微信「表情商店」的本地缓存')
-    expect(src, '没有区分"筛选无匹配"与"确实没有"').toMatch(/q\s*\?\s*'换个关键词/)
+  it('群聊公告和表情包空态不再写成长说明', () => {
+    expect(read('GroupInsights.tsx')).toContain('暂无群公告')
+    expect(read('GroupInsights.tsx')).not.toContain('六分之一')
+    expect(read('GroupInsights.tsx')).not.toContain('入群之前')
+    expect(read('Emoticons.tsx')).toContain('暂无表情包')
+    expect(read('Emoticons.tsx')).not.toContain('表情商店」的本地缓存')
   })
 })
 

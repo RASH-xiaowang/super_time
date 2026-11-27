@@ -309,7 +309,11 @@ describe('总览内容：标题与实际条目一致', () => {
   it('页头动作 3→2：刷新 + 更多▾，导出/归档都进「更多」菜单', () => {
     // 页头只有 2 个动作（都用 .refresh 样式）；归档不再是页头按钮
     expect(count(panelCode, 'className={css.refresh}'), '页头动作不是 2 个').toBe(2)
-    expect(panelCode, '页头缺刷新').toContain(": done ? '✓ 已更新' : '刷新'")
+    expect(panelCode, '页头缺稳定刷新按钮').toContain("loading && data === null ? '统计中…' : '刷新'")
+    expect(panelCode, '后台刷新不得把按钮改成完成闪烁').not.toContain('✓ 已更新')
+    expect(panelCode, '后台刷新不得在页头插入转圈').not.toContain('css.spinner')
+    expect(panelCode, '后台刷新不得把按钮改成更新中').not.toContain('更新中…')
+    expect(panelCode, '后台刷新不得在页头描述里显示同步中').not.toContain('同步中…')
     expect(panelCode, '页头缺更多菜单').toContain('更多 ▾')
     expect(panelCode, '旧的页头归档按钮文案还在').not.toContain('导出全部会话 ZIP')
     for (const item of ['导出报告 · Markdown', '导出数据 · JSON', '导出图片 · PNG', '导出图片 · JPG', '归档全部会话文本 ZIP']) {

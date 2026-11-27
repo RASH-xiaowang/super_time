@@ -466,7 +466,6 @@ export function AskPanel({ onOpenChat, onOpenKbFile }: {
       <div className={css.askPage}>
       <PanelHeader
         title={<span className={css.askTitle}>微信问答</span>}
-        desc={<span className={css.askDesc}>只检索本机，回答带来源</span>}
         actions={(
           <>
             {/* 「历史记录」常驻可见、不受当前对话有无轮次影响 —— 历史是**跨会话累积**的，

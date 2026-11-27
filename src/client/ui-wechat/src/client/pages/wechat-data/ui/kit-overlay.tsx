@@ -89,13 +89,17 @@ export function Segmented({ options, value, onChange, ariaLabel }: {
  * 渲染在 `#root` 里 —— 结果确认框**看得见却读不到、点不了**（2026-10-21 任务编辑抽屉里
  * 删除按钮实测踩到）。非模态抽屉仍保留「点遮罩/×/Esc 关闭」，只是不再禁用背景。
  */
-export function Drawer({ open, onClose, title, children, footer, width, modal = true }: {
+export function Drawer({ open, onClose, title, children, footer, width, maxWidth = 560, fill = false, modal = true }: {
   open: boolean
   onClose: () => void
   title: React.ReactNode
   children: React.ReactNode
   footer?: React.ReactNode
   width?: number
+  /** 比默认 560 更宽时传入。手机档仍用样式把抽屉改成全宽底部 sheet。 */
+  maxWidth?: number
+  /** 内容自己滚动。关掉外层滚动，避免和内部表格叠成两条滚动条。 */
+  fill?: boolean
   /** 是否模态（默认 true）。抽屉内要弹 `role="alertdialog"` 确认框时必须传 false。 */
   modal?: boolean
 }): React.JSX.Element {
@@ -105,7 +109,8 @@ export function Drawer({ open, onClose, title, children, footer, width, modal = 
         <DialogPrimitive.Overlay className={overlayCss.drawerOverlay} />
         <DialogPrimitive.Content
           className={overlayCss.drawer}
-          style={width ? { width: Math.min(width, 560) } : undefined}
+          data-fill={fill ? '' : undefined}
+          style={width ? { width: `min(${Math.min(width, maxWidth)}px, 92vw)` } : undefined}
           // 与 kit `Dialog` 同一套守卫：确认框（更高一层模态）开着时，
           // 点它或按 Esc 都不算「点到了抽屉外面」，避免把抽屉一起关掉。
           onInteractOutside={(e) => {

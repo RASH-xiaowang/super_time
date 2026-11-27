@@ -105,10 +105,10 @@
    用主色（微信绿）强调一次。27 张卡不再各染一色 —— 那是"调色盘"，不是微信。
 
    颜色不再承担分组索引：分组靠标题、留白与数字层级。 */
-.card[data-tone], .moreCard[data-tone], .skelCard[data-tone] {
+.card[data-tone], .moreCard[data-tone] {
   --tone-line: var(--nm-border-hover);
 }
-.card[data-tone='green'], .moreCard[data-tone='green'], .skelCard[data-tone='green'] {
+.card[data-tone='green'], .moreCard[data-tone='green'] {
   --tone-line: var(--nm-cyan);
 }
 .cardHead {
@@ -508,68 +508,6 @@
   gap: calc(var(--nm-dense-g4) * 2);
   grid-auto-flow: dense;
   align-items: stretch;
-}
-
-/* ── 加载骨架屏（2026-10-17 重做）──────────────────────────────────────
-   与真实卡片**同构**：同一个 `.board` 网格、同样的 `span` 分布、同样的卡片外观
-   （背景/边框/圆角/内边距都照抄 `.card`），只是内容换成占位块。
-   这样加载完成时只有内容替换，没有布局跳变。
-
-   ⚠️ 为什么不用通用的 `ListSkeleton`：那是**列表**骨架（头像 + 一行文字），
-   而这里是 12 列卡片墙 —— 形状完全不同，加载完会「跳」一下。 */
-.skelHost { display: block; min-width: 0; }
-/* 骨架不再自带网格：它复用 `AnnualCanvas` + `CanvasCard`（与真实布局同一套机制）。
-   这里只补两件事：占位卡不该显示拖拽手柄、占位块是纯色条。 */
-.skelHost .canvasHandle { display: none; }
-.skelCard {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  min-width: 0;
-  /* 与 `.card` 完全同款内边距（20px）—— 骨架与真实卡片必须逐像素对齐，
-     否则加载完成时卡片会"长高"几像素。 */
-  padding: 20px;
-  background: var(--nm-bg-card);
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-r-lg);
-  /* 与 `.card` 同一套：只有顶部 2px 色线。 */
-  position: relative;
-  isolation: isolate;
-  /* 2026-10-17：**去掉呼吸动画**（用户要求「这样的加载样式全部修改」）。
-     改前整卡 1.8s 一轮在 0.55↔0.85 透明度之间来回，27 张卡同时呼吸 ——
-     视觉噪音很大，而信息量是零。现在只留静态底色。 */
-}
-.skelCard::before {
-  content: '';
-  position: absolute;
-  inset: 0 0 auto 0;
-  height: 2px;
-  border-radius: var(--nm-r-lg) var(--nm-r-lg) 0 0;
-  background: var(--tone-line, transparent);
-  pointer-events: none;
-  z-index: 1;
-}
-.skelCard > * { position: relative; z-index: 1; }
-
-/* 标题条：与 `.cardHead` 同高（12px 字 + 6px 下边距 ≈ 22px）。 */
-.skelTitle {
-  display: block;
-  flex: 0 0 auto;
-  width: 38%;
-  height: 10px;
-  border-radius: var(--nm-r-xs);
-  background: color-mix(in srgb, var(--nm-text-3) 22%, transparent);
-}
-
-/* 内容块：宽度随卡片走，高度按占位块自身高度（卡片高度随内容，块撑开卡片）。
-   ⚠️ 骨架的其余样式（`.skelHost` / 占位块）已随画布一起迁到 `annual-canvas.module.css`
-   —— 骨架本身复用 `AnnualCanvas` + `CanvasCard`，与画布是同一块东西。 */
-.skelBlock {
-  display: block;
-  min-height: 0;
-  width: 100%;
-  border-radius: var(--nm-r-sm);
-  background: color-mix(in srgb, var(--nm-text-3) 12%, transparent);
 }
 
 /* 卡片不许被拆到两列（拆开就成"半张卡"）。 */

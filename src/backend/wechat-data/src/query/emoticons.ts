@@ -16,11 +16,13 @@
  * 并保持内置行序，保证结果**确定**（原来的查询没有 ORDER BY，顺序其实是不确定的）。
  */
 import { DatabaseSync } from './db-open.ts'
-import { cachedBySig, fileSigOf } from './meta.ts'
+import { cachedBySigAsync, fileSigOf } from './meta.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { decompress } from 'fzstd'
 import { emoticonIndexFor, findEmoticonDats } from './emoticon-index.ts'
+import { YIELD_EVERY_ROWS, yieldToLoop } from './search-build.ts'
+import { listMessageShardSigs, readArchivedOthers, rememberMessageShards, staleMessageShards, upsertArchivedOthers, withSavedEmoticonFiles } from './emoticon-archive.ts'
 import type { EmoticonsSnapshot, EmoticonItem } from '../types.ts'
 
 /** zstd 帧头魔数（消息分片里的 `message_content` 可能是压缩的）。 */
@@ -84,13 +86,15 @@ function unescapeXml(s: string): string {
  * @param decryptedDir - 解密后的数据根目录（消息库在这里）。
  * @param wechatBaseDir - 原始微信目录（`msg/attach` 在这里）；缺省时只能靠 `cdnurl`。
  * @param exclude - 要排除的 md5 集合（用户自己的表情）。
+ * @param onlyShards - 只扫这些消息分片文件名；不传则扫全部。
  * @returns 按出现次数降序的表情列表（带 `cdnUrl` 的可以远端取图）。
  */
-function collectOtherEmoticons(
+async function collectOtherEmoticons(
   decryptedDir: string,
   wechatBaseDir: string | undefined,
   exclude: ReadonlySet<string>,
-): EmoticonItem[] {
+  onlyShards?: ReadonlySet<string>,
+): Promise<EmoticonItem[]> {
   /*
    * ⚠️ 两个目录**不是同一个**（2026-10-17 实测）：
    *   · 消息库 `message/message_*.db` 在**解密目录**（`decryptedDir`）下；
@@ -104,6 +108,7 @@ function collectOtherEmoticons(
   const found = new Map<string, { count: number; cdnUrl: string }>()
   for (const f of readdirSync(dir)) {
     if (!/^(biz_)?message_\d+\.db$/.test(f)) continue
+    if (onlyShards !== undefined && !onlyShards.has(f)) continue
     let db: DatabaseSync
     try { db = new DatabaseSync(join(dir, f), { readOnly: true }) } catch { continue }
     try {
@@ -113,7 +118,13 @@ function collectOtherEmoticons(
         if (!cols.has('local_type') || !cols.has('message_content')) continue
         try {
           const sql = `SELECT message_content FROM "${table}" WHERE (local_type & 4294967295) = 47`
+          let sinceYield = 0
           for (const r of db.prepare(sql).iterate() as Iterable<Record<string, unknown>>) {
+            sinceYield += 1
+            if (sinceYield >= YIELD_EVERY_ROWS) {
+              sinceYield = 0
+              await yieldToLoop()
+            }
             const xml = decodeCell(r['message_content'])
             const m = EMOJI_MD5_RE.exec(xml)
             const md5 = m ? (m[1] ?? '').toLowerCase() : ''
@@ -131,6 +142,7 @@ function collectOtherEmoticons(
         } catch { /* 单表失败不影响其它表 */ }
       }
     } finally { db.close() }
+    await yieldToLoop()
   }
   /*
    * 只留「本地有文件」或「有 cdnurl」的：
@@ -169,6 +181,37 @@ function col(cols: Set<string>, cands: string[]): string | null {
   return null
 }
 
+/** 表情包文件数一次聚合，避免每个包再跑一条 COUNT。 */
+function packageFileCounts(db: DatabaseSync): Map<string, number> {
+  const out = new Map<string, number>()
+  const fcols = tableColumns(db, 'kStoreEmoticonFilesTable')
+  const fpid = col(fcols, ['package_id_', 'package_id', 'product_id_', 'product_id'])
+  if (!fpid) return out
+  try {
+    const rows = db.prepare(`SELECT ${fpid} AS pid, COUNT(*) AS n FROM kStoreEmoticonFilesTable GROUP BY ${fpid}`).all() as Array<{ pid?: unknown; n?: unknown }>
+    for (const r of rows) {
+      const pid = cellStr(r.pid ?? '').trim()
+      if (pid) out.set(pid, Number(r.n ?? 0))
+    }
+  } catch { /* 文件表读失败时包内数量记 0 */ }
+  return out
+}
+
+/** 自己收藏的全部表情 md5。排除集不能只用当前页，否则翻页或只要「其他」时会把个人表情算进去。 */
+function ownEmoticonMd5s(db: DatabaseSync, cols: Set<string>): Set<string> {
+  const own = new Set<string>()
+  const md5Col = col(cols, ['md5', 'MD5', 'md5_'])
+  if (!md5Col) return own
+  try {
+    const rows = db.prepare(`SELECT ${md5Col} AS md5 FROM kNonStoreEmoticonTable`).all() as Array<{ md5?: unknown }>
+    for (const r of rows) {
+      const md5 = cellStr(r.md5 ?? '').trim().toLowerCase()
+      if (md5) own.add(md5)
+    }
+  } catch { /* 排除集拿不到时调用方仍可用当前页 */ }
+  return own
+}
+
 /**
  * Read custom emoticons + store packages.
  * @param decryptedDir - decrypted data root.
@@ -176,6 +219,9 @@ function col(cols: Set<string>, cands: string[]): string | null {
  * @param offset - pagination offset.
  * @param wechatBaseDir - 原始微信目录（找 `msg/attach` 下的表情 `.dat` 用）。
  *   不传时「其他表情包」为空 —— 没有它就无法判断哪些表情本地还有图。
+ * @param includeOthers - 传 `false` 时不扫消息库。个人表情页用这个先出列表；
+ *   不传时仍在第一页附带「其他表情」，和原来的调用兼容。
+ * @param decodedDir - `decoded_images` 目录。给了它才把其他表情清单和图片落到硬盘。
  * @returns the emoticons snapshot.
  */
 export function queryEmoticons(
@@ -183,22 +229,27 @@ export function queryEmoticons(
   limit?: number,
   offset: number = 0,
   wechatBaseDir?: string,
-): EmoticonsSnapshot {
+  includeOthers?: boolean,
+  decodedDir?: string,
+): Promise<EmoticonsSnapshot> {
   // Cache keyed on emoticon.db's signature; recomputed when the realtime sync
   // rewrites it, otherwise served from the 5s bounded cache.
-  return cachedBySig(
-    'emoticons:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset) + ':' + (wechatBaseDir ?? ''),
+  const othersKey = includeOthers === false ? 'no-others' : 'others'
+  return cachedBySigAsync(
+    'emoticons:' + decryptedDir + ':' + String(limit ?? '') + ':' + String(offset) + ':' + (wechatBaseDir ?? '') + ':' + othersKey + ':' + (decodedDir ?? ''),
     fileSigOf(join(decryptedDir, 'emoticon', 'emoticon.db')),
-    () => computeEmoticons(decryptedDir, limit, offset, wechatBaseDir),
+    () => computeEmoticons(decryptedDir, limit, offset, wechatBaseDir, includeOthers, decodedDir),
   )
 }
 
-function computeEmoticons(
+async function computeEmoticons(
   decryptedDir: string,
   limit?: number,
   offset: number = 0,
   wechatBaseDir?: string,
-): EmoticonsSnapshot {
+  includeOthers?: boolean,
+  decodedDir?: string,
+): Promise<EmoticonsSnapshot> {
   const path = join(decryptedDir, 'emoticon', 'emoticon.db')
   if (!existsSync(path)) return { custom: [], static: [], packages: [], total: 0, orderedBy: 'builtin' }
   const db = new DatabaseSync(path, { readOnly: true })
@@ -264,22 +315,11 @@ function computeEmoticons(
         const sortCol = col(pCols, ['sort_order_', 'sort_order', 'order_', 'sort'])
         const orderBy = sortCol ? ` ORDER BY ${sortCol}, rowid` : ' ORDER BY rowid'
         const rows = db.prepare(`SELECT ${idCol} AS pid, ${nameCol} AS name FROM kStoreEmoticonPackageTable${orderBy} LIMIT 500`).all() as Array<{ pid?: unknown; name?: unknown }>
+        const counts = packageFileCounts(db)
         for (const r of rows) {
           const pid = cellStr(r.pid ?? '').trim()
           const name = cellStr(r.name ?? '').trim() || pid || '未命名表情包'
-          let count = 0
-          if (pid) {
-            try {
-              const fcols = tableColumns(db, 'kStoreEmoticonFilesTable')
-              if (fcols.size > 0) {
-                const fpid = col(fcols, ['package_id_', 'package_id', 'product_id_', 'product_id'])
-                if (fpid) {
-                  count = (db.prepare(`SELECT COUNT(*) AS n FROM kStoreEmoticonFilesTable WHERE ${fpid} = ?`).get(pid) as { n: number }).n
-                }
-              }
-            } catch { count = 0 }
-          }
-          packages.push({ name, count })
+          packages.push({ name, count: pid ? (counts.get(pid) ?? 0) : 0 })
         }
       }
     }
@@ -294,29 +334,64 @@ function computeEmoticons(
     /*
      * 其他表情包（2026-10-17）：从消息库扫出「群聊/他人发送、但自己没收藏」的表情。
      *
-     * 只在**第一页**（`offset === 0`）算：这个扫描要遍历全部消息分片（本机 146MB + 46MB + …），
-     * 每翻一页都重扫一遍没有意义，而且 `others` 是「全部其他表情」的完整列表，
-     * 不随 `custom` 的分页变化。
+     * 只在**第一页**且调用方没有明确拒绝时算。个人表情页传 `includeOthers: false`，
+     * 打开面板不再为了还没点开的「其他」去扫全部分片。
      */
     let others: EmoticonItem[] | undefined
     let othersTotal: number | undefined
-    if (offset === 0) {
-      const own = new Set(custom.map(c => c.md5.toLowerCase()))
-      /*
-       * 返回扫描到的**全部**结果，不再二次截断。
-       *
-       * 这里原来先按 2000 条收集，再取前 500 条返回；而 `othersTotal` 统计的是截断前
-       * 的总数。真实数据里出现「其他 1924 · 下拉只有 500」的自相矛盾，用户会合理地
-       * 以为表情丢了。扫描本来就已经遍历完所有消息分片并把去重结果放在内存里，
-       * 去掉返回截断不增加扫描成本；前端用渐进列表渲染，也不会一次挂出上千个 DOM。
-       */
-      const all = collectOtherEmoticons(decryptedDir, wechatBaseDir, own)
-      othersTotal = all.length
-      others = all
+    if (offset === 0 && includeOthers !== false) {
+      const own = ownEmoticonMd5s(db, cCols)
+      if (own.size === 0) {
+        for (const item of custom) own.add(item.md5.toLowerCase())
+      }
+      const archived = decodedDir
+        ? readArchivedOthers(decodedDir).filter((item) => !own.has(item.md5.toLowerCase()))
+        : []
+      if (archived.length > 0 && decodedDir) {
+        others = archived
+        othersTotal = archived.length
+        scheduleOthersRefresh({ decodedDir, decryptedDir, wechatBaseDir, exclude: own })
+      } else {
+        /*
+         * 第一次没有档案：扫完写进硬盘。之后打开直接读档案，只对签名变了的分片补新表情。
+         */
+        const all = await collectOtherEmoticons(decryptedDir, wechatBaseDir, own)
+        othersTotal = all.length
+        others = all
+        if (decodedDir) {
+          try {
+            upsertArchivedOthers(decodedDir, all)
+            rememberMessageShards(decodedDir, decryptedDir, listMessageShardSigs(decryptedDir).map((shard) => shard.name))
+          } catch { /* 档案写失败时这次仍返回刚扫到的列表 */ }
+        }
+      }
     }
 
-    return { custom, static: [], packages, total, orderedBy: customOrderedBy, others, othersTotal }
+    const stampedCustom = decodedDir ? withSavedEmoticonFiles(decodedDir, custom) : custom
+    const stampedOthers = decodedDir && others ? withSavedEmoticonFiles(decodedDir, others) : others
+    return { custom: stampedCustom, static: [], packages, total, orderedBy: customOrderedBy, others: stampedOthers, othersTotal }
   } finally {
     db.close()
   }
+}
+
+let othersRefresh: Promise<void> | null = null
+
+/** 档案已经能画列表。变过的消息分片在后台补进新 md5，缺图的继续落盘。 */
+function scheduleOthersRefresh(args: {
+  decodedDir: string
+  decryptedDir: string
+  wechatBaseDir?: string
+  exclude: ReadonlySet<string>
+}): void {
+  const stale = staleMessageShards(args.decodedDir, args.decryptedDir)
+  if (stale.length === 0 || othersRefresh !== null) return
+  const shards = new Set(stale)
+  othersRefresh = (async () => {
+    try {
+      const found = await collectOtherEmoticons(args.decryptedDir, args.wechatBaseDir, args.exclude, shards)
+      upsertArchivedOthers(args.decodedDir, found)
+      rememberMessageShards(args.decodedDir, args.decryptedDir, stale)
+    } catch { /* 分片补扫失败留到下次打开 */ }
+  })().finally(() => { othersRefresh = null })
 }

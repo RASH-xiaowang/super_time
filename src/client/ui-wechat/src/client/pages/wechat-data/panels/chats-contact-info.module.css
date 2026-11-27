@@ -11,7 +11,6 @@
   background: var(--nm-bg-card);
   overflow: hidden;
 }
-
 .header {
   display: flex;
   align-items: center;
@@ -47,17 +46,16 @@
 }
 
 .body {
-  flex: 1;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   padding: var(--nm-s-3);
   scrollbar-width: thin;
-  /* 六区骨架：内容区吃剩余高度，底部动作位才能 margin-top:auto 贴底（D7）。 */
   display: flex;
   flex-direction: column;
 }
 
-/* 区①–⑤ 的内容包：吃剩余高度，把区⑥ 推到底部。 */
-.zones { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.zones { display: flex; flex-direction: column; }
 
 .empty {
   font-size: var(--nm-fs-sm);
@@ -120,10 +118,11 @@
 
 /* 导出入口：胶囊次级按钮（联动既有导出对话框） */
 .exportRow {
-  /* 区⑥ 底部动作位：贴底（内容不足一屏时也被推到底边，官方底部按钮槽）。 */
-  margin-top: auto;
-  padding: var(--nm-s-3) 0 0;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 10px 14px 12px;
   border-top: 1px solid var(--nm-border);
+  background: var(--nm-bg-card);
 }
 
 .exportAction {

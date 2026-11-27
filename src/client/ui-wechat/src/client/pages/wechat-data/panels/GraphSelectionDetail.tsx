@@ -16,11 +16,9 @@
 import type { GEdge, GNode } from './graph-model.ts'
 import {
   communityColor,
-  edgeDirectionSymbol,
-  edgeKindLabel,
-  edgeRelationLabel,
   edgeRelationLines,
 } from './graph-model.ts'
+import { describeRelation, edgeChipText } from './graph-relation-text.ts'
 import { readableOn } from '../utils/theme-color.ts'
 import css from './graph.module.css'
 import kitCss from '../ui/kit.module.css'
@@ -85,6 +83,14 @@ export interface GraphSelectionDetailProps {
   newNote: () => void
   /** 打开某个节点的聊天（可选）。 */
   onOpenChat?: ((username: string) => void) | undefined
+  /** 打开这位好友的客户画像。 */
+  onOpenPortrait?: ((username: string) => void) | undefined
+  /** 当前展开依据的边。 */
+  selectedEdge?: GEdge | null
+  /** 选中一条相连关系，展开依据。 */
+  onSelectEdge?: ((edge: GEdge) => void) | undefined
+  /** 节点或群 id → 显示名。 */
+  labelOf?: ((id: string) => string) | undefined
 }
 
 /**
@@ -96,13 +102,14 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
   const {
     isKnowledgeMode = false, selected, selfUsername = '', selAvatar, selectedGroupNames, selectedClass, selectedConnections,
     communities, focusCommunity, pinned, selectNode, clearSelection, focusNode,
-    togglePin, openNoteEditor, newNote, onOpenChat,
+    togglePin, openNoteEditor, newNote, onOpenChat, onOpenPortrait, selectedEdge, onSelectEdge, labelOf,
   } = p
 
   const connectionUsername = (id: string): string => {
     if (isKnowledgeMode) return ''
     return id === 'self' ? selfUsername : id
   }
+  const nameOf = labelOf ?? ((id: string): string => id === 'self' ? '我' : id)
 
   return (
     <div className={css.detail} data-focus={focusCommunity !== null || undefined}>
@@ -164,6 +171,9 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
         {onOpenChat && CHAT_KINDS.has(selected.kind) && (
           <button type="button" className={css.miniBtn} onClick={() => { onOpenChat(selected.id) }}>查看聊天</button>
         )}
+        {onOpenPortrait && selected.kind === 'person' && selected.isFriend === true && (
+          <button type="button" className={css.miniBtn} onClick={() => { onOpenPortrait(selected.id) }}>客户画像</button>
+        )}
       </div>
       {selectedGroupNames.length > 0 && (
         <>
@@ -207,8 +217,7 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
           </div>
         </>
       )}
-      <div className={css.detailSub}>相连关系 ({selectedConnections.length} 条边)</div>
-      <div className={css.detailEdgeHint}>线条样式由主关系决定；悬停任一项可查看该边的全部关系、方向、权重与证据。</div>
+      <div className={css.detailSub}>相连关系 ({selectedConnections.length})</div>
       <div className={`${css.detailChips} ${css.detailConnections}`}>
         {selectedConnections.map((ce) => {
           const other = ce.other
@@ -216,13 +225,9 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
           names.set(selected.id, selected.label)
           if (other) names.set(other.id, withEnterprise(other.label, other.enterpriseName))
           names.set('self', '我')
-          const labelOf = (id: string): string => names.get(id) ?? id
-          const lines = edgeRelationLines(ce.edge, labelOf)
-          const relations = ce.edge.relations ?? []
-          const kinds = [...new Set(relations.map(edgeRelationLabel))]
-          const kindSummary = kinds.length === 0
-            ? edgeKindLabel(ce.edge.kind)
-            : kinds.slice(0, 2).join(' / ') + (kinds.length > 2 ? ` 等 ${kinds.length} 种` : '')
+          const chipLabel = (id: string): string => names.get(id) ?? nameOf(id)
+          const lines = edgeRelationLines(ce.edge, chipLabel)
+          const summary = edgeChipText(ce.edge, chipLabel)
           const title = other
             ? [withEnterprise(other.label, other.enterpriseName), ...lines].join('\n')
             : '对端节点不在当前视图'
@@ -232,8 +237,8 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
               type="button"
               className={`${css.detailChip} ${css.detailEdgeChip}`}
               data-edge
-              disabled={!other}
-              onClick={() => { if (other) selectNode(other.id) }}
+              data-active={(selectedEdge?.source === ce.edge.source && selectedEdge.target === ce.edge.target) || undefined}
+              onClick={() => { onSelectEdge?.(ce.edge) }}
               title={title}
               aria-label={title}
             >
@@ -253,14 +258,27 @@ export function GraphSelectionDetail(p: GraphSelectionDetailProps): React.JSX.El
                     )
                   : <span className={css.detailChipLabel}>对端不在当前视图</span>}
               </span>
-              <span className={css.detailEdgeMeta}>
-                {kindSummary} {edgeDirectionSymbol(ce.edge)} · 权重 {ce.edge.weight}
-                {relations.length > 1 ? ` · ${relations.length} 种关系` : ''}
-              </span>
+              <span className={css.detailEdgeMeta}>{summary}</span>
             </button>
           )
         })}
       </div>
+      {selectedEdge && (
+        <div className={css.edgeEvidence}>
+          <div className={css.detailSub}>{nameOf(selectedEdge.source)} 与 {nameOf(selectedEdge.target)}</div>
+          {(selectedEdge.relations ?? []).length === 0 ? (
+            <p className={kitCss.textMeta}>这条线没有更细的关系记录。</p>
+          ) : (selectedEdge.relations ?? []).map((relation) => {
+            const text = describeRelation(relation, nameOf)
+            return (
+              <section key={`${relation.kind}:${relation.source}:${relation.target}:${relation.rawKind ?? ''}:${relation.label ?? ''}`} className={css.edgeEvidenceItem}>
+                <strong>{text.title}</strong>
+                <p>{text.body}</p>
+              </section>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

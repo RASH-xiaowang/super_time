@@ -31,7 +31,7 @@ export function ChatsEditedDialog(props: ChatsEditedDialogProps): React.JSX.Elem
   const { doReset, editedOpen, editing, edits, setEditedOpen } = props
   if (!editedOpen) return null
   return (
-    <div className={cssshell.calOverlay} data-st-dialog="chats-edited"
+    <div className={cssshell.calOverlay} data-edge="right" data-st-dialog="chats-edited"
       onClick={(e) => { if (e.target === e.currentTarget) setEditedOpen(false) }}
       role="dialog" aria-modal="true">
       <div className={cssshell.calDialog}>

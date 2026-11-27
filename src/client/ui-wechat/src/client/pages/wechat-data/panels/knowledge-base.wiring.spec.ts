@@ -98,7 +98,7 @@ describe('导航：知识库是「联系人与社交」组下的可见条目', (
 
   it('挂在「联系人与社交」组里（这是需求指定的位置）', () => {
     const group = NAV_GROUPS.find(g => g.items.some(it => it.tab === 'kb'))
-    expect(group?.label, '2026-09-30 IA 合并：知识库归到概览组').toBe('概览 · 问答 · 总结')
+    expect(group?.label, '知识库跟问答放在概览组').toBe('概览')
   })
 
   it('TAB_LABELS 有 kb —— 深链 #kb 能落到这一页', () => {
@@ -211,10 +211,10 @@ describe('路由：kb 与 knowledge 同走一个合并外壳，且没有并进�
 })
 
 describe('主界面：列表 / 详情 / 新建编辑 / 标签 / 搜索 / 空态与加载态', () => {
-  it('页头有 desc（R7 的 U12 口径：有 PanelHeader 就要有一句「这页是什么」）', () => {
+  it('页头只留标题', () => {
     const at = panelCode.indexOf('<PanelHeader')
     expect(at, '找不到 PanelHeader').toBeGreaterThan(-1)
-    expect(panelCode.slice(at, at + 500)).toContain('desc=')
+    expect(panelCode.slice(at, at + 400)).not.toContain('本地笔记')
   })
 
   it('关键词搜索走公共 SearchInput + 防抖', () => {
@@ -480,7 +480,9 @@ describe('多知识库：作用域（看哪个库）接进两个面板与编辑�
   it('知识图谱的两个加载器分开：社交图谱不该为「切库」付费', () => {
     // 并成一个 effect 的话，每次切库都会白拉一次通讯录大快照（几百毫秒级）
     expect(code(graphSrc)).not.toMatch(/useEffect\(\(\) => \{ void load\(\); void loadKnowledge\(\) \}/)
-    expect(code(graphSrc)).toMatch(/useEffect\(\(\) => \{ void load\(\) \}, \[load\]\)/)
+    // 2026-11-24：比「分开」更进一步 —— 知识视图下**根本不加载**社交图谱
+    // （只切分段就会被问：「我在知识库里，为什么还在拉通讯录？」）。
+    expect(code(graphSrc)).toMatch(/useEffect\(\(\) => \{ if \(variant !== 'knowledge'\) void load\(\) \}, \[load, variant\]\)/)
     expect(code(graphSrc)).toMatch(/useEffect\(\(\) => \{ void loadKnowledge\(\) \}, \[loadKnowledge\]\)/)
   })
 

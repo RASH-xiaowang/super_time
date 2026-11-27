@@ -1,10 +1,6 @@
-import type { AgentControl, AgentDeskSnapshot } from './agent-desk-types.ts'
 /**
- * `api.ts` 的「远程面与骨架：快照/结果类型、WechatRemote 接口、remote 注入与 unwrap、目录选择与面板截图」部分（M21 拆分）。
- *
- * 从原模块原样搬出，**行为逐字节不变**；原文件继续以 `export *` 转发
- * ⇒ 所有既有 import 一行都不用改。
- *
+ * `api.ts` 的「远程面与骨架：快照/结果类型、WechatRemote 接口、remote 注入与 unwrap」部分（M21 拆分）。
+ * 从原模块原样搬出、行为不变；原文件继续以 `export *` 转发，既有 import 一行不用改。
  * @module api-core
  */
 
@@ -76,6 +72,13 @@ import type {
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
+  LocalToolConfig,
+  LocalToolConfigInput,
+  LocalToolConfigSaveResult,
+  LocalToolInput,
+  LocalToolMutationResult,
+  LocalToolSaveResult,
+  LocalToolsSnapshot,
   MapGeoJsonResult,
   MediaAssetsSnapshot,
   MemberSearchSnapshot,
@@ -269,6 +272,8 @@ export interface ImageDataUrlBatchItem {
   thumb?: boolean
   /** 相对 decoded_images 的落盘路径；有它就转 wechat-media://（见 wechat-media.ts）。 */
   file?: string
+  /** 局域网取图地址。源码模式把它写进 images.url。 */
+  lanUrl?: string
   error?: string
 }
 
@@ -293,17 +298,30 @@ export interface ExportProgressSnapshot {
   error?: string
 }
 
+/** 一位联系人的本机内容量：聊天、图片、朋友圈。 */
+export interface PortraitVolume {
+  username: string
+  messages: number
+  images: number
+  moments: number
+}
+
+/** 一位好友的性格速写。 */
+export interface PortraitPersonalityResult {
+  ok: boolean
+  text: string
+  messages: number
+  moments: number
+  error?: string
+  /** 写入本机的时间（Unix 秒）。 */
+  savedAt?: number
+  /** 这次是从硬盘读出的。 */
+  cached?: boolean
+}
+
 /** Remote face injected by ui-pages apply (ctx.remote.wechatData). */
 export interface WechatRemote {
   /** Agent methods are desktop IPC only, including fullAccess HTTP sessions. */
-  getAgentDesk(): Promise<RemoteResult<AgentDeskSnapshot>>
-  saveAgentControl(options: { killed?: boolean; shadow?: boolean; quietStart?: string; quietEnd?: string; cooldownMs?: number; hourCap?: number; dayCap?: number; proactiveHourCap?: number; handoff?: boolean }): Promise<RemoteResult<AgentControl>>
-  writeAgentMemory(options: { scope: 'user' | 'conversation'; scopeKey: string; kind: 'semantic' | 'episode' | 'profile' | 'relation' | 'promise'; text: string }): Promise<RemoteResult<{ ok: boolean; op: string; error?: string }>>
-  deleteAgentMemory(options: { id: number }): Promise<RemoteResult<{ ok: boolean }>>
-  addAgentPromise(options: { text: string; dueAt: number }): Promise<RemoteResult<{ ok: boolean }>>
-  setAgentProposalStatus(options: { id: number; status: 'accepted' | 'dismissed' }): Promise<RemoteResult<{ ok: boolean }>>
-  sendAgentDraft(options: { id: number }): Promise<RemoteResult<{ ok: boolean; error?: string }>>
-  sendAgentProposal(options: { id: number; target: string }): Promise<RemoteResult<{ ok: boolean; error?: string }>>
   getSessions(options?: {
     keyword?: string
     limit?: number
@@ -312,6 +330,8 @@ export interface WechatRemote {
   }): Promise<RemoteResult<SessionsSnapshot>>
   getContacts(options?: { limit?: number; offset?: number; category?: string; categories?: readonly string[] }): Promise<RemoteResult<ContactsSnapshot>>
   getContact360(options: { username: string }): Promise<RemoteResult<Contact360Snapshot>>
+  getPortraitVolumes(options: { usernames: readonly string[] }): Promise<RemoteResult<PortraitVolume[]>>
+  analyzePortraitPersonality(options: { username: string; refresh?: boolean; cacheOnly?: boolean }): Promise<RemoteResult<PortraitPersonalityResult>>
   getMessages(options: {
     talker: string
     limit?: number
@@ -389,7 +409,7 @@ export interface WechatRemote {
   }): Promise<RemoteResult<MessageListBatchDeleteResult>>
   /** 会话级 AI 回复的持久化设置与最近运行状态。 */
   getChatAiReplyState(options: { chatUsername: string; chatName?: string }): Promise<RemoteResult<ChatAiReplyState>>
-  /** 读取当前会话默认大肥鱼 Webhook 的脱敏端点；完整 token 不下发渲染层。 */
+  /** 读取当前会话默认 Webhook 的脱敏端点；完整 token 不下发渲染层。 */
   getChatAiReplyDefaultWebhook(options: {
     chatUsername: string
     chatName?: string
@@ -421,6 +441,10 @@ export interface WechatRemote {
     kbId?: number
     /** 上下文时间窗（小时）；0 = 不限，上限 720。 */
     contextWindowHours?: number
+    /** 查无资料时的转人工话术。 */
+    safetyHandoff?: string
+    /** 额外禁说词。 */
+    safetyBlocked?: string
     expectedRevision?: number
   }): Promise<RemoteResult<ChatAiReplyMutationResult>>
   /** 立即扫描一次（桌面端诊断用）。 */
@@ -474,6 +498,7 @@ export interface WechatRemote {
       error: string
       redacted: boolean
       stages: Array<{ name: string; at: number; detail?: string }>
+      tools: Array<{ name: string; ok: boolean; code?: string; elapsedMs: number }>
       updatedAt: number
     }
     error?: string
@@ -501,12 +526,19 @@ export interface WechatRemote {
   getOverview(): Promise<RemoteResult<OverviewSnapshot>>
   getOverviewInsights(): Promise<RemoteResult<OverviewInsights>>
   getRegionMap(): Promise<RemoteResult<RegionMapSnapshot>>
-  getRecords(options: { kind: string; limit?: number; offset?: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc' }): Promise<RemoteResult<RecordsSnapshot>>
+  getRecords(options: { kind: string; limit?: number; offset?: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc'; sort?: 'time' | 'amount' }): Promise<RemoteResult<RecordsSnapshot>>
   getLedger(options?: { month?: string }): Promise<RemoteResult<LedgerSnapshot>>
   getCalls(options?: { topPeers?: number; recentLimit?: number }): Promise<RemoteResult<CallsSnapshot>>
   getRevoked(options?: { limit?: number; offset?: number; q?: string }): Promise<RemoteResult<RevokedSnapshot>>
-  getEmoticons(options?: { limit?: number; offset?: number }): Promise<RemoteResult<EmoticonsSnapshot>>
+  getEmoticons(options?: { limit?: number; offset?: number; includeOthers?: boolean }): Promise<RemoteResult<EmoticonsSnapshot>>
   getStorageStats(): Promise<RemoteResult<StorageSnapshot>>
+  getLocalTools(): Promise<RemoteResult<LocalToolsSnapshot>>
+  // 工具卡片的配置与写操作（2026-11-24）：只写本机注册表 / 本机配置。
+  saveLocalTool(input: LocalToolInput): Promise<RemoteResult<LocalToolSaveResult>>
+  deleteLocalTool(options: { name: string }): Promise<RemoteResult<LocalToolMutationResult>>
+  setLocalToolEnabled(options: { name: string; enabled: boolean }): Promise<RemoteResult<LocalToolMutationResult>>
+  getLocalToolConfig(): Promise<RemoteResult<LocalToolConfig>>
+  saveLocalToolConfig(input: LocalToolConfigInput): Promise<RemoteResult<LocalToolConfigSaveResult>>
   getAnnual(): Promise<RemoteResult<AnnualSnapshot>>
   getWechatConfig(): Promise<RemoteResult<ConfigSnapshot>>
   getPrivacyScan(): Promise<RemoteResult<PrivacySnapshot>>
@@ -677,7 +709,7 @@ export interface WechatRemote {
    * 一屏 N 张从 N 个 RPC 收成 1 个；后端先本地解码、再对剩余的 8 并发出网。
    * 返回项带 `md5` 回信（入参去重后顺序不再一一对应，调用方按 md5 匹配）。
    */
-  getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }> }): Promise<RemoteResult<{ items: Array<{ md5: string; dataUrl?: string; format?: string; error?: string }> }>>
+  getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }>; localOnly?: boolean }): Promise<RemoteResult<{ items: Array<{ md5: string; dataUrl?: string; format?: string; file?: string; error?: string }> }>>
   getImageOriginal(options: { username?: string; localId?: number }): Promise<RemoteResult<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }>>
   getRemoteImages(options: { urls?: string[] }): Promise<RemoteResult<{ items: RemoteImageItem[] }>>
   /**
@@ -941,9 +973,8 @@ export interface RemoteResult<T> {
  * 宿主环境能力表（M9）。
  *
  * 为什么是**注入**而不是在本包 import `ui-app/capabilities.ts`：那会反向跨包根
- * （ui-wechat 的 tsconfig 以自身 `src` 为 rootDir，ui-app 在它外面）。
- * 本包已有的先例就是这条缝 —— `setWechatRemote` / `setDirectoryPicker` 都由宿主注入，
- * 面板只读注入结果；判环境的口径仍然只有 ui-app 那一份。
+ * （ui-wechat 的 tsconfig 以自身 `src` 为 rootDir，ui-app 在它外面）。本包已有先例：
+ * `setWechatRemote` / `setDirectoryPicker` 也由宿主注入，面板只读注入结果。
  */
 export interface RuntimeCapabilities {
   isDesktop: boolean
@@ -989,11 +1020,7 @@ export async function apiCapturePanel(rect: {
 }
 
 export {
-  actionableRemoteError,
-  setWechatRemote,
-  remote,
-  setDirectoryPicker,
-  pickDirectory,
-  unwrap,
+  actionableRemoteError, setWechatRemote, remote, setDirectoryPicker,
+  pickDirectory, unwrap,
 } from './api-runtime.ts'
 export type { CaptureResult } from './api-runtime.ts'

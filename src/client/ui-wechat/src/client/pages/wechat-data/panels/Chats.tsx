@@ -470,10 +470,12 @@ function makeChatsSessionRowRenderer(deps: ChatsSessionRowRendererDeps): (sessio
  *   navigation target (records/privacy/ask jump into a session + message).
  * @returns the chats element tree.
  */
-export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTargetHandled }: {
+export function ChatsPanel({ initialView = 'chats', initialTarget, onInitialTargetHandled, onOpenMoments }: {
   initialView?: ChatView
   initialTarget?: ChatTarget | null
   onInitialTargetHandled?: (nonce: number) => void
+  /** 单聊头部「朋友圈」：跳到这个联系人的时间线。 */
+  onOpenMoments?: (username: string) => void
 }): React.JSX.Element {
   /** 应用内确认框（替代原生 window.confirm）。 */
   const confirm = useConfirm()
@@ -707,6 +709,7 @@ const {
       onCancelIndexBuild={cancelIndexBuild}
       onCancelMsgSearch={cancelMsgSearch}
       onBackToList={closeCurrentSession}
+      onOpenMoments={onOpenMoments}
       aiReply={aiReplyControls.aiReply}
       aiReplyFilter={aiReplyControls.aiReplyFilter}
       messageFileSave={messageFileSave}

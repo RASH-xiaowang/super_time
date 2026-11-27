@@ -47,8 +47,8 @@ describe('图谱侧栏：参数与节点详情分栏', () => {
   it('「图谱参数」页签按钮文案与标题一致；详情空态有引导文案', () => {
     expect(rail).toContain('>图谱参数</button>')
     expect(rail).toContain('>节点详情{selected ? ')
-    expect(rail).toMatch(/未选中节点/)
-    expect(rail).toMatch(/调参请切「图谱参数」/)
+    expect(rail).toMatch(/未选中/)
+    expect(rail).not.toMatch(/调参请切「图谱参数」/)
   })
 
   it('六个力度滑杆共享安全范围，并在拖动过程中连续预览', () => {

@@ -228,7 +228,7 @@ describe('接线：面板只从这一层拿灯箱状态', () => {
   })
 
   it('灯箱取图只走原图解析器，不再直接打图片 RPC', () => {
-    expect(portals).toContain('load: async (): Promise<string> => resolveSnsOriginal(im)')
+    expect(portals).toContain('load: async (options): Promise<string> => resolveSnsOriginal(im, options)')
     expect(portals).not.toContain('apiGetSnsImageDataUrl')
     expect(portals).not.toContain("from '../api.ts'")
     expect(portals).not.toContain('proxyableSrc')

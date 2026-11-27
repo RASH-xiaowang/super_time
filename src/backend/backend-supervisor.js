@@ -519,7 +519,8 @@ function createBackendSupervisor(deps) {
   async function bootstrap(userData) {
     bootT0 = Date.now();
     bootTrace('bootstrap-start');
-    applyConfig();
+    // 写进 worker 的环境副本。只改 process.env 到不了后端，查询会落进空的 userData/wechat-data。
+    applyConfig(undefined, env);
     userDataPath = userData;
     try {
       await start(userData);

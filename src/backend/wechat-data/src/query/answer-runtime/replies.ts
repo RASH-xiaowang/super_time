@@ -46,5 +46,5 @@ export function blockedReply(
   _profile: AnswerProfileId = 'wechat-ask',
 ): string {
   const detail = reason?.trim() || '当前范围不满足检索条件'
-  return `这次没法开始检索：${detail}。请先补齐范围后再试。`
+  return `这次不能采用检索结果：${detail}。请把问题收回到允许的会话或范围后再试。`
 }

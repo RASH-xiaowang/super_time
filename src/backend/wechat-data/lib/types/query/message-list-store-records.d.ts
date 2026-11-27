@@ -66,6 +66,8 @@ export interface TaskGreetingInput {
     targetUsername: string;
     images: MessageListImage[];
     triggeredAt: number;
+    /** 任务上配置的问候语。空串不写入。 */
+    greetingText: string;
 }
 /**
  * 任务触发成功后，在同一个任务库连接里插入一条问候。

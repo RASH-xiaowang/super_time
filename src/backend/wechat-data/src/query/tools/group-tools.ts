@@ -152,6 +152,7 @@ export const getGroupDetailTool: RetrievalTool = {
     '查群资料与活跃度：群主、公告、成员数/成员列表、消息总量、活跃天数、TOP 成员。'
     + '适用于「X 群是谁建的」「群里有多少人」「这个群活跃吗」这类问题。'
     + '参数 group 可以填群名（部分名称/拼音也行）或完整的 `@chatroom`；'
+    + '若本次问答已经锁定某个群，留空 group 即可，不要改成别的群号；'
     + '不用于群消息原文（请用 search_messages）或单聊档案（请用 get_contact_detail）。',
   parameters: {
     type: 'object',

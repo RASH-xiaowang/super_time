@@ -55,7 +55,7 @@ export declare function filterToolsForProfile(profile: AnswerProfile | AnswerPro
 export declare function filterToolsForScope(profileRef: AnswerProfile | AnswerProfileId, tools: readonly RetrievalTool[], ctx: ToolContext): RetrievalTool[];
 /** 范围校验结果。 */
 export interface ProfileScopeAdjustment {
-    field: 'from' | 'to';
+    field: 'from' | 'to' | 'group';
     locked: string;
     requested: string;
     message: string;
@@ -70,6 +70,14 @@ export type ProfileScopeDecision = {
     ok: false;
     error: ToolResult;
 };
+/**
+ * 文件索引（hardlink.db）没有会话列：锁定会话时无论模型是否自带 username，
+ * 都必须明确拒绝，否则不带 username 的调用会静默查全库（审计 2026-11-13）。
+ *
+ * 2026-11-24 起导出：自定义 alias 会以**自己的名字**通过 profile 白名单，但它内部
+ * 转发给目标工具 —— 目标若属于这一类，必须在保存时就拒绝，否则它会绕过这条限制。
+ */
+export declare const LOCKED_SCOPE_UNSUPPORTED_TOOLS: Set<ToolName>;
 /**
  * 校验并归一执行范围。
  *
@@ -90,9 +98,11 @@ export type ProfileScopeDecision = {
  * @param toolName - 模型请求的工具名（不可信）。
  * @param args - 模型参数（不可信；只读，不修改原对象）。
  * @param ctx - 执行上下文（只读，不修改原对象）。
+ * @param customAllowed - 该工具是否是用户自定义工具（`custom: true`）：自定义工具不在
+ *   代码白名单里，而它已经由用户显式创建并启用，所以白名单这一关放行。
  * @returns 归一后的参数与上下文，或结构化错误。
  */
-export declare function enforceProfileScope(profileRef: AnswerProfile | AnswerProfileId, toolName: string, args: Record<string, unknown>, ctx: ToolContext): ProfileScopeDecision;
+export declare function enforceProfileScope(profileRef: AnswerProfile | AnswerProfileId, toolName: string, args: Record<string, unknown>, ctx: ToolContext, customAllowed?: boolean): ProfileScopeDecision;
 /**
  * 按 profile 构建**可执行**工具集。
  *

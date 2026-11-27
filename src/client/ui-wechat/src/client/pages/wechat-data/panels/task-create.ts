@@ -22,6 +22,12 @@ export const PHOTO_LIMIT_MIN = 0
 export const PHOTO_LIMIT_MAX = 9
 /** 默认数量：3 张（最常用的「带点上下文」档）。 */
 export const DEFAULT_PHOTO_LIMIT = 3
+/** 触发时携带的文本条数下限（0 = 不带文本）。 */
+export const TEXT_LIMIT_MIN = 0
+/** 文本条数上限（与后端 `TEXT_LIMIT_MAX` 一致）。 */
+export const TEXT_LIMIT_MAX = 9
+/** 默认文本条数：0（只带触发那条；需要更多上下文时用户自己加）。 */
+export const DEFAULT_TEXT_LIMIT = 0
 /** 群成员一次最多画多少行（千人群一次画完会卡住整屏）。 */
 export const MEMBER_RENDER_LIMIT = 50
 /** 成员数超过这个值、且没有搜索词时，提示用户用搜索缩小范围。 */
@@ -61,6 +67,8 @@ export interface TaskCreateForm {
   keywordDraft: string
   /** 携带照片数量（0..{@link PHOTO_LIMIT_MAX}，可在表单里直接输入）。 */
   photoLimit: number
+  /** 携带文本条数（0..{@link TEXT_LIMIT_MAX}，只取触发人发的文本）。 */
+  textLimit: number
   /** 群聊是否只匹配结构化 @ 登录账号的消息；单聊不展示该选项。 */
   mentionMeOnly: boolean
   /** 任务名（空 = 自动生成，提交时补默认名）。 */
@@ -78,6 +86,7 @@ export function initialTaskCreateForm(): TaskCreateForm {
     keywords: [],
     keywordDraft: '',
     photoLimit: DEFAULT_PHOTO_LIMIT,
+    textLimit: DEFAULT_TEXT_LIMIT,
     mentionMeOnly: false,
     name: '',
     targets: [],
@@ -212,6 +221,36 @@ export function photoHint(value: number): string {
 }
 
 /**
+ * 某个数是否是可用的文本条数（0..{@link TEXT_LIMIT_MAX} 的整数）。
+ * @param value - 候选值。
+ * @returns 合法时为 true。
+ */
+export function isValidTextLimit(value: number): boolean {
+  return Number.isInteger(value) && value >= TEXT_LIMIT_MIN && value <= TEXT_LIMIT_MAX
+}
+
+/**
+ * 把输入框里的任意数字收进合法区间。
+ * @param value - 用户输入或 stepper 给的值。
+ * @returns 0..{@link TEXT_LIMIT_MAX} 的整数。
+ */
+export function clampTextLimit(value: number): number {
+  if (!Number.isFinite(value)) return TEXT_LIMIT_MIN
+  return Math.min(TEXT_LIMIT_MAX, Math.max(TEXT_LIMIT_MIN, Math.trunc(value)))
+}
+
+/**
+ * 文本条数的说明（「触发时取触发人最近 N 条文本」）。
+ * @param value - 条数。
+ * @returns 面向用户的一句话。
+ */
+export function textHint(value: number): string {
+  return value <= 0
+    ? '只带触发的那条消息，不额外携带历史文本'
+    : `触发时取触发人最近 ${String(value)} 条文本消息（只算触发人自己发的）`
+}
+
+/**
  * 会话类型的中文名（弹窗右上角徽标用）。
  * @param type - private/group。
  * @returns 中文短标签。
@@ -250,11 +289,12 @@ export interface TaskCreateValidationInput {
   targetCount: number
   keywords: readonly string[]
   photoLimit: number
+  textLimit: number
 }
 
 /**
  * 提交前校验。返回**第一条**错误文案（UI 一次只显示一行，不需要错误数组）。
- * @param input - 会话类型/目标/关键词/照片档位。
+ * @param input - 会话类型/目标/关键词/照片档位/文本条数。
  * @returns 错误文案；可以提交时为 null。
  */
 export function validateTaskCreate(input: TaskCreateValidationInput): string | null {
@@ -263,6 +303,7 @@ export function validateTaskCreate(input: TaskCreateValidationInput): string | n
   if (input.keywords.length > KEYWORD_MAX_COUNT) return `触发关键词最多 ${String(KEYWORD_MAX_COUNT)} 个`
   if (input.keywords.some((kw) => kw.length > KEYWORD_MAX_LEN)) return `单个触发关键词不能超过 ${String(KEYWORD_MAX_LEN)} 个字符`
   if (!isValidPhotoLimit(input.photoLimit)) return `照片数量需为 ${String(PHOTO_LIMIT_MIN)}–${String(PHOTO_LIMIT_MAX)} 的整数（0 = 不带图片）`
+  if (!isValidTextLimit(input.textLimit)) return `文本条数需为 ${String(TEXT_LIMIT_MIN)}–${String(TEXT_LIMIT_MAX)} 的整数（0 = 不带文本）`
   return null
 }
 
@@ -273,6 +314,8 @@ export interface BuildTaskInfoInputOptions {
   target?: { username: string; name: string } | null
   keywords: readonly string[]
   photoLimit: number
+  /** 文本条数；缺省 = 0（不额外带文本）。 */
+  textLimit?: number
   /** 群聊是否只匹配 @ 登录账号；缺省 = false。 */
   mentionMeOnly?: boolean
   /** 用户填的任务名；空串 = 自动生成。 */
@@ -310,6 +353,7 @@ export function buildTaskInfoInput(options: BuildTaskInfoInputOptions): TaskInfo
     targetName,
     keywords,
     photoLimit: options.photoLimit,
+    textLimit: options.textLimit ?? 0,
     mentionMeOnly: isGroup && options.mentionMeOnly === true,
     status: 'incomplete',
   }
@@ -322,6 +366,8 @@ export interface BuildTaskInfoInputsOptions {
   targets?: readonly TaskCreateTarget[]
   keywords: readonly string[]
   photoLimit: number
+  /** 文本条数；缺省 = 0（不额外带文本）。 */
+  textLimit?: number
   mentionMeOnly?: boolean
   /** 用户填的任务名；空串 = 每个对象各自自动生成。 */
   name?: string
@@ -358,6 +404,7 @@ export function buildTaskInfoInputs(options: BuildTaskInfoInputsOptions): TaskIn
       target: null,
       keywords: options.keywords,
       photoLimit: options.photoLimit,
+      textLimit: options.textLimit,
       mentionMeOnly: options.mentionMeOnly,
       name: options.name,
     })]
@@ -375,6 +422,7 @@ export function buildTaskInfoInputs(options: BuildTaskInfoInputsOptions): TaskIn
     target,
     keywords: options.keywords,
     photoLimit: options.photoLimit,
+    textLimit: options.textLimit,
     mentionMeOnly: options.mentionMeOnly,
     name: appendMember ? customNameForTarget(options.name ?? '', target) : options.name,
   }))

@@ -89,6 +89,7 @@ describe('新建任务（触发式任务）前端接线', () => {
     expect(DIALOG, '成功文案没讲清"完善触发方式后启用"').toContain('完善触发方式后启用')
     expect(DIALOG, '成功文案没给出「任务信息 → 编辑」入口').toContain('点「编辑」')
     expect(DIALOG, '成功文案只提 Webhook，漏了八爪鱼 RPA').toContain('Webhook 地址或八爪鱼 RPA')
+    expect(DIALOG, '成功文案没说明消息列表规则已写上').toContain('消息列表里已按同一会话和触发对象写好规则')
   })
 
   it('弹窗覆盖产品语义：关键词 / 目标用户 / 照片数量 / 待完善', () => {

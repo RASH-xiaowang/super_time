@@ -85,8 +85,9 @@ const descriptor: RpaVendorDescriptor = {
       options: [
         { value: 'dataUrl', label: 'JSON data URL（兼容旧接收端）' },
         { value: 'multipart', label: 'multipart/form-data（推荐，省约 1/3 体积）' },
+        { value: 'lanUrl', label: '局域网链接（对方用 URL 取图）' },
       ],
-      help: 'multipart 模式读取文件原始字节：payload 字段是 JSON，images 字段是图片文件；接收端必须支持 multipart。',
+      help: '局域网链接不把图片字节放进请求体：每张图带一个 http://本机局域网地址/api/rpa-media/… 的短时地址，同一局域网里的机器用这个 URL 取文件。需要先打开「局域网访问」。',
     },
   ],
   auth: {
@@ -128,6 +129,7 @@ const descriptor: RpaVendorDescriptor = {
   ],
   notes: [
     '默认 imageDelivery=dataUrl，与旧接收端逐字段兼容；改用 multipart 前请确认接收端能从 payload/images 两个字段读取。',
+    'lanUrl 复用已有局域网监听面的 /api/rpa-media/<令牌>，一个地址只对应一张图，默认 1 小时过期；未打开局域网访问时该张写 error，不发取不到的地址。',
     '旧版 paramMap 从未影响 Webhook 请求体，因此不自动迁移；如确实需要对应字段，请在「附加参数」里重新添加。',
   ],
 }
@@ -155,8 +157,7 @@ function errorText(error: unknown): string {
 }
 
 /** 同一份回调信封（不含图片数组），两种传输模式共用。 */
-function callbackEnvelope(ctx: RpaInvocationContext): Omit<TaskCallbackPayload, 'images'> {
-  const record = ctx.record
+function callbackEnvelope(ctx: RpaInvocationContext): Omit<TaskCallbackPayload, 'images'> {  const record = ctx.record
   const mapped = resolveMapped(descriptor, ctx)
   if (typeof mapped !== 'object' || mapped === null || Array.isArray(mapped)) {
     throw new Error('Webhook 附加参数解析失败：params 必须是对象')
@@ -171,6 +172,12 @@ function callbackEnvelope(ctx: RpaInvocationContext): Omit<TaskCallbackPayload, 
     target: { username: record.targetUsername, name: record.targetName },
     keyword: record.keyword,
     text: record.text,
+    texts: (record.texts ?? []).map((item) => ({
+      localId: item.localId,
+      createTime: item.createTime,
+      sender: item.sender,
+      text: item.text,
+    })),
     params: mapped as Record<string, string>,
   }
 }
@@ -188,36 +195,52 @@ async function buildPayloadImages(
   record: RpaRecordContext,
   deps: RpaBuildDeps,
 ): Promise<TaskCallbackPayload['images']> {
-  const out: TaskCallbackPayload['images'] = []
-  for (const image of record.images) {
-    const item: TaskCallbackPayload['images'][number] = {
-      localId: image.localId,
-      createTime: image.createTime,
-      sender: image.sender,
-    }
-    if (image.md5 !== undefined) item.md5 = image.md5
-    try {
-      const decoded = await deps.decodeImage(record.username, image.localId)
-      let dataUrl = typeof decoded.url === 'string' ? decoded.url : ''
-      if (dataUrl === '' && typeof decoded.file === 'string' && decoded.file !== '') {
-        if (!isSafeDecodedPath(decoded.file)) {
-          item.error = '图片路径超出解码目录，已省略'
-        } else {
-          const bytes = await readFile(join(deps.decodedDir, decoded.file))
-          dataUrl = 'data:' + imageMimeOf(decoded.file) + ';base64,' + bytes.toString('base64')
-        }
-      }
-      if (item.error === undefined) {
-        if (dataUrl === '') item.error = '图片解码失败'
-        else if (dataUrl.length > IMAGE_DATA_URL_MAX) item.error = '图片过大，已省略'
-        else item.dataUrl = dataUrl
-      }
-    } catch (error) {
-      item.error = errorText(error).slice(0, ERROR_TEXT_MAX)
-    }
-    out.push(item)
+  return Promise.all(record.images.map((image) => buildOnePayloadImage(record, image, deps)))
+}
+
+/** 把已经签好的局域网地址补到对应图片上。没有地址的那张保持原样。 */
+function withLanUrls(
+  images: TaskCallbackPayload['images'],
+  links: RpaInvocationContext['imageLinks'],
+): TaskCallbackPayload['images'] {
+  return images.map((image, index) => {
+    const url = links[index]?.url
+    return typeof url === 'string' && url !== '' ? { ...image, url } : image
+  })
+}
+
+/** 解码一张回调图片。失败只写在这一张的 `error` 上，不拖住同一批里的其它图片。 */
+async function buildOnePayloadImage(
+  record: RpaRecordContext,
+  image: RpaRecordContext['images'][number],
+  deps: RpaBuildDeps,
+): Promise<TaskCallbackPayload['images'][number]> {
+  const item: TaskCallbackPayload['images'][number] = {
+    localId: image.localId,
+    createTime: image.createTime,
+    sender: image.sender,
   }
-  return out
+  if (image.md5 !== undefined) item.md5 = image.md5
+  try {
+    const decoded = await deps.decodeImage(record.username, image.localId)
+    let dataUrl = typeof decoded.url === 'string' ? decoded.url : ''
+    if (dataUrl === '' && typeof decoded.file === 'string' && decoded.file !== '') {
+      if (!isSafeDecodedPath(decoded.file)) {
+        item.error = '图片路径超出解码目录，已省略'
+      } else {
+        const bytes = await readFile(join(deps.decodedDir, decoded.file))
+        dataUrl = 'data:' + imageMimeOf(decoded.file) + ';base64,' + bytes.toString('base64')
+      }
+    }
+    if (item.error === undefined) {
+      if (dataUrl === '') item.error = '图片解码失败'
+      else if (dataUrl.length > IMAGE_DATA_URL_MAX) item.error = '图片过大，已省略'
+      else item.dataUrl = dataUrl
+    }
+  } catch (error) {
+    item.error = errorText(error).slice(0, ERROR_TEXT_MAX)
+  }
+  return item
 }
 
 /** 组装旧版同形状的回调请求体（字段顺序与含义不变，便于对端逐字节对照）。 */
@@ -226,7 +249,7 @@ async function buildCallbackPayload(
   deps: RpaBuildDeps,
 ): Promise<TaskCallbackPayload> {
   const images = await buildPayloadImages(ctx.record, deps)
-  return { ...callbackEnvelope(ctx), images }
+  return { ...callbackEnvelope(ctx), images: withLanUrls(images, ctx.imageLinks) }
 }
 
 /** multipart 中的图片元数据（文件字段/文件名/大小/摘要用于接收端校验）。 */
@@ -275,70 +298,92 @@ function imageExtensionOf(mime: string): string {
   return 'jpg'
 }
 
+/** 一张已经读进内存、尚未计入整单上限的 multipart 图片。 */
+interface MultipartCandidate {
+  item: MultipartImageMetadata
+  bytes: Buffer | null
+  mime: string
+  index: number
+}
+
+/** 并行读取一张 multipart 图片。整单上限留到全部读完后按原顺序裁。 */
+async function readMultipartCandidate(
+  record: RpaRecordContext,
+  image: RpaRecordContext['images'][number],
+  index: number,
+  deps: RpaBuildDeps,
+): Promise<MultipartCandidate> {
+  const item: MultipartImageMetadata = {
+    localId: image.localId,
+    createTime: image.createTime,
+    sender: image.sender,
+  }
+  if (image.md5 !== undefined) item.md5 = image.md5
+  let bytes: Buffer | null = null
+  let mime = 'image/jpeg'
+  try {
+    const decoded = await deps.decodeImage(record.username, image.localId, { fileOnly: true })
+    if (typeof decoded.file === 'string' && decoded.file !== '') {
+      if (!isSafeDecodedPath(decoded.file)) {
+        item.error = '图片路径超出解码目录，已省略'
+      } else {
+        const abs = join(deps.decodedDir, decoded.file)
+        const info = await stat(abs)
+        if (!info.isFile()) throw new Error('解码结果不是文件')
+        if (info.size > MULTIPART_IMAGE_MAX_BYTES) item.error = '图片过大，已省略'
+        else {
+          bytes = await readFile(abs)
+          mime = imageMimeOf(decoded.file)
+        }
+      }
+    } else if (typeof decoded.url === 'string' && decoded.url !== '') {
+      const fallback = bytesFromDataUrl(decoded.url)
+      if (fallback === null) item.error = '图片解码失败'
+      else if (fallback.bytes.length > MULTIPART_IMAGE_MAX_BYTES) item.error = '图片过大，已省略'
+      else {
+        bytes = fallback.bytes
+        mime = fallback.mime
+      }
+    } else {
+      item.error = '图片解码失败'
+    }
+  } catch (error) {
+    item.error = errorText(error).slice(0, ERROR_TEXT_MAX)
+    bytes = null
+  }
+  return { item, bytes, mime, index }
+}
+
 /**
  * 逐张读取图片文件并生成 multipart 元数据/文件 part。
- * 单张失败、超单张上限或累计超整单上限时只给该项写 `error`。
+ * 解码并行；单张失败、超单张上限或累计超整单上限时只给该项写 `error`。
  */
 async function buildMultipartImages(
   record: RpaRecordContext,
   deps: RpaBuildDeps,
 ): Promise<{ images: MultipartImageMetadata[]; files: MultipartFile[] }> {
+  const loaded = await Promise.all(record.images.map((image, index) => (
+    readMultipartCandidate(record, image, index, deps)
+  )))
   const images: MultipartImageMetadata[] = []
   const files: MultipartFile[] = []
   let totalBytes = 0
-  for (let index = 0; index < record.images.length; index += 1) {
-    const image = record.images[index]
-    if (image === undefined) continue
-    const item: MultipartImageMetadata = {
-      localId: image.localId,
-      createTime: image.createTime,
-      sender: image.sender,
-    }
-    if (image.md5 !== undefined) item.md5 = image.md5
-    try {
-      const decoded = await deps.decodeImage(record.username, image.localId, { fileOnly: true })
-      let bytes: Buffer | null = null
-      let mime = 'image/jpeg'
-      if (typeof decoded.file === 'string' && decoded.file !== '') {
-        if (!isSafeDecodedPath(decoded.file)) {
-          item.error = '图片路径超出解码目录，已省略'
-        } else {
-          const abs = join(deps.decodedDir, decoded.file)
-          const info = await stat(abs)
-          if (!info.isFile()) throw new Error('解码结果不是文件')
-          if (info.size > MULTIPART_IMAGE_MAX_BYTES) {
-            item.error = '图片过大，已省略'
-          } else if (totalBytes + info.size > MULTIPART_TOTAL_MAX_BYTES) {
-            item.error = '图片总量过大，已省略'
-          } else {
-            bytes = await readFile(abs)
-            mime = imageMimeOf(decoded.file)
-          }
-        }
-      } else if (typeof decoded.url === 'string' && decoded.url !== '') {
-        const fallback = bytesFromDataUrl(decoded.url)
-        if (fallback === null) item.error = '图片解码失败'
-        else if (fallback.bytes.length > MULTIPART_IMAGE_MAX_BYTES) item.error = '图片过大，已省略'
-        else if (totalBytes + fallback.bytes.length > MULTIPART_TOTAL_MAX_BYTES) item.error = '图片总量过大，已省略'
-        else {
-          bytes = fallback.bytes
-          mime = fallback.mime
-        }
+  for (const candidate of loaded) {
+    const item = candidate.item
+    const bytes = candidate.bytes
+    if (item.error === undefined && bytes !== null) {
+      if (totalBytes + bytes.length > MULTIPART_TOTAL_MAX_BYTES) {
+        item.error = '图片总量过大，已省略'
       } else {
-        item.error = '图片解码失败'
-      }
-      if (item.error === undefined && bytes !== null) {
-        const filename = `image-${String(index + 1).padStart(2, '0')}.${imageExtensionOf(mime)}`
+        const filename = `image-${String(candidate.index + 1).padStart(2, '0')}.${imageExtensionOf(candidate.mime)}`
         item.fileField = MULTIPART_IMAGE_FIELD
         item.filename = filename
-        item.contentType = mime
+        item.contentType = candidate.mime
         item.size = bytes.length
         item.sha256 = createHash('sha256').update(bytes).digest('hex')
         totalBytes += bytes.length
-        files.push({ filename, contentType: mime, bytes })
+        files.push({ filename, contentType: candidate.mime, bytes })
       }
-    } catch (error) {
-      item.error = errorText(error).slice(0, ERROR_TEXT_MAX)
     }
     images.push(item)
   }
@@ -370,6 +415,41 @@ function encodeMultipart(payload: MultipartCallbackPayload, files: MultipartFile
     body: Buffer.concat(chunks),
     contentType: `multipart/form-data; boundary=${boundary}`,
   }
+}
+
+/**
+ * 局域网链接模式的图片清单。
+ *
+ * 链接在投递前已经签好（`ctx.imageLinks`）。没有签出来时不编造地址，每张写明原因。
+ */
+function lanImagesOf(ctx: RpaInvocationContext): TaskCallbackPayload['images'] {
+  const refs = ctx.record.images
+  const links = ctx.imageLinks
+  if (links.length === refs.length) {
+    return links.map((link, index) => {
+      const ref = refs[index]
+      const item: TaskCallbackPayload['images'][number] = {
+        localId: link.localId,
+        createTime: link.createTime,
+        sender: link.sender,
+      }
+      const md5 = link.md5 ?? ref?.md5
+      if (md5 !== undefined && md5 !== '') item.md5 = md5
+      if (typeof link.url === 'string' && link.url !== '') item.url = link.url
+      if (typeof link.error === 'string' && link.error !== '') item.error = link.error
+      return item
+    })
+  }
+  return refs.map((image) => {
+    const item: TaskCallbackPayload['images'][number] = {
+      localId: image.localId,
+      createTime: image.createTime,
+      sender: image.sender,
+      error: '未生成图片链接：本机未打开局域网访问（设置 → 维护与自检 → 局域网访问）',
+    }
+    if (image.md5 !== undefined && image.md5 !== '') item.md5 = image.md5
+    return item
+  })
 }
 
 /** 组装 multipart 请求（payload JSON + images 原始文件）。 */
@@ -406,6 +486,16 @@ export const adapter: RpaVendorAdapter = {
     if (ctx.config['imageDelivery'] === 'multipart') {
       const multipart = await buildMultipartRequest(ctx, deps)
       return { ...multipart, url }
+    }
+    if (ctx.config['imageDelivery'] === 'lanUrl') {
+      const payload = { ...callbackEnvelope(ctx), images: lanImagesOf(ctx) }
+      return {
+        method: 'POST',
+        url,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        contentType: 'application/json',
+      }
     }
     const payload = await buildCallbackPayload(ctx, deps)
     return {

@@ -231,6 +231,13 @@ export interface RuleForm {
   greetingText: string
   note: string
   enabled: boolean
+  /**
+   * 选中的托管应用实例 id；非空表示地址由该实例提供。
+   *
+   * 表单里的 `webhookUrl` 此时只是**脱敏展示**（`/webhook/***`），真正地址由主进程
+   * 在保存时现取 —— 端口每次都变，而且令牌不能回渲染层。
+   */
+  appInstanceId?: string
   /** 从记录打开表单时携带的来源，用于隐藏该来源不需要的配置项。 */
   recordSource?: MessageListSource
 }
@@ -268,6 +275,7 @@ export function ruleFormFromRule(rule: MessageListRule): RuleForm {
     greetingText: rule.greetingText || '你好',
     note: rule.note,
     enabled: rule.enabled,
+    ...(rule.appInstanceId === '' ? {} : { appInstanceId: rule.appInstanceId }),
   }
 }
 
@@ -279,6 +287,41 @@ export function findExactRuleForRecord(
   return rules.find((rule) => (
     rule.chatName === record.chatName && rule.targetName === record.targetName
   ))
+}
+
+/**
+ * 已加载的规则里，是否有能覆盖这条记录的有效规则。
+ *
+ * 与后端 `matchMessageListRuleAt` 同一优先级：精确对 → 同会话任意对象 →
+ * 任意会话指定对象 → 全局；群聊还会把会话名当作触发对象再匹配一次（后端投递
+ * 入口对群聊就是这么兜底的）。这里只回答“现在配没配好”，不看记录里的地址快照。
+ */
+export function ruleCoversRecord(
+  rule: Pick<MessageListRule, 'chatName' | 'targetName' | 'enabled' | 'webhookUrl'>,
+  record: Pick<MessageListRecord, 'chatName' | 'targetName'>,
+): boolean {
+  if (!rule.enabled) return false
+  if (rule.webhookUrl.trim() === '') return false
+  if (rule.chatName !== '' && rule.chatName !== record.chatName) return false
+  if (rule.targetName === '') return true
+  if (rule.targetName === record.targetName) return true
+  return record.targetName !== record.chatName && rule.targetName === record.chatName
+}
+
+/**
+ * 记录是否已经有可用的投递规则。
+ *
+ * AI 回复记录生成后先落库、地址要到投递认领时才写入快照，所以只看
+ * `record.webhookUrl` 会把「规则早就配好、正在排队发送」误判成「待配置」。
+ */
+export function recordHasMatchingRule(
+  record: Pick<MessageListRecord, 'chatName' | 'targetName'>,
+  rules: readonly MessageListRule[],
+): boolean {
+  for (const rule of rules) {
+    if (ruleCoversRecord(rule, record)) return true
+  }
+  return false
 }
 
 /**
@@ -324,6 +367,7 @@ export type AiReplyPhase =
   | 'generating'
   | 'stalled'
   | 'waiting_config'
+  | 'queued_send'
   | 'superseded'
   | 'failed_generation'
   | 'failed_send'
@@ -356,10 +400,15 @@ export function isSupersededAiReply(
  *
  * 空正文 pending 的时长一律从 `createdAt` 起算：`updatedAt` 会被无关的状态回写
  * 刷新，用它计时会让停滞的预约永远显示「生成中」。
+ *
+ * `hasRule` 表示当前规则表里已有能覆盖这条记录的规则。AI 回复的地址是在投递
+ * 认领时才写进快照的，只看快照会把「规则已就绪、正在排队」的整段等待时间都
+ * 显示成「待配置」；有了规则就应归到 `queued_send`（待发送）。
  */
 export function aiReplyPhase(
   record: MessageListAiStatusInput,
   now = Date.now(),
+  hasRule = false,
 ): AiReplyPhase {
   if (record.source !== 'ai_reply') return 'other'
   if (isSupersededAiReply(record)) return 'superseded'
@@ -368,7 +417,8 @@ export function aiReplyPhase(
       const createdAt = Number.isFinite(record.createdAt) ? record.createdAt : 0
       return now - createdAt < AI_REPLY_STALLED_MS ? 'generating' : 'stalled'
     }
-    return record.webhookUrl.trim() === '' ? 'waiting_config' : 'other'
+    if (record.webhookUrl.trim() !== '') return 'other'
+    return hasRule ? 'queued_send' : 'waiting_config'
   }
   if (record.status === 'failed') {
     return record.text.trim() === '' ? 'failed_generation' : 'failed_send'
@@ -379,21 +429,25 @@ export function aiReplyPhase(
 /** AI 回复正文已落库，但还没有匹配到 Webhook 时的专用状态文案。 */
 export function isAiReplyWaitingForWebhook(
   record: Pick<MessageListRecord, 'source' | 'status' | 'text' | 'webhookUrl'>,
+  hasRule = false,
 ): boolean {
   return record.source === 'ai_reply'
     && record.status === 'pending'
     && record.text.trim() !== ''
     && record.webhookUrl.trim() === ''
+    && !hasRule
 }
 
 export function messageListRecordStatusLabel(
   record: MessageListAiStatusInput,
   now = Date.now(),
+  hasRule = false,
 ): string {
-  switch (aiReplyPhase(record, now)) {
+  switch (aiReplyPhase(record, now, hasRule)) {
     case 'generating': return '生成中'
     case 'stalled': return '生成停滞'
     case 'waiting_config': return '待配置'
+    case 'queued_send': return '待发送'
     case 'superseded': return '已过期'
     case 'failed_generation': return '生成失败'
     case 'failed_send': return '发送失败'
@@ -405,12 +459,14 @@ export function messageListRecordStatusLabel(
 export function messageListRecordStatusHint(
   record: MessageListAiStatusInput,
   now = Date.now(),
+  hasRule = false,
 ): string {
   const error = record.error.trim()
-  switch (aiReplyPhase(record, now)) {
+  switch (aiReplyPhase(record, now, hasRule)) {
     case 'generating': return '模型正在生成，尚无正文'
     case 'stalled': return '超过 10 分钟没有进展，可能已中断'
     case 'waiting_config': return '正文已生成并保存；配置发送地址后自动投递'
+    case 'queued_send': return '规则已匹配；等待前序分段或下游任务结束后自动投递'
     case 'superseded': return '会话已有更新消息，这条按设计不发送'
     case 'failed_generation':
     case 'failed_send': return error !== '' ? error : '未提供失败原因'
@@ -427,6 +483,16 @@ export interface MessageListFailureCopy {
 const NO_SENDING_ADDRESS_ERROR =
   /未匹配到\s*Webhook|未配置(?:默认)?\s*Webhook|没有(?:已保存的)?(?:投递|发送)地址/i
 const UNCONFIRMED_SEND_ERROR = /未确认|无法确认|可能已发出|可能已受理/
+
+/**
+ * 这条错误是不是「当时没配地址」的旧结论。
+ *
+ * 规则配好之后记录上的这句错误就成了过期文案：地址会在认领时写入，
+ * 不能再把它当失败展示，否则用户会以为规则没生效。
+ */
+export function isMissingWebhookError(error: string): boolean {
+  return NO_SENDING_ADDRESS_ERROR.test(error)
+}
 
 /**
  * 失败记录的分层文案。

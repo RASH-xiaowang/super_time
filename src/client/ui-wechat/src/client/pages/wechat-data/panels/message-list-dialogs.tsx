@@ -1,7 +1,38 @@
 /** 手动新增消息记录与 Webhook 规则编辑弹窗。 */
+import { useEffect, useState } from 'react'
 import { Button, Dialog } from '../ui/kit.tsx'
+import type { AppsWebhookTarget } from '../../../electron-api.ts'
+import { apiAppsWebhookTargets } from '../api-apps.ts'
 import type { RecordForm, RuleForm } from './message-list-view.ts'
 import css from './message-list.module.css'
+
+/**
+ * 「下游 Webhook」候选托管实例。
+ *
+ * 地址是脱敏的（令牌 `***`）—— 真实 `/webhook/<token>` 由主进程在保存时现取。
+ * 拉取失败（浏览器交接态 / 老版本主进程）时返回空数组，界面退化成纯手填，
+ * 不阻断规则编辑。
+ */
+function useWebhookTargets(open: boolean): AppsWebhookTarget[] {
+  const [targets, setTargets] = useState<AppsWebhookTarget[]>([])
+  useEffect(() => {
+    if (!open) return
+    let alive = true
+    void apiAppsWebhookTargets().then((result) => {
+      if (!alive) return
+      setTargets(Array.isArray(result.targets) ? result.targets : [])
+    })
+    return () => { alive = false }
+  }, [open])
+  return targets
+}
+
+/** 实例下拉的标签：可用性写在文字里，避免「选了一个不能用的」。 */
+function targetLabel(target: AppsWebhookTarget): string {
+  const where = target.maskedUrl === '' ? '未启动' : target.maskedUrl
+  const suffix = !target.enabled ? '（已停用）' : target.ready ? '' : '（未就绪）'
+  return '席位 ' + String(target.seat) + ' · ' + target.name + ' — ' + where + suffix
+}
 
 export function RecordFormDialog(props: {
   form: RecordForm | null
@@ -118,6 +149,26 @@ export function RuleFormDialog(props: {
   onSubmit: () => void
 }): React.JSX.Element {
   const form = props.form
+  const targets = useWebhookTargets(form !== null)
+  const selectedId = form?.appInstanceId ?? ''
+  const selected = selectedId === '' ? undefined : targets.find((item) => item.id === selectedId)
+  // 托管地址用「实例当前地址」而不是表单里那份：实例重启换端口后，旧记录里的地址
+  // 已经过期，展示新的才与保存结果一致。
+  const displayUrl = selected?.maskedUrl ?? form?.webhookUrl ?? ''
+  const pickTarget = (id: string): void => {
+    if (form === null) return
+    if (id === '') {
+      // 切回手填：清空脱敏串，否则它会被当成真实地址提交（保存必然失败）。
+      props.onChange({ ...form, appInstanceId: undefined, webhookUrl: '' })
+      return
+    }
+    const hit = targets.find((item) => item.id === id)
+    props.onChange({
+      ...form,
+      appInstanceId: id,
+      webhookUrl: hit?.maskedUrl ?? form.webhookUrl,
+    })
+  }
   return (
     <Dialog
       open={form !== null}
@@ -159,31 +210,43 @@ export function RuleFormDialog(props: {
             <span>下游 Webhook 地址 <b className={css.required}>*</b></span>
             <input
               className={css.input}
-              value={form.webhookUrl}
+              value={displayUrl}
               onChange={(e) => { props.onChange({ ...form, webhookUrl: e.target.value }) }}
               placeholder="http://192.168.1.20:8080/reply"
+              disabled={form.appInstanceId !== undefined}
+              readOnly={form.appInstanceId !== undefined}
             />
           </label>
-          {form.recordSource === 'ai_reply' ? (
-            <p className={css.formHint} role="note">
-              AI 回复来源直接使用下游 Webhook，无需配置首次触发文本；已有问候语会保留。
-            </p>
-          ) : (
-            <label className={css.field}>
-              <span>首次触发文本（问候语）</span>
-              <textarea
-                className={css.textarea}
-                rows={3}
-                maxLength={4000}
-                value={form.greetingText}
-                onChange={(e) => { props.onChange({ ...form, greetingText: e.target.value }) }}
-                placeholder="例如：您好，已收到，我会尽快处理。留空时使用“你好”。"
-              />
+          <label className={css.field}>
+            <span>托管应用环境（可选）</span>
+            <select
+              className={css.input}
+              value={selectedId}
+              onChange={(e) => { pickTarget(e.target.value) }}
+            >
+              <option value="">不使用 —— 手填上面的地址</option>
+              {selectedId !== '' && selected === undefined && (
+                <option value={selectedId}>实例已删除（请改为手填或另选）</option>
+              )}
+              {targets.map((target) => (
+                <option key={target.id} value={target.id} disabled={!target.usable}>
+                  {targetLabel(target)}
+                </option>
+              ))}
+            </select>
+            {form.appInstanceId !== undefined ? (
               <span className={css.formHint}>
-                文本按当前“会话名 + 触发对象”匹配，不同触发对象可以分别设置不同内容。
+                地址由该托管实例提供；令牌只在主进程里，实例重启换了端口会自动同步到这条规则。
+                要改回手填，选「不使用」。
               </span>
-            </label>
-          )}
+            ) : (
+              <span className={css.formHint}>
+                {targets.length === 0
+                  ? '还没有可用的托管实例；在「应用托管」里新建并启动后，这里会列出它们的 Webhook 地址。'
+                  : '选一个已启动的实例，用它的 /webhook 地址作为下游；实例未启动时不可选（端口还没分配）。'}
+              </span>
+            )}
+          </label>
           <label className={css.field}>
             <span>备注</span>
             <textarea

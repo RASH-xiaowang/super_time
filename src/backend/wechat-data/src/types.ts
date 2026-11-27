@@ -36,6 +36,7 @@ export type {
   ChatAiReplyState,
 } from './query/ai-reply/types.ts'
 export * from './types-rpa.ts'
+export * from './types-local-tools.ts'
 
 /**
  * 这些类型原先只住在实现模块里，前端不得不再镜像一份（`types.ts` 里的「待 H11/H12

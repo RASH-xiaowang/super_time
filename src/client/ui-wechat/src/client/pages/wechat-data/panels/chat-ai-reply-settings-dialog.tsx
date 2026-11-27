@@ -6,13 +6,14 @@ import {
   type ChatAiReplyDefaultWebhookState,
 } from '../api-chat-ai-reply.ts'
 import { runtimeCapabilities } from '../api-core.ts'
-import { Button, Dialog, ErrorState } from '../ui/kit.tsx'
+import { apiAppsSaveAiReplyWebhook, apiAppsWebhookTargets } from '../api-apps.ts'
+import type { AppsWebhookTarget } from '../../../electron-api.ts'
+import { Button, Drawer, ErrorState } from '../ui/kit.tsx'
 import { useKbScope } from './kb-scope.ts'
 import { PersonaPresetPicker } from './chat-ai-reply-persona-presets.tsx'
 import css from './chat-ai-reply-settings.module.css'
 
-export interface ChatAiReplyPersonaDraft {
-  name: string
+export interface ChatAiReplyPersonaDraft {  name: string
   prompt: string
   splitReply: boolean
   /** 是否让知识库参与本会话的自动回复。 */
@@ -21,7 +22,11 @@ export interface ChatAiReplyPersonaDraft {
   kbId: number
   /** 上下文时间窗（小时）；0 = 不限。 */
   contextWindowHours: number
+  safetyHandoff: string
+  safetyBlocked: string
 }
+
+const SAFETY_HANDOFF_DEFAULT = '抱歉我不太清楚，建议为您转接人工'
 
 /**
  * 上下文时间窗的可选项：小时数 → 界面文案。
@@ -65,6 +70,87 @@ interface ChatAiReplyWebhookConfigInput {
  * 对话框只负责人格表单与展示；把这套异步竞态（切换会话、重复点击、脱敏回显）
  * 收在独立 hook 里，避免每次改人格都要重新审一遍 Webhook 状态机。
  */
+interface WebhookPersistInput {
+  /** 选中的托管实例；空串 = 用输入框里的手填地址。 */
+  instanceId: string
+  scope: ChatAiReplyWebhookScope
+  text: string
+  onSaveWebhook?: ChatAiReplyWebhookConfigInput['onSaveWebhook']
+}
+
+type WebhookPersistResult =
+  | { ok: true, endpoint: string, configured: boolean, updatedAt?: number }
+  | { ok: false, error: string, endpoint?: string, configured?: boolean, updatedAt?: number }
+
+/**
+ * 真正把地址写下去的两条路：托管实例（主进程解析）与手填（常规校验）。
+ *
+ * 拆成模块级函数有两个原因：`useChatAiReplyWebhookConfig` 已逼近单函数行数闸门；
+ * 而且这段是**纯决策 + 一次调用**，与 React 状态无关，单独放更好读。
+ */
+async function persistWebhook(input: WebhookPersistInput): Promise<WebhookPersistResult> {
+  const scope = input.scope
+  if (input.instanceId !== '') {
+    if (typeof window === 'undefined' || !window.electronAPI?.apps?.saveAiReplyWebhook) {
+      return { ok: false, error: '当前环境不支持选择托管应用，请到电脑端操作' }
+    }
+    const result = await apiAppsSaveAiReplyWebhook({
+      instanceId: input.instanceId,
+      chatUsername: input.scope.chatUsername,
+      ...(input.scope.chatName === undefined ? {} : { chatName: input.scope.chatName }),
+    })
+    if (!result.ok) return { ok: false, error: result.error ?? '保存默认 Webhook 失败' }
+    const endpoint = maskWebhookEndpoint(
+      typeof result.maskedUrl === 'string' ? result.maskedUrl : input.text,
+    )
+    return { ok: true, endpoint, configured: true }
+  }
+  const value = input.text.trim()
+  if (value === '' || value.includes('***')) {
+    return { ok: false, error: '请输入新的完整 Webhook 地址；留空或保留脱敏值不会覆盖已保存的 token' }
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(value)
+  } catch {
+    return { ok: false, error: '请输入完整的 Feather Webhook 地址' }
+  }
+  if (
+    (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
+    || parsed.username !== ''
+    || parsed.password !== ''
+    || !/^\/webhook\/[^/]+\/?$/i.test(parsed.pathname)
+  ) {
+    return { ok: false, error: 'Webhook 必须是 Feather 的 /webhook/<token> 地址' }
+  }
+  const saver = input.onSaveWebhook !== undefined
+    ? (webhookUrl: string) => input.onSaveWebhook!({ ...scope, webhookUrl })
+    : runtimeCapabilities().isDesktop === true
+      ? (webhookUrl: string) => apiSaveChatAiReplyDefaultWebhook({ ...scope, webhookUrl })
+      : undefined
+  if (saver === undefined) {
+    return { ok: false, error: '当前环境不支持配置默认 Webhook，请到电脑端操作' }
+  }
+  const result = await saver(value)
+  const endpoint = maskWebhookEndpoint(result.endpoint ?? value)
+  const configured = result.configured !== false
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: result.error ?? '默认 Webhook 保存失败',
+      endpoint,
+      configured,
+      ...(result.updatedAt === undefined ? {} : { updatedAt: result.updatedAt }),
+    }
+  }
+  return {
+    ok: true,
+    endpoint,
+    configured,
+    ...(result.updatedAt === undefined ? {} : { updatedAt: result.updatedAt }),
+  }
+}
+
 function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
   webhook: ChatAiReplyDefaultWebhookState
   text: string
@@ -73,10 +159,14 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
   saving: boolean
   error: string | null
   canConfigure: boolean
+  /** 「托管应用环境」候选实例；地址已脱敏，真实地址只在主进程里。 */
+  targets: AppsWebhookTarget[]
+  instanceId: string
   save: () => Promise<void>
   changeText: (value: string) => void
   focusText: (value: string) => void
   blurText: () => void
+  pickInstance: (instanceId: string) => void
 } {
   const [webhook, setWebhook] = useState<ChatAiReplyDefaultWebhookState>({
     configured: input.initialWebhook?.configured === true,
@@ -87,11 +177,23 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [targets, setTargets] = useState<AppsWebhookTarget[]>([])
+  const [instanceId, setInstanceId] = useState('')
   const savingRef = useRef(false)
   const canConfigure = input.chatUsername.trim() !== ''
     && (input.onLoadWebhook !== undefined
       || input.onSaveWebhook !== undefined
       || runtimeCapabilities().isDesktop === true)
+
+  // 托管实例清单只在弹窗打开时拉一次：关闭态不该为了一个下拉去打 IPC。
+  useEffect(() => {
+    if (!input.open) return
+    let alive = true
+    void apiAppsWebhookTargets().then((result) => {
+      if (alive) setTargets(Array.isArray(result.targets) ? result.targets : [])
+    })
+    return () => { alive = false }
+  }, [input.open])
 
   useEffect(() => {
     if (!input.open) return
@@ -178,29 +280,22 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
     if (!dirty) setText(webhook.endpoint)
   }
 
+  /** 选择托管实例：地址框只显示脱敏值，保存时由主进程换成真实地址。 */
+  const pickInstance = (nextId: string): void => {
+    setInstanceId(nextId)
+    setError(null)
+    if (nextId === '') {
+      setDirty(false)
+      setText(webhook.endpoint)
+      return
+    }
+    const hit = targets.find((item) => item.id === nextId)
+    setDirty(false)
+    setText(hit?.maskedUrl ?? '')
+  }
+
   const save = async (): Promise<void> => {
     if (input.saving || savingRef.current || loading) return
-    const value = text.trim()
-    if (value === '' || value.includes('***')) {
-      setError('请输入新的完整 Webhook 地址；留空或保留脱敏值不会覆盖已保存的 token')
-      return
-    }
-    let parsed: URL
-    try {
-      parsed = new URL(value)
-    } catch {
-      setError('请输入完整的 Feather Webhook 地址')
-      return
-    }
-    if (
-      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')
-      || parsed.username !== ''
-      || parsed.password !== ''
-      || !/^\/webhook\/[^/]+\/?$/i.test(parsed.pathname)
-    ) {
-      setError('Webhook 必须是 Feather 的 /webhook/<token> 地址')
-      return
-    }
     const scope: ChatAiReplyWebhookScope = {
       chatUsername: input.chatUsername.trim(),
       ...(input.chatName.trim() === '' ? {} : { chatName: input.chatName.trim() }),
@@ -209,42 +304,36 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
       setError('缺少当前会话标识，暂时无法保存默认 Webhook')
       return
     }
-    const saver = input.onSaveWebhook !== undefined
-      ? (webhookUrl: string) => input.onSaveWebhook!({ ...scope, webhookUrl })
-      : runtimeCapabilities().isDesktop === true
-        ? (webhookUrl: string) => apiSaveChatAiReplyDefaultWebhook({ ...scope, webhookUrl })
-        : undefined
-    if (saver === undefined) {
-      setError('当前环境不支持配置默认 Webhook，请到电脑端操作')
-      return
-    }
-
     savingRef.current = true
     setSaving(true)
     setError(null)
     try {
-      const result = await saver(value)
+      const result = await persistWebhook({
+        instanceId,
+        scope,
+        text,
+        ...(input.onSaveWebhook === undefined ? {} : { onSaveWebhook: input.onSaveWebhook }),
+      })
       if (!result.ok) {
-        if (result.configured) {
-          const endpoint = maskWebhookEndpoint(result.endpoint ?? value)
+        // 「已保存但绑定失败」这类半成功要先把地址反映到界面上，再报错。
+        if (result.configured && result.endpoint !== undefined) {
           setWebhook({
             configured: true,
-            endpoint,
+            endpoint: result.endpoint,
             ...(result.updatedAt === undefined ? {} : { updatedAt: result.updatedAt }),
           })
-          setText(endpoint)
+          setText(result.endpoint)
           setDirty(false)
         }
-        setError(result.error ?? '默认 Webhook 保存失败')
+        setError(result.error)
         return
       }
-      const endpoint = maskWebhookEndpoint(result.endpoint ?? value)
       setWebhook({
-        configured: result.configured !== false,
-        endpoint,
+        configured: result.configured,
+        endpoint: result.endpoint,
         ...(result.updatedAt === undefined ? {} : { updatedAt: result.updatedAt }),
       })
-      setText(endpoint)
+      setText(result.endpoint)
       setDirty(false)
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError))
@@ -262,10 +351,13 @@ function useChatAiReplyWebhookConfig(input: ChatAiReplyWebhookConfigInput): {
     saving,
     error,
     canConfigure,
+    targets,
+    instanceId,
     save,
     changeText,
     focusText,
     blurText,
+    pickInstance,
   }
 }
 
@@ -307,10 +399,6 @@ function KnowledgeBaseSection(props: {
         />
         <span className={css.kbTitle}>知识库参与回复</span>
       </label>
-      <p className={css.hint}>
-        勾选后，每轮自动回复会先用当前会话最近的对话检索所选知识库，命中片段作为
-        事实依据交给模型；材料只作参考，不能覆盖安全规则。没有命中时按普通对话回复，不会编造。
-      </p>
       <label className={css.field}>
         <span>参与回复的知识库</span>
         <select
@@ -353,7 +441,9 @@ export function ChatAiReplySettingsDialog(props: {
   initialKbId: number
   /** 上下文时间窗（小时）；0 = 不限。 */
   initialContextWindowHours: number
-  /** 已脱敏的默认大肥鱼 Webhook；由外层状态传入时可避免额外一次读取。 */
+  initialHandoff: string
+  initialBlocked: string
+  /** 已脱敏的默认 Webhook；由外层状态传入时可避免额外一次读取。 */
   initialWebhook?: ChatAiReplyDefaultWebhookState
   /** 测试或设置宿主注入；缺省时桌面端直接读取本机 Remote。 */
   onLoadWebhook?: (options: ChatAiReplyWebhookScope) => Promise<ChatAiReplyDefaultWebhookState>
@@ -371,6 +461,8 @@ export function ChatAiReplySettingsDialog(props: {
   const [kbEnabled, setKbEnabled] = useState(props.initialKbEnabled)
   const [kbId, setKbId] = useState(props.initialKbId)
   const [contextWindowHours, setContextWindowHours] = useState(props.initialContextWindowHours)
+  const [handoff, setHandoff] = useState(props.initialHandoff || SAFETY_HANDOFF_DEFAULT)
+  const [blocked, setBlocked] = useState(props.initialBlocked)
   const [localError, setLocalError] = useState<string | null>(null)
   const webhookConfig = useChatAiReplyWebhookConfig(props)
   const busy = props.saving || webhookConfig.saving
@@ -383,6 +475,8 @@ export function ChatAiReplySettingsDialog(props: {
     setKbEnabled(props.initialKbEnabled)
     setKbId(props.initialKbId)
     setContextWindowHours(props.initialContextWindowHours)
+    setHandoff(props.initialHandoff || SAFETY_HANDOFF_DEFAULT)
+    setBlocked(props.initialBlocked)
     setLocalError(null)
   }, [
     props.open,
@@ -392,6 +486,8 @@ export function ChatAiReplySettingsDialog(props: {
     props.initialKbEnabled,
     props.initialKbId,
     props.initialContextWindowHours,
+    props.initialHandoff,
+    props.initialBlocked,
   ])
 
   const closeIfIdle = (): void => {
@@ -416,6 +512,8 @@ export function ChatAiReplySettingsDialog(props: {
       kbEnabled,
       kbId: kbEnabled ? kbId : 0,
       contextWindowHours,
+      safetyHandoff: handoff.trim() || SAFETY_HANDOFF_DEFAULT,
+      safetyBlocked: blocked.trim(),
     })
     // onSave 返回时 hook 的 saving 状态可能还没完成下一帧渲染；保存成功的关闭
     // 不再二次读取 props.saving，否则会偶发“保存成功但弹窗不关”。
@@ -423,11 +521,11 @@ export function ChatAiReplySettingsDialog(props: {
   }
 
   return (
-    <Dialog
+    <Drawer
       open={props.open}
       onClose={closeIfIdle}
-      title="AI 回复设置"
-      className={css.settingsDialog}
+      title={`AI 回复设置 · ${props.chatName || '当前会话'}`}
+      width={480}
       footer={(
         <div className={css.actions}>
           <Button
@@ -452,11 +550,6 @@ export function ChatAiReplySettingsDialog(props: {
       )}
     >
       <div className={css.form}>
-        <p className={css.hint}>
-          为「{props.chatName || '当前会话'}」设置回复人格与知识库参与。人格只影响角色、
-          语气和措辞；知识库材料只作事实依据。两者都不会绕过聊天正文防注入、隐私脱敏和
-          回复格式等安全规则。
-        </p>
         <PersonaPresetPicker
           disabled={busy}
           draft={{ name, prompt }}
@@ -474,7 +567,7 @@ export function ChatAiReplySettingsDialog(props: {
             value={name}
             disabled={busy}
             onChange={(event) => { setName(event.target.value) }}
-            placeholder="例如：温柔客服、专业顾问、熟人聊天"
+            placeholder="留空使用内置人格"
           />
         </label>
         <label className={css.field}>
@@ -486,18 +579,13 @@ export function ChatAiReplySettingsDialog(props: {
             value={prompt}
             disabled={busy}
             onChange={(event) => { setPrompt(event.target.value) }}
-            placeholder={'例如：\n· 用自然、简短的口语回复\n· 称呼对方为“你”\n· 先回应情绪，再给出下一步\n· 不确定的信息先询问，不要编造'}
+            placeholder="角色、语气和措辞"
           />
           <span className={css.counter}>{prompt.length} / 4000</span>
         </label>
         <label className={css.toggleRow}>
           <span className={css.toggleCopy}>
             <span className={css.toggleLabel}>长回复自动分段</span>
-            <span className={css.toggleHint}>
-              模型只调用一次；生成后按空行和句意拆成每段
-              {props.chatUsername.endsWith('@chatroom') ? '25' : '80'} 个字以内，
-              段尾只保留问号或感叹号，再通过消息列表按顺序发送。
-            </span>
           </span>
           <input
             className={css.toggleInput}
@@ -525,11 +613,6 @@ export function ChatAiReplySettingsDialog(props: {
               <option key={option.hours} value={String(option.hours)}>{option.label}</option>
             ))}
           </select>
-          <span className={css.hint}>
-            只把这段时间内的消息当作上下文。窗口外（例如几天前交代过、但一直没下文的事）
-            不会进提示词，模型也就不会把它当成待办反复追问。
-            「不限」仍受最多 60 条与 6,000 token 预算约束。
-          </span>
         </label>
         <KnowledgeBaseSection
           enabled={kbEnabled}
@@ -537,20 +620,49 @@ export function ChatAiReplySettingsDialog(props: {
           disabled={busy}
           onChange={changeKb}
         />
+        <section className={css.webhookSection} aria-label="安全红线">
+          <span className={css.sectionTitle}>安全红线</span>
+          <div className={css.safetyLines}>
+            <span>合规</span>
+            <span>防注入</span>
+            <span>不私自承诺</span>
+            <span>不泄密</span>
+            <span>不贬低同行</span>
+          </div>
+          <label className={css.field}>
+            <span>查无资料时</span>
+            <input
+              className={css.input}
+              maxLength={80}
+              value={handoff}
+              disabled={busy}
+              aria-label="查无资料时的回复"
+              onChange={(event) => { setHandoff(event.target.value) }}
+            />
+          </label>
+          <label className={css.field}>
+            <span>禁说词</span>
+            <input
+              className={css.input}
+              maxLength={400}
+              value={blocked}
+              disabled={busy}
+              placeholder="竞品、内部词，逗号分隔"
+              aria-label="禁说词"
+              onChange={(event) => { setBlocked(event.target.value) }}
+            />
+          </label>
+        </section>
         {localError !== null && <ErrorState message={localError} />}
-        <p className={css.hint}>
-          两项都留空表示使用内置默认人格，名称仅用于界面标识。修改人格或知识库设置会取消
-          该会话尚未完成的旧回复，只影响之后新触发的消息；建议保存后用“立即检查 AI 回复”验证一次。
-        </p>
         <WebhookSettingsSection config={webhookConfig} saving={props.saving} />
         {props.error && <ErrorState message={props.error} />}
       </div>
-    </Dialog>
+    </Drawer>
   )
 }
 
 /**
- * 「当前会话默认大肥鱼 Webhook」区块。
+ * 「当前会话默认 Webhook」区块。
  *
  * 从设置弹窗本体拆出（单函数行数闸门）：它只是一段表单渲染 + 一处脱敏提示，
  * 状态全在 `useChatAiReplyWebhookConfig` 里，拆出来不改变任何行为。
@@ -562,9 +674,9 @@ function WebhookSettingsSection(props: {
   const { config, saving } = props
   const busy = config.loading || config.saving || saving
   return (
-    <section className={css.webhookSection} aria-label="当前会话默认大肥鱼 Webhook 配置">
+    <section className={css.webhookSection} aria-label="当前会话默认 Webhook 配置">
       <div className={css.sectionTitleRow}>
-        <span className={css.sectionTitle}>当前会话默认大肥鱼 Webhook</span>
+        <span className={css.sectionTitle}>当前会话默认 Webhook</span>
         <span
           className={css.webhookStatus}
           data-configured={config.webhook.configured ? 'true' : undefined}
@@ -579,11 +691,6 @@ function WebhookSettingsSection(props: {
               : '待配置'}
         </span>
       </div>
-      <p className={css.hint}>
-        为当前会话保存独立地址。开启 AI 回复后，回复正文会先写入消息列表；
-        没有会话级规则时使用这个默认地址投递。
-        已保存的 token 只显示脱敏值，输入新地址即可替换；留空或保留脱敏值不会覆盖原 token。
-      </p>
       <div className={css.webhookRow}>
         <input
           className={css.input}
@@ -596,7 +703,7 @@ function WebhookSettingsSection(props: {
           onChange={(event) => { config.changeText(event.target.value) }}
           onFocus={(event) => { config.focusText(event.currentTarget.value) }}
           onBlur={config.blurText}
-          aria-label="默认大肥鱼 Webhook 地址"
+          aria-label="默认 Webhook 地址"
         />
         <Button
           size="sm"
@@ -610,6 +717,23 @@ function WebhookSettingsSection(props: {
       {!config.canConfigure && (
         <p className={css.hint}>默认 Webhook 只允许在电脑端配置。</p>
       )}
+      <label className={css.field}>
+        <span>托管应用环境（可选）</span>
+        <select
+          className={css.input}
+          value={config.instanceId}
+          disabled={!config.canConfigure || busy}
+          onChange={(event) => { config.pickInstance(event.target.value) }}
+        >
+          <option value="">不使用 —— 手填上面的地址</option>
+          {config.targets.map((target) => (
+            <option key={target.id} value={target.id} disabled={!target.usable}>
+              席位 {String(target.seat)} · {target.name} — {target.maskedUrl || '未启动'}
+              {!target.enabled ? '（已停用）' : target.ready ? '' : '（未就绪）'}
+            </option>
+          ))}
+        </select>
+      </label>
       {config.error !== null && <ErrorState message={config.error} />}
     </section>
   )

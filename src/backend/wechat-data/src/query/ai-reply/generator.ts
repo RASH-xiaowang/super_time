@@ -2,7 +2,7 @@
  * AI 回复的模型生成边界。
  *
  * 默认走 DSH 当前对话模型；调用方可注入一个 provider-neutral generate 函数，
- * 以后接“大肥鱼”自己的推理接口时不必改 runner、消息列表或前端。
+ * 以后接别的推理接口时不必改 runner、消息列表或前端。
  * 生成器不碰微信库、不写消息列表、不直接发 Webhook。
  */
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
@@ -11,10 +11,14 @@ import type { ContentBlock, GenerateOptions } from '@deepseek-ai/dsh-llm'
 import { normalizeChatAiReplyText } from './context.ts'
 import type { ChatAiReplyContextImage } from './context.ts'
 import type { ChatAiReplyGenerationResult } from './types.ts'
+import { runReplyWithTools } from '../reply-tools/runtime.ts'
+import { DISABLED_REPLY_TOOLS_CONFIG } from '../reply-tools/types.ts'
+import type { ReplyToolsConfig } from '../reply-tools/types.ts'
 
 export type ChatAiReplyGenerateFn = (input: {
   system: string
   prompt: string
+  publicText?: string
   /** 已解码的图片；默认生成器会把它作为 OpenAI 兼容的 image_url 发送。 */
   images?: ChatAiReplyContextImage[]
   accountKey: string
@@ -25,6 +29,7 @@ export type ChatAiReplyGenerateFn = (input: {
 
 export interface ChatAiReplyGeneratorDeps {
   ctx: () => Context
+  toolConfig?: () => ReplyToolsConfig
 }
 
 /** 默认生成器：使用 DSH 设置中的对话模型，并限制单次输出长度。 */
@@ -76,6 +81,13 @@ export function createDefaultChatAiReplyGenerator(
       }
       const assembler = new BlockAssembler()
       try {
+        if (input.publicText !== undefined) {
+          const run = await runReplyWithTools({ llm: ctx.llm, options,
+            context: { publicText: input.publicText, config: deps.toolConfig?.() ?? DISABLED_REPLY_TOOLS_CONFIG }, outputMode: 'reply' })
+          const text = normalizeChatAiReplyText(run.text)
+          return text === '' ? { ok: false, text: '', error: '模型没有返回可用文本', model: modelLabel }
+            : { ok: true, text, model: modelLabel, toolCalls: run.observations, toolSources: run.sources }
+        }
         for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
       } catch (e) {
         if (input.signal?.aborted === true) {

@@ -130,10 +130,12 @@ describe('外壳行为没被改坏', () => {
     expect(shellTsx).toContain('active: requested')
   })
 
-  it('六个合并组都还在（没有被悄悄拆掉）', () => {
+  it('五个合并组都还在（资金往来已收成单页，不再占一个分段组）', () => {
     const panel = read('../WechatDataPanel.tsx')
-    for (const label of ['消息视图', '收藏与表情视图', '文件与存储视图', '资金往来视图', '群聊分析视图', '总结与报告视图']) {
+    for (const label of ['消息视图', '收藏与表情视图', '文件与存储视图', '群聊分析视图', '总结与报告视图']) {
       expect(panel, `合并组「${label}」不见了`).toContain(`ariaLabel="${label}"`)
     }
+    expect(panel, '资金往来应回到单页，不再挂分段条').not.toContain('ariaLabel="资金往来视图"')
+    expect(panel).toContain('<FundsView')
   })
 })

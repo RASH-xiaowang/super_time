@@ -81,34 +81,33 @@ function findMsgShard(dec: string, username: string): { db: string; table: strin
 }
 
 /** 通过消息 server_id 反查 appmsg <title>（真实文件名来源之一）。 */
-function resolveFileTitle(dec: string, username: string, svr: string): string {
+function resolveFileTitle(dec: string, username: string, svr: string, openDb?: (file: string) => DatabaseSync | null): string {
   if (!svr) return ''
   const sh = findMsgShard(dec, username)
   if (!sh) return ''
+  const db = openDb ? openDb(sh.db) : new DatabaseSync(sh.db, { readOnly: true })
+  if (!db) return ''
   try {
-    const db = new DatabaseSync(sh.db, { readOnly: true })
-    try {
-      const cols = new Set((db.prepare('PRAGMA table_info(' + sh.table + ')').all() as Array<{ name: string }>).map(r => r.name))
-      if (!cols.has('server_id')) return ''
-      const content = cols.has('message_content') ? 'message_content' : 'content'
-      // 数字 server_id 先走整型等值（命中索引），文本/未命中再回退 CAST。
-      let numeric: bigint | null = null
-      if (/^\d+$/.test(svr)) {
-        try { numeric = BigInt(svr) } catch { /* keep text path */ }
-      }
-      let row: { c?: unknown } | undefined
-      if (numeric !== null) {
-        row = db.prepare('SELECT ' + content + ' AS c FROM ' + sh.table + ' WHERE server_id = ? LIMIT 1').get(numeric)
-      }
-      if (!row) {
-        row = db.prepare('SELECT ' + content + ' AS c FROM ' + sh.table + ' WHERE CAST(server_id AS TEXT) = ? LIMIT 1').get(svr)
-      }
-      return row ? xmlTitle(decodeMsgText(row.c)) : ''
-    } finally {
-      db.close()
+    const cols = new Set((db.prepare('PRAGMA table_info(' + sh.table + ')').all() as Array<{ name: string }>).map(r => r.name))
+    if (!cols.has('server_id')) return ''
+    const content = cols.has('message_content') ? 'message_content' : 'content'
+    // 数字 server_id 先走整型等值（命中索引），文本/未命中再回退 CAST。
+    let numeric: bigint | null = null
+    if (/^\d+$/.test(svr)) {
+      try { numeric = BigInt(svr) } catch { /* keep text path */ }
     }
+    let row: { c?: unknown } | undefined
+    if (numeric !== null) {
+      row = db.prepare('SELECT ' + content + ' AS c FROM ' + sh.table + ' WHERE server_id = ? LIMIT 1').get(numeric) as { c?: unknown } | undefined
+    }
+    if (!row) {
+      row = db.prepare('SELECT ' + content + ' AS c FROM ' + sh.table + ' WHERE CAST(server_id AS TEXT) = ? LIMIT 1').get(svr) as { c?: unknown } | undefined
+    }
+    return row ? xmlTitle(decodeMsgText(row.c)) : ''
   } catch {
     return ''
+  } finally {
+    if (!openDb) db.close()
   }
 }
 /**
@@ -313,13 +312,26 @@ async function computeStorageStats(
     const sizeToName = await loadFileNamesBySize(wechatBaseDir, decryptedDir)
     storageMark('file-names', sizeToName.size)
     const large_files: LargeFile[] = []
+    const titleDbs = new Map<string, DatabaseSync>()
+    const openTitleDb = (file: string): DatabaseSync | null => {
+      const cached = titleDbs.get(file)
+      if (cached) return cached
+      try {
+        const opened = new DatabaseSync(file, { readOnly: true })
+        titleDbs.set(file, opened)
+        return opened
+      } catch {
+        return null
+      }
+    }
+    try {
     for (const r of bigRows) {
-      // P1-2：每条大文件都可能触发 `resolveFileTitle`，而它会**逐个消息分片**开库去找那条消息
-      // （最多 100 条 × 全部分片）—— 这一段是本页最贵的，逐条让出。
+      // 标题只在压缩包名和文件名索引都没有时才查消息。同一分片的库在这 100 条里复用，
+      // 不再每条都打开再关掉。
       await yieldToLoop()
       const packedName = parsePackedName(r.p ?? null)
       const cat = classifyType(r.ty, packedName)
-      let name = packedName || sizeToName.get(r.s) || resolveFileTitle(decryptedDir, r.u, r.svr) || ''
+      let name = packedName || sizeToName.get(r.s) || resolveFileTitle(decryptedDir, r.u, r.svr, openTitleDb) || ''
       if (!name) {
         if (cat === '图片' || cat === '视频' || cat === '音频' || cat === '表情') name = '[' + cat + ']'
         else if (r.di && r.di !== '0') name = r.di + '.dat'
@@ -334,6 +346,11 @@ async function computeStorageStats(
         create_time: r.ct,
         size: r.s,
       })
+    }
+    } finally {
+      for (const opened of titleDbs.values()) {
+        try { opened.close() } catch { /* 标题库关掉失败不影响统计结果 */ }
+      }
     }
     storageMark('large-files', large_files.length)
 

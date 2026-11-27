@@ -149,7 +149,6 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
     <div className={kitCss.panelShell}>
       <PanelHeader
         title="待办日程"
-        desc="从最近 7 天聊天提取待办（本地关键词匹配，不调用模型）"
         actions={(
           <>
             <Button variant="primary" onClick={() => { void extract() }} disabled={extracting}>
@@ -228,7 +227,7 @@ export function TasksPanel({ onOpenChat }: { onOpenChat?: (username: string, loc
       <HandoffRemindList />
       <div className={css.fill}>
         <Card flush>
-          {!tasksLoading && tasks.length === 0 && !error && !readError && <EmptyState title="暂无待办" desc="点右上角「提取待办」从最近 7 天聊天里找，或在上方输入框手动添加一条" />}
+          {!tasksLoading && tasks.length === 0 && !error && !readError && <EmptyState title="暂无待办" />}
           <div className={css.list}>
             {tasks.map(t => (
               <div key={t.id} className={css.taskRow} data-status={t.status}>

@@ -52,6 +52,8 @@ function stateFor(chatUsername: string): ChatAiReplyState {
     kbEnabled: false,
     kbId: 0,
     contextWindowHours: 0,
+    safetyHandoff: '抱歉我不太清楚，建议为您转接人工',
+    safetyBlocked: '',
     revision: 1,
     updatedAt: 1,
     cursor: '',

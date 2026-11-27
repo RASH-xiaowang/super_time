@@ -54,12 +54,9 @@ const panelAll = [
 ].join('\n')
 
 describe('同备注编号边：图例 / 开关 / 名册三处都在', () => {
-  it('图例里给这类线一个名字（金虚线 = 同备注编号）', () => {
-    expect(panelAll).toContain('css.legendLineGold')
-    expect(panelAll).toContain('金虚线 = 同备注编号')
-    expect(css, '.legendLineGold 没定义').toMatch(/\.legendLineGold\s*\{/)
-    // 图例本身也画成虚线，否则「设成实线的图例 + 虚线画布」对不上
-    expect(css).toMatch(/\.legendLineGold\s*\{[^}]*repeating-linear-gradient/)
+  it('社交图谱不再把线型说明铺在画面上', () => {
+    expect(panelAll).not.toContain('金虚线 = 同备注编号')
+    expect(panelAll).toContain('同备注编号连边')
   })
 
   it('设置里有独立的开关，并且它是「结构参数」要进 useMemo 依赖', () => {

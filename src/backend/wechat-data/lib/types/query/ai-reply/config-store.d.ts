@@ -54,6 +54,10 @@ export declare function saveChatAiReplySetting(decryptedDir: string, input: {
     kbId?: number;
     /** 上下文时间窗（小时）；省略时保留当前值，0/非法值表示不限。 */
     contextWindowHours?: number;
+    /** 省略时保留当前转人工话术。 */
+    safetyHandoff?: string;
+    /** 省略时保留当前禁说词。 */
+    safetyBlocked?: string;
     expectedRevision?: number;
     cursor?: string;
 }): ChatAiReplyMutationResult;
@@ -77,6 +81,10 @@ export declare function saveChatAiReplyPersona(decryptedDir: string, input: {
     kbId?: number;
     /** 上下文时间窗（小时）；省略时保留当前值，0 表示不限。 */
     contextWindowHours?: number;
+    /** 省略时保留当前转人工话术。 */
+    safetyHandoff?: string;
+    /** 省略时保留当前禁说词。 */
+    safetyBlocked?: string;
     expectedRevision?: number;
 }): ChatAiReplyMutationResult;
 export type ChatAiReplyRunStateUpdateResult = 'updated' | 'guard-mismatch' | 'transient';

@@ -52,3 +52,8 @@ export declare function saveConfig(decryptedDir: string, patch: Record<string, u
     ok: boolean;
     error?: string;
 };
+/** Server-only reply-tool settings. Never merged into getConfig/renderer snapshots.
+ * Public provider/access choices live in config.json; keys only in secrets.json/env.
+ * Empty provider is intentionally disabled (no assumption of free commercial access).
+ */
+export declare function readReplyToolsConfig(decryptedDir: string): import('../query/reply-tools/types.ts').ReplyToolsConfig;

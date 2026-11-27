@@ -42,6 +42,7 @@
   min-height: 0;
   display: flex;
   gap: 16px;
+  overflow: hidden;
 }
 
 /* 导航外壳：导航自己滚。`.navFade` 只保留给 820px 断点契约，不再绘制装饰渐隐。 */
@@ -305,6 +306,16 @@
    理由与 kit.module.css 的 `.panelShell > *` 相同。 */
 .mainScroll > * { flex-shrink: 0; }
 
+/* AI 大模型比其他节高。把它收进右区的同一块高度里滚动，
+   不能撑高 `.layout`，否则底部保存条会被顶出弹窗。 */
+.mainScroll > [data-settings-section='ai'] {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
 /*
  * 同组内相邻卡片：12px。
  *
@@ -522,86 +533,91 @@
   gap: 6px;
   min-width: 0;
 }
-/* rows */
+/* 每一项竖排：名称、说明、输入、按钮各自占满一行。
+   不再把说明和按钮并排，否则说明列会被压到几个字宽，中文逐字竖排。 */
 .row {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  /* 弹窗宽度随窗口变：窄下来时让值/按钮整体折到下一行，而不是把同一行的元素挤扁。
-     （行内不会再出现「必须一行」的刚性布局。） */
-  flex-wrap: wrap;
-  padding: 8px 4px 0;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 12px 0;
   min-width: 0;
+  border-bottom: 1px solid color-mix(in srgb, var(--nm-border) 72%, transparent);
 }
+.row:last-child { border-bottom: 0; padding-bottom: 0; }
 .rowName {
+  flex: none;
   font-size: 12px;
   font-weight: 600;
+  line-height: 1.45;
   color: var(--nm-text-1);
+  white-space: normal;
+  min-width: 0;
+}
+.row > .btnFx,
+.row > button {
+  align-self: flex-start;
+  width: auto;
+  max-width: 100%;
   white-space: nowrap;
-  min-width: 132px;
 }
 .rowMeta {
+  flex: none;
+  width: 100%;
   font-size: 12px;
+  line-height: 1.55;
   color: var(--nm-text-2);
   min-width: 0;
-  /* 原为 `white-space: nowrap` + 省略号：长目录会被截成「D:\Tencent\Documents\xwechat_…」，
-     用户看不到全貌。改成**最多折两行** —— 一行装得下就一行，装不下折两行，两行仍装不下才省略。 */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  white-space: normal;
+  overflow: visible;
   overflow-wrap: anywhere;
 }
 .rowMetaWarn {
   color: var(--nm-amber);
 }
 .rowNote {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--nm-text-2);
-  /* 与 .noticeDetailItem / .whisperBannerDesc 同为 11px 辅助说明，行高统一 16px（第 69 轮） */
-  line-height: 16px;
+  line-height: 1.55;
   width: 100%;
+  white-space: normal;
 }
 
 /* realtime decrypt progress — 固定高度占位槽,空闲/进度/结果永不跳变 */
 .slot {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 30px;
-  padding: 0 4px;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 28px;
+  height: auto;
+  padding: 0;
   min-width: 0;
 }
+.slotIdle,
+.slotDone,
+.slotOk,
+.slotErr {
+  flex: 1 1 100%;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow: visible;
+}
 .slotIdle {
-  font-size: 11px;
   color: var(--nm-text-2);
-  opacity: 0.75;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .slotDone {
-  font-size: 11px;
   color: var(--nm-text-1);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .slotOk {
-  font-size: 11px;
   color: var(--nm-success);
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .slotErr {
-  font-size: 11px;
   color: var(--nm-danger);
   font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .progressTrack {
   flex: 1;
@@ -627,35 +643,34 @@
   font-variant-numeric: tabular-nums;
 }
 .progressItem {
-  font-size: 11px;
+  flex: 1 1 160px;
+  font-size: 12px;
+  line-height: 1.45;
   color: var(--nm-text-2);
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 180px;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-family: var(--nm-font-mono, monospace);
 }
 
-/* stats chips */
+/* 页首摘要：三列等宽，数字在上、说明在下，不跟表单抢行。 */
 .stats {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  padding: 10px 4px 2px;
-  flex-wrap: wrap;
+  padding: 0 0 4px;
 }
 .statChip {
-  flex: 1;
-  min-width: 90px;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  align-items: center;
-  padding: 8px 6px;
+  align-items: flex-start;
+  padding: 10px 12px;
   border-radius: var(--nm-r-md);
-  background: var(--nm-bg-hover);
   border: 1px solid var(--nm-border);
-  transition: all 0.15s;
+  background: var(--nm-bg-card);
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 .statChip:hover {
   border-color: var(--nm-border-hover);
@@ -670,8 +685,9 @@
 }
 /* FancyUI field sizing (className 落在 wrapper,实际输入框由 ui-primitives 主题绘制) */
 .input {
-  flex: 1;
-  min-width: 140px;
+  flex: none;
+  width: 100%;
+  min-width: 0;
 }
 .inputNarrow {
   width: 110px;
@@ -692,13 +708,13 @@
 .btnFx:hover:not(:disabled) {
   border-color: var(--nm-border-hover);
 }
-.btnFixed {
-  min-width: 116px;
-  justify-content: center;
-}
+.btnFixed,
 .btnFixedSm {
-  min-width: 92px;
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 0;
   justify-content: center;
+  white-space: nowrap;
 }
 .spin {
   width: 12px;
@@ -970,4 +986,29 @@
   .viewTitle { font-size: 14px; }
   .viewValue { display: none; }
   .viewStatus { display: none; }
+  .stats { grid-template-columns: 1fr; }
+}
+
+/* 弹窗里页头已经写出当前功能名，卡片不再重复一层标题框。
+   正文直接从摘要和表单开始，外框由工作区承担。 */
+.root[data-in-dialog] .card {
+  content-visibility: visible;
+  contain: none;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+.root[data-in-dialog] .cardHd { display: none; }
+.root[data-in-dialog] .cardBody { padding: 0; }
+.root[data-in-dialog] .embedPane {
+  gap: 16px;
+}
+.root[data-in-dialog] .embedPane :global([class*='toggle']) {
+  height: auto;
+  white-space: normal;
+  line-height: 1.5;
+}
+.root[data-in-dialog] .embedPane > * {
+  min-width: 0;
 }

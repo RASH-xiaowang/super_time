@@ -71,7 +71,7 @@ describe('panel-loaders：按 tab 懒加载不能被重新长回静态入口', (
      * `SummaryWorkbench`（一个时间范围驱动的工作台）。两个旧 loader 保留导出
      * （删导出会连带改一堆守卫断言），但 renderTab 里只剩 `SummaryWorkbench`。
      */
-    const CONSUMED_ELSEWHERE = new Set(['SettingsPanel', 'PrivacyPanel', 'DailySummaryPanel', 'PeriodSummaryPanel'])
+    const CONSUMED_ELSEWHERE = new Set(['SettingsPanel', 'PrivacyPanel', 'DailySummaryPanel', 'PeriodSummaryPanel', 'LedgerPanel', 'RecordsPanel'])
     const expected = [...new Set(entries.map((e) => e.name).filter((n) => !CONSUMED_ELSEWHERE.has(n))), 'MergedSections'].sort()
     // 27 = 合并前 28 个面板 − 2 个旧总结面板 + 1 个 SummaryWorkbench。
     atLeast(used.length, 27, 'renderTab 的面板调用数')

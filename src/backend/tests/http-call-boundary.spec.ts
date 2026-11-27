@@ -12,9 +12,8 @@ const { isHttpCallAllowed, REMOTE_DENIED_CODE } = require(resolve(ROOT, 'src/bac
 const source = ts.createSourceFile('http-server.js', readFileSync(resolve(ROOT, 'src/backend/http-server.js'), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
 const factory = source.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === 'createCallHandler')
 if (!factory) throw new Error('Missing actual HTTP route factory')
-const agent = ['getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory', 'addAgentPromise', 'setAgentProposalStatus', 'sendAgentDraft', 'sendAgentProposal']
 describe('actual HTTP call-handler denial path, injected request/body only, no network', () => {
-  for (const [method, full] of [...agent.flatMap(method => [[method, false], [method, true]] as const), ['getWechatConfig', false], ['not-a-method', false]] as Array<readonly [string, boolean]>) {
+  for (const [method, full] of [['getWechatConfig', false], ['not-a-method', false], ['not-a-method', true]] as Array<readonly [string, boolean]>) {
     it(method + ' fullAccess=' + String(full) + ' is denied before license/backend/mutation work', async () => {
       const begin = vi.fn(() => { throw new Error('POLICY_BYPASS_REACHED_MUTATION') })
       const gatedCall = vi.fn(), sendJson = vi.fn()

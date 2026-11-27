@@ -15,6 +15,7 @@
  *  · 一批 8 个之外剩下的也必须排空（`while` 而不是只 splice 一次）；封面最多试 3 次。
  * @module moments-media-spec
  */
+import { getDataIdentitySnapshot } from '../cache.ts'
 import { StrictMode, act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -43,6 +44,7 @@ const {
   createCancellableHeavyRpcLane,
   createSnsOriginalResolver,
   enqueueIntersecting,
+  enqueueMomentsAhead,
   momentGridImages,
   momentImageSpec,
   momentLinkCardView,
@@ -53,6 +55,8 @@ const {
   videoCoverKey,
 } = await import('./moments-media.ts')
 type Media = ReturnType<typeof useMomentsMedia>
+
+const storageKey = (key: string): string => getDataIdentitySnapshot() + ':' + key + ':q[0,0,0,false]'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 
@@ -370,6 +374,23 @@ describe('媒体队列与重活车道恢复', () => {
     }
   })
 
+  it('虚拟窗口下方的动态会提前入队，已经在取的键不会再进一次', () => {
+    const rows = [
+      { kind: 'day' as const, day: '今天' },
+      { kind: 'moment' as const, m: { images: [{ md5: 'on-screen' }] } },
+      { kind: 'moment' as const, m: { images: [{ md5: 'next-a' }, { md5: 'next-b' }] } },
+      { kind: 'moment' as const, m: { images: [{ md5: 'later' }] } },
+    ]
+    const specOf = new Map<string, { md5: string; kind: 'img' }>()
+    const fetched = new Set<string>(['on-screen'])
+    const active = new Set<string>(['on-screen'])
+    const queue = { current: [] as Array<{ key: string; md5: string; kind: 'img' }> }
+    expect(enqueueMomentsAhead(rows as never, 1, specOf as never, fetched, active, queue as never)).toBe(true)
+    expect(queue.current.map((item) => item.key)).toEqual(['next-a', 'next-b', 'later'])
+    expect(specOf.has('next-a')).toBe(true)
+    expect(enqueueMomentsAhead(rows as never, 1, specOf as never, fetched, active, queue as never)).toBe(false)
+  })
+
   it('重活车道取消后跳过已排队但尚未开始的任务', async () => {
     let cancelled = false
     let releaseFirst!: () => void
@@ -412,7 +433,7 @@ function Harness(props: {
   viewer: Parameters<typeof useMomentsMedia>[0]['viewer']
   specs: Array<[string, { md5: string; kind: 'img' | 'video' | 'comment'; seed?: string; thumb?: string }]>
 }): React.JSX.Element {
-  media = useMomentsMedia({ moments: props.moments, viewer: props.viewer, scrollRef: { current: null }, groups: [1], renderKey: '0-0', detailKey: '' })
+  media = useMomentsMedia({ moments: props.moments, viewer: props.viewer, scrollRef: { current: null }, groups: [1], renderKey: '0-0', detailKey: '', rows: [], windowEnd: -1 })
   return createElement('div', null, createElement(Register, { specs: props.specs }),
     createElement('span', { 'data-imgs': Object.keys(media.snsImgs).sort().join(',') }),
     createElement('span', { 'data-originals': Array.from(media.snsOriginals).sort().join(',') }))
@@ -469,7 +490,7 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     mocks.snsMediaCacheGet.mockResolvedValue('data:本地原图')
     render({ specs: [img('k1')] })
     await flush()
-    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith('k1', true)
+    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith(storageKey('k1'), true)
     expect(mocks.apiGetSnsImageDataUrl, '本地已有原图时不该再出网').not.toHaveBeenCalled()
     expect(imgs()).toEqual(['k1'])
   })
@@ -490,7 +511,7 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     mocks.snsMediaCacheGet.mockResolvedValueOnce('data:from-idb')
     render({ specs: [img('k1'), img('k2')] })
     await flush()
-    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith('k1', true)
+    expect(mocks.snsMediaCacheGet).toHaveBeenCalledWith(storageKey('k1'), true)
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.filter((c) => (c[0] as { md5: string }).md5 === 'k1')).toHaveLength(0)
     expect(mocks.apiGetSnsImageDataUrl.mock.calls.filter((c) => (c[0] as { md5: string }).md5 === 'k2')).toHaveLength(1)
     const opts = mocks.apiGetSnsImageDataUrl.mock.calls[0]?.[0] as { offline?: boolean } | undefined
@@ -510,13 +531,13 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     await flush()
     const keys = mocks.snsMediaCacheGetMany.mock.calls[0]?.[0] as readonly string[] | undefined
     expect(keys?.length, '一次恢复的键数没有上限').toBe(80)
-    expect(keys?.[0]).toBe('m0')
+    expect(keys?.[0]).toBe(storageKey('m0'))
     expect(imgs(), '首屏第一张被后面的键挤掉了').toContain('m0')
   })
 
   it('同批里一张 RPC 卡住时，已命中的本地原图也必须立刻上屏（不能等整批 Promise.all）', async () => {
     let releaseSlow: (() => void) | null = null
-    mocks.snsMediaCacheGet.mockImplementation(async (key: string) => (key === 'cached' ? 'data:cached' : null))
+    mocks.snsMediaCacheGet.mockImplementation(async (key: string) => (key === storageKey('cached') ? 'data:cached' : null))
     mocks.apiGetSnsImageDataUrl.mockImplementationOnce(() => new Promise((resolve) => {
       releaseSlow = () => { resolve({ url: 'data:slow' }) }
     }))
@@ -563,7 +584,7 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
   it('解出来要写回 IndexedDB，供下次进面板秒显（并记下「这是不是缩略图」）', async () => {
     render({ specs: [img('k1')] })
     await flush()
-    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:k1', false)
+    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith(storageKey('k1'), 'data:k1', false)
   })
 
   it('后端降级给了缩略图 ⇒ 写回时标成 thumb，好让下一轮去换原图', async () => {
@@ -571,16 +592,16 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     render({ specs: [img('k1')] })
     await flush()
     // thumb=true 必须被记下来 —— 否则这份缩略图会永久遮住后来的原图
-    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith('k1', 'data:thumb', true)
+    expect(mocks.snsMediaCacheSet).toHaveBeenCalledWith(storageKey('k1'), 'data:thumb', true)
   })
 
   it('进面板时无论有网无网都先做 IDB 原图批量恢复（本地优先）', async () => {
     setOnline(true)
     const m = mk({ tid: '1', images: [{ md5: 'cached', url: 'u', thumb: 't', key: 'k' }] })
-    mocks.snsMediaCacheGetMany.mockResolvedValue({ cached: 'data:cached' })
+    mocks.snsMediaCacheGetMany.mockResolvedValue({ [storageKey('cached')]: 'data:cached' })
     render({ moments: [m] })
     await flush()
-    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith(['cached'], true)
+    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith([storageKey('cached')], true)
     expect(imgs()).toContain('cached')
   })
 
@@ -597,12 +618,12 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
 
   it('IDB 批量恢复命中后，兜底路径不再重复解同一条（有网/无网都成立）', async () => {
     const m = mk({ tid: '1', images: [{ md5: 'cached', url: 'u', thumb: 't', key: 'k' }] })
-    mocks.snsMediaCacheGetMany.mockResolvedValueOnce({ cached: 'data:cached' })
+    mocks.snsMediaCacheGetMany.mockResolvedValueOnce({ [storageKey('cached')]: 'data:cached' })
     // 先只给列表、不给 spec：这就是「卡片还没渲染到那一格」时 IDB 恢复要独立起作用的形状
     setOnline(false)
     render({ moments: [m] })
     await flush()
-    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith(['cached'], true)
+    expect(mocks.snsMediaCacheGetMany).toHaveBeenCalledWith([storageKey('cached')], true)
     expect(imgs()).toContain('cached')
     // 已经被 IDB 命中的键，兜底路径不该再去解一遍（这一步同时证明去重集合跨渲染活着）
     render({ moments: [m], specs: [img('cached')] })
@@ -680,7 +701,7 @@ describe('useMomentsMedia：兜底解密路径（jsdom 里没有 IntersectionObs
     expect(mocks.apiGetSnsImageDataUrl, '网格的 fetched 挡住了灯箱回源').toHaveBeenCalledTimes(2)
     expect(media?.snsImgs['thumb-key']).toBe('data:original')
     expect(originals()).toContain('thumb-key')
-    expect(mocks.snsMediaCacheSet).toHaveBeenLastCalledWith('thumb-key', 'data:original', false)
+    expect(mocks.snsMediaCacheSet).toHaveBeenLastCalledWith(storageKey('thumb-key'), 'data:original', false)
   })
 
   it('灯箱原图请求失败后回退当前缩略图，第二次不再打后端', async () => {

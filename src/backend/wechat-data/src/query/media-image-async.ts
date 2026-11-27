@@ -111,9 +111,9 @@ export async function decodeDatBytesAsync(
   data: Uint8Array,
   aesKey: Uint8Array | string | null,
   xorKey: number,
-  opts: { wxgf?: WxgfTranscoderAsync } = {},
+  opts: { wxgf?: WxgfTranscoderAsync; snsMemory?: boolean } = {},
 ): Promise<{ bytes: Uint8Array; format: string } | { error: string }> {
-  const payload = decodeDatPayload(data, aesKey, xorKey)
+  const payload = decodeDatPayload(data, aesKey, xorKey, opts)
   if ('error' in payload || payload.format !== 'wxgf') return payload
   const t = await (opts.wxgf ?? transcodeWxgfAsync)(payload.bytes)
   return renderWxgfTranscode(payload.bytes, t)

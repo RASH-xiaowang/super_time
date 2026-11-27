@@ -35,6 +35,18 @@ describe('问答检索范围浮层', () => {
     expect(picker).toContain('全部时间')
   })
 
+  it('范围标签悬浮后露出小叉，分别取消会话和时间', () => {
+    const composer = read('ask-composer.tsx')
+    expect(composer).toContain('aria-label={label}')
+    expect(composer).toContain('label="取消选择的会话"')
+    expect(composer).toContain("onClear={() => { onPickScope('') }}")
+    expect(composer).toContain('label="取消时间范围"')
+    expect(composer).toContain('onClear={onClearTime}')
+    const css = read('ask.module.css')
+    expect(css).toMatch(/\.scopeToken:hover \.scopeClear/)
+    expect(css).toMatch(/\.scopeClear \{[^}]*opacity: 0/s)
+  })
+
   it('浮层向上定位，输入框是定位祖先', () => {
     const css = read('ask-scope-picker.module.css')
     expect(css).toMatch(/\.panel \{[^}]*bottom: calc\(100% \+ 8px\)/s)

@@ -42,6 +42,8 @@ export interface ChatAiReplyController {
     kbEnabled: boolean
     kbId: number
     contextWindowHours: number
+    safetyHandoff: string
+    safetyBlocked: string
   }) => Promise<boolean>
 }
 
@@ -198,6 +200,8 @@ export function useChatAiReply(input: {
     kbEnabled: boolean
     kbId: number
     contextWindowHours: number
+    safetyHandoff: string
+    safetyBlocked: string
   }): Promise<boolean> => saveChatAiReplyPersona({
     state,
     latestRef,

@@ -24,9 +24,10 @@ import { IconCloseOutline16, IconSearchOutline16 } from '@deepseek-ai/dsh-client
 import { Avatar } from './chats-support.tsx'
 import {
   GROUP_TARGET_REQUIRED, KEYWORD_MAX_COUNT, KEYWORD_MAX_LEN, PHOTO_LIMIT_MAX, PHOTO_LIMIT_MIN,
-  TASK_NAME_MAX_LEN, addKeywordBatch, buildTaskInfoInputs, chatTypeLabel, clampPhotoLimit, defaultTaskName,
-  initialTaskCreateForm, photoHint, pickMembers, removeKeyword, removeTaskTarget, toggleTaskTarget,
-  validateTaskCreate, type TaskCreateForm, type TaskCreateSession, type TaskCreateTarget,
+  TASK_NAME_MAX_LEN, TEXT_LIMIT_MAX, TEXT_LIMIT_MIN, addKeywordBatch, buildTaskInfoInputs, chatTypeLabel,
+  clampPhotoLimit, clampTextLimit, defaultTaskName, initialTaskCreateForm, photoHint, pickMembers, removeKeyword,
+  removeTaskTarget, textHint, toggleTaskTarget, validateTaskCreate,
+  type TaskCreateForm, type TaskCreateSession, type TaskCreateTarget,
 } from './task-create.ts'
 import { withEnterprise } from './enterprise-identity.ts'
 import csscards from './chats-cards.module.css'
@@ -103,6 +104,37 @@ function PhotoLimitInput({ value, onChange }: {
         onChange={(e) => { onChange(clampPhotoLimit(Number(e.target.value))) }}
       />
       <span className={kitCss.textMeta}>张（0 = 不带图片，最多 {PHOTO_LIMIT_MAX} 张）</span>
+    </div>
+  )
+}
+
+/**
+ * 文本条数输入：与照片数量同一套「输入即夹取」。
+ *
+ * 口径是**触发人自己发的文本消息**（单聊 = 对方，群聊 = 被监听的那个成员）；
+ * 触发那条消息本身始终在记录里，这里配的是额外带上的最近 N 条历史文本。
+ * @param props.value - 当前条数（0..9）。
+ * @param props.onChange - 条数变化回调（已夹取）。
+ * @returns 数字输入框 + 单位说明。
+ */
+function TextLimitInput({ value, onChange }: {
+  value: number
+  onChange: (value: number) => void
+}): React.JSX.Element {
+  return (
+    <div className={css.photoInputRow}>
+      <input
+        type="number"
+        inputMode="numeric"
+        className={`${csscards.exportInput} ${css.photoInput}`}
+        value={String(value)}
+        min={TEXT_LIMIT_MIN}
+        max={TEXT_LIMIT_MAX}
+        step={1}
+        aria-label="文本条数"
+        onChange={(e) => { onChange(clampTextLimit(Number(e.target.value))) }}
+      />
+      <span className={kitCss.textMeta}>条（0 = 不额外带文本，最多 {TEXT_LIMIT_MAX} 条）</span>
     </div>
   )
 }
@@ -265,7 +297,7 @@ function TaskCreatedPanel({ outcomes, keywords, onClose }: {
       <p className={css.successDesc}>
         已创建 {okCount} 个独立任务{failedCount > 0 ? `，${String(failedCount)} 个未创建` : ''}。
         完善触发方式后启用：到「任务信息」里分别点「编辑」，配置 Webhook 地址或八爪鱼 RPA 并标记已完善，
-        命中各自目标的消息时才会投递。
+        命中各自目标的消息时才会投递。消息列表里已按同一会话和触发对象写好规则。
       </p>
       <div className={css.resultList}>
         {outcomes.map((item) => (
@@ -334,6 +366,7 @@ interface TaskCreateFormPanelProps {
   onRemoveKeyword: (index: number) => void
   onMentionMeOnlyChange: (checked: boolean) => void
   onPhotoLimitChange: (value: number) => void
+  onTextLimitChange: (value: number) => void
   onNameChange: (value: string) => void
   onMemberQueryChange: (value: string) => void
   onToggleMember: (member: GroupMember) => void
@@ -430,6 +463,11 @@ function TaskCreateFormPanel(props: TaskCreateFormPanelProps): React.JSX.Element
             <span className={kitCss.textMeta}>携带当前对象最近的照片数量</span>
             <PhotoLimitInput value={form.photoLimit} onChange={props.onPhotoLimitChange} />
             <p className={cssshell.exportHint}>{photoHint(form.photoLimit)}</p>
+          </div>
+          <div className={cssshell.exportField}>
+            <span className={kitCss.textMeta}>携带触发人最近的文本条数</span>
+            <TextLimitInput value={form.textLimit} onChange={props.onTextLimitChange} />
+            <p className={cssshell.exportHint}>{textHint(form.textLimit)}</p>
           </div>
         </div>
 
@@ -586,6 +624,7 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
       targetCount: session.type === 'group' ? form.targets.length : 1,
       keywords: merged.keywords,
       photoLimit: form.photoLimit,
+      textLimit: form.textLimit,
     })
     if (problem !== null) {
       setError(problem)
@@ -596,6 +635,7 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
       targets: form.targets,
       keywords: merged.keywords,
       photoLimit: form.photoLimit,
+      textLimit: form.textLimit,
       mentionMeOnly: form.mentionMeOnly,
       name: form.name,
     })
@@ -673,6 +713,7 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
   return (
     <div
       className={cssshell.calOverlay}
+      data-edge="right"
       data-st-dialog="task-create"
       role="dialog"
       aria-modal="true"
@@ -709,6 +750,7 @@ export function TaskCreateDialog({ session, onClose, onCreated }: TaskCreateDial
             onRemoveKeyword={(index) => { setForm((prev) => ({ ...prev, keywords: removeKeyword(prev.keywords, index) })) }}
             onMentionMeOnlyChange={(mentionMeOnly) => { setForm((prev) => ({ ...prev, mentionMeOnly })) }}
             onPhotoLimitChange={(photoLimit) => { setForm((prev) => ({ ...prev, photoLimit })) }}
+            onTextLimitChange={(textLimit) => { setForm((prev) => ({ ...prev, textLimit })) }}
             onNameChange={(name) => { setForm((prev) => ({ ...prev, name })) }}
             onMemberQueryChange={setMemberQuery}
             onToggleMember={toggleMember}

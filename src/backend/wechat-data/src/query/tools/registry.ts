@@ -23,6 +23,7 @@ import type { EmbedFn } from '../retrieval/embedding.ts'
 import { MESSAGE_TOOLS } from './message-tools.ts'
 import { AGGREGATE_TOOLS } from './aggregate-tools.ts'
 import { CONTACT_TOOLS } from './contact-tools.ts'
+import { SOCIAL_TOOLS } from './social-tools.ts'
 import { CONTENT_TOOLS } from './content-tools.ts'
 import { FUNDS_TOOLS } from './funds-tools.ts'
 import { CALLS_TOOLS } from './calls-tools.ts'
@@ -65,6 +66,7 @@ export function buildTools(opts: {
     ...MESSAGE_TOOLS,
     ...AGGREGATE_TOOLS,
     ...CONTACT_TOOLS,
+    ...SOCIAL_TOOLS,
     ...CONTENT_TOOLS,
     ...KB_TOOLS,
     makeSearchSemanticTool(opts.embedFn, opts.embedModel ?? ''),

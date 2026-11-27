@@ -110,6 +110,15 @@ const EXEMPT: Array<{ file: string; call: string; why: string }> = [
     why: '反馈经 onFlash/onError 参数回传，由 KbModelDialog 的 flash 回执与 err 横幅渲染',
   },
   {
+    // 默认 Webhook 的保存（2026-11-24）：`persistWebhook` 是**模块级纯决策函数**
+    // （两条保存路径 + URL 校验），返回 { ok, error } 给调用方；真正的用户反馈在
+    // `useChatAiReplyWebhookConfig` 的 catch/分支里统一 `setError` 渲染。
+    // 之所以把它搬出 hook：那个 hook 已经逼近单函数行数闸门，而这段与 React 状态无关。
+    file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/chat-ai-reply-settings-dialog.tsx',
+    call: 'apiSaveChatAiReplyDefaultWebhook(',
+    why: 'persistWebhook 是纯决策函数，只返回 { ok, error }；反馈由调用方 setError 渲染',
+  },
+  {
     // 同一次重建的「停止」：成败同样走 `onError`（弹层 err 横幅），理由同上。
     file: 'src/client/ui-wechat/src/client/pages/wechat-data/panels/kb-index-build.ts',
     call: 'apiCancelKbIndexBuild(',

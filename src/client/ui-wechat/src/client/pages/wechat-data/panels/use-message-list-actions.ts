@@ -8,7 +8,6 @@ import { useState } from 'react'
 import type {
   MessageListRecord,
   MessageListRule,
-  MessageListRuleInput,
   MessageListImage,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import {
@@ -18,6 +17,7 @@ import {
   apiSaveMessageListRule,
   apiStageMessageListAttachment,
 } from '../api.ts'
+import { apiAppsSaveRule } from '../api-apps.ts'
 import { useConfirm } from '../ui/confirm.tsx'
 import {
   EMPTY_RECORD_FORM,
@@ -34,9 +34,10 @@ import { useMessageListBatchActions } from './use-message-list-batch-actions.ts'
 import { useMessageListDeliveryActions } from './use-message-list-delivery-actions.ts'
 import { useMessageListAiReplyActions } from './use-message-list-ai-reply-actions.ts'
 import { useMessageListWebhookActions } from './use-message-list-webhook-actions.ts'
+import type { RefreshOptions } from './use-message-list-data.ts'
 
 export function useMessageListActions(input: {
-  refreshRecords: () => Promise<void>
+  refreshRecords: (options?: RefreshOptions) => Promise<void>
   refreshRules: () => Promise<void>
   refreshWebhookInfo: () => Promise<void>
 }) {
@@ -162,16 +163,18 @@ export function useMessageListActions(input: {
     if (ruleForm === null) return
     setSaving(true)
     try {
-      const body: MessageListRuleInput = {
-        ...(ruleForm.id === undefined ? {} : { id: ruleForm.id }),
+      const shared = {
         chatName: ruleForm.chatName,
         targetName: ruleForm.targetName,
-        webhookUrl: ruleForm.webhookUrl,
         greetingText: ruleForm.greetingText,
         note: ruleForm.note,
         enabled: ruleForm.enabled,
+        ...(ruleForm.id === undefined ? {} : { id: ruleForm.id }),
       }
-      const result = await apiSaveMessageListRule(body)
+      // 选了托管实例：地址由主进程现取（渲染层只有脱敏串，不能直接提交）。
+      const result = ruleForm.appInstanceId === undefined
+        ? await apiSaveMessageListRule({ ...shared, webhookUrl: ruleForm.webhookUrl })
+        : await apiAppsSaveRule(ruleForm.appInstanceId, shared)
       if (!result.ok) {
         setNotice({ kind: 'err', text: result.error ?? '规则保存失败' })
         return
@@ -203,6 +206,9 @@ export function useMessageListActions(input: {
         ? { kind: 'ok', text: rule.enabled ? '规则已停用' : '规则已启用' }
         : { kind: 'err', text: result.error ?? '规则更新失败' })
       void input.refreshRules()
+      // 启停会改变「有没有规则覆盖这条记录」的事实；记录必须同步回源，
+      // 否则 AI 记录会在「待配置 / 待发送」之间留下过期徽标。
+      void input.refreshRecords({ silent: true })
     } catch (e) {
       setNotice({ kind: 'err', text: '规则更新失败：' + (e as Error).message })
     } finally {

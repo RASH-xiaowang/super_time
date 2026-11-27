@@ -4,8 +4,7 @@
  * 这一域是用户显式创建的**触发式任务**：某会话（单聊/群聊 + 群内目标用户）的消息命中
  * 关键词时，记一条「触发记录」（触发时间 / 触发群聊 / 触发对象 / 触发图片 / 触发文本），
  * 已完善（`ready`）的任务再按**触发方式**把这条记录送出去：Webhook 回调（整条记录 POST
- * 到用户填的地址），或某个 RPA 厂商（`api-rpa.bazhuayu.com` 的八爪鱼、影刀、UiPath、阿里云 RPA
- * 等；参数映射与能力见 {@link RpaVendorDescriptor} 与 `docs/RPA-VENDOR-TRIGGERS.md`）。
+ * 到用户填的地址），或八爪鱼 RPA（`api-rpa.bazhuayu.com`；参数映射与能力见 {@link RpaVendorDescriptor}）。
  *
  * 触发方式是**注册表驱动**的（2026-10-21）：`triggerMethod` 是内置 `webhook` 或厂商 id，
  * 厂商配置存通用 `triggerConfig`（非敏感）与 `triggerSecret`（敏感，永不回读），
@@ -32,8 +31,7 @@ export type TaskInfoChatType = 'private' | 'group'
 /**
  * 任务的下游触发方式（2026-10-21 起是**开放字符串**）：
  *  · `webhook`  —— 把整条触发记录 JSON POST 到用户填写的回调地址（原有能力，内置）；
- *  · 厂商 id   —— 注册表里的 RPA 厂商（当前：`bazhuayu` / `yingdao` / `uipath` /
- *    `aliyun-rpa` / `laiye` / `shizai`）；描述符见 `listRpaVendors` 返回值。
+ *  · 厂商 id   —— 注册表里的八爪鱼（`bazhuayu`）；描述符见 `listRpaVendors` 返回值。
  * 旧库没有该列时按 `webhook` 处理，保证既有任务行为不变；未知 id（厂商已下线）不崩，
  * 只在投递时 skipped 并显示可读原因。
  */
@@ -71,8 +69,14 @@ export interface TaskInfo {
   keywords: string[]
   /** 触发时携带「该对象最近 M 张图片」的张数（0 = 不带图片）。 */
   photoLimit: number
+  /** 触发时携带「触发人最近 N 条文本消息」的条数（0 = 不带文本；只取触发人发的）。 */
+  textLimit: number
   /** 仅匹配结构化 @ 登录账号的群消息；单聊始终为 false。 */
   mentionMeOnly: boolean
+  /** 命中关键词后是否把问候语写入消息队列。缺省关闭。 */
+  greetingEnabled: boolean
+  /** 写入消息队列的问候语。只有 {@link greetingEnabled} 为 true 且非空时才会写入。 */
+  greetingText: string
   /** 下游触发方式（缺省 / 旧库 = `webhook`；当前厂商 id 见 `listRpaVendors`）。 */
   triggerMethod: TaskTriggerMethod
   /**
@@ -124,7 +128,13 @@ export interface TaskInfoInput {
   targetName?: string
   keywords: string[]
   photoLimit?: number
+  /** 触发时携带的文本条数（0..{@link TEXT_LIMIT_MAX}；只取触发人发的文本）。 */
+  textLimit?: number
   mentionMeOnly?: boolean
+  /** 命中后是否写入消息队列。缺省 = 沿用旧值；新建为关闭。 */
+  greetingEnabled?: boolean
+  /** 消息队列问候语。缺省 = 沿用旧值；开启时不能为空。 */
+  greetingText?: string
   /** 下游触发方式；缺省 = 新建按 `webhook`、更新沿用旧值。 */
   triggerMethod?: TaskTriggerMethod
   /**
@@ -195,6 +205,23 @@ export interface TaskTriggerImage {
   senderEnterpriseName?: string
   /** 图片 md5（有则带上，便于排查/去重）。 */
   md5?: string
+  /**
+   * 局域网可取地址。投递或打开源码时签出，不靠扫描时写入。
+   * 形如 `http://<本机局域网 IPv4>:<端口>/api/rpa-media/<令牌>`。
+   */
+  url?: string
+}
+
+/** 触发记录里的一条文本消息（只存引用/正文，不存图片）。 */
+export interface TaskTriggerText {
+  /** 消息 local_id（与 `chatUsername` 一起定位）。 */
+  localId: number
+  /** 消息时间（毫秒）。 */
+  createTime: number
+  /** 发送者显示名。 */
+  sender: string
+  /** 消息正文（已截断到可回调长度）。 */
+  text: string
 }
 
 /** 一条任务触发记录。 */
@@ -216,6 +243,8 @@ export interface TaskTriggerRecord {
   /** 触发文本（命中那条消息的可读正文）。 */
   text: string
   images: TaskTriggerImage[]
+  /** 触发时携带的文本消息（时间正序；只含触发人发的文本）。 */
+  texts: TaskTriggerText[]
   /** 命中消息的 local_id / sort_seq（去重与跳回会话用）。 */
   messageLocalId: number
   messageSortSeq: number
@@ -326,7 +355,19 @@ export interface TaskCallbackPayload {
     md5?: string
     /** `data:image/...;base64,...`（解码失败时缺省，但会带上 error）。 */
     dataUrl?: string
+    /**
+     * 局域网可取的短时地址（`imageDelivery=lanUrl`）。
+     * 形如 `http://<本机局域网 IPv4>:<端口>/api/rpa-media/<令牌>`，默认 1 小时有效。
+     */
+    url?: string
     error?: string
+  }>
+  /** 触发时携带的文本消息（时间正序；只含触发人发的文本，正文已过隐私闸）。 */
+  texts: Array<{
+    localId: number
+    createTime: number
+    sender: string
+    text: string
   }>
 }
 

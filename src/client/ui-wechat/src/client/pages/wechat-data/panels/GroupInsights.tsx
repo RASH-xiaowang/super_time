@@ -154,8 +154,7 @@ export function GroupInsightsPanel({
               <div className={css.empty}>
                 <span>暂无群公告</span>
                 <span className={css.emptyHint}>
-                  公告来自微信的群资料，本机实测约六分之一的群有公告，多数群从没发过；
-                  也可能是你入群之前的公告没有同步到本机
+                  暂无群公告
                 </span>
               </div>
             )}

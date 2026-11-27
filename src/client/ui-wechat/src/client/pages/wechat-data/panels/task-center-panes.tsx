@@ -45,6 +45,7 @@ import {
   taskScopeLabel,
   taskStatusMeta,
   taskTriggerSummary,
+  textLimitLabel,
   triggerCountLabel,
   triggerPaneTitle,
   triggerTimeText,
@@ -67,7 +68,7 @@ function TaskScopeIdentity({ task }: { task: TaskInfo }): React.JSX.Element {
         className={css.taskScope}
         name={chatName}
         username={task.chatUsername || task.targetUsername || ''}
-        size={20}
+        size={16}
         title={taskScopeLabel(task)}
       >
         {withEnterprise(chatName, task.chatEnterpriseName || task.targetEnterpriseName)}
@@ -76,11 +77,11 @@ function TaskScopeIdentity({ task }: { task: TaskInfo }): React.JSX.Element {
   }
   return (
     <span className={css.taskScope} title={taskScopeLabel(task)}>
-      <IdentityName name={chatName} username={task.chatUsername || ''} size={20}>
+      <IdentityName name={chatName} username={task.chatUsername || ''} size={16}>
         {withEnterprise(chatName, task.chatEnterpriseName)}
       </IdentityName>
       <span className={css.taskScopeArrow} aria-hidden="true">→</span>
-      <IdentityName name={targetName} username={task.targetUsername || ''} size={20}>
+      <IdentityName name={targetName} username={task.targetUsername || ''} size={16}>
         {withEnterprise(targetName, task.targetEnterpriseName)}
       </IdentityName>
     </span>
@@ -94,11 +95,11 @@ function TriggerPeople({ record }: { record: TaskTriggerRecord }): React.JSX.Ele
   const title = `${withEnterprise(chatName, record.chatEnterpriseName)} / ${withEnterprise(targetName, record.targetEnterpriseName)}`
   return (
     <span className={css.triggerPeople} title={title}>
-      <IdentityName name={chatName} username={record.chatUsername} size={20}>
+      <IdentityName name={chatName} username={record.chatUsername} size={16}>
         {withEnterprise(chatName, record.chatEnterpriseName)}
       </IdentityName>
       <span className={css.taskScopeArrow} aria-hidden="true">/</span>
-      <IdentityName name={targetName} username={record.targetUsername} size={20}>
+      <IdentityName name={targetName} username={record.targetUsername} size={16}>
         {withEnterprise(targetName, record.targetEnterpriseName)}
       </IdentityName>
     </span>
@@ -174,48 +175,44 @@ function TaskRow({ task, active, editing, batchMode, checked, vendorCatalog, act
         <span className={css.taskName} title={task.name}>{task.name}</span>
         <span className={css.taskTags}>
           <Badge tone={status.tone} title={status.hint}>{status.label}</Badge>
+          {!batchMode && (
+            <span className={css.taskActionGroup}>
+              <Button
+                size="sm"
+                variant="outline"
+                aria-expanded={editing}
+                aria-label={`编辑「${task.name}」`}
+                onClick={() => { actions.onToggleEdit(task.id) }}
+              >
+                编辑
+              </Button>
+              <TaskDeleteButton
+                taskName={task.name}
+                onDelete={() => actions.onDeleteTask(task.id)}
+                onNotice={actions.onNotice}
+              />
+            </span>
+          )}
         </span>
       </div>
 
       <div className={css.taskMeta}>
         <TaskScopeIdentity task={task} />
-        <span className={css.taskStat}>{triggerCountLabel(task.triggerCount)}</span>
-        <span className={css.taskStat}>{lastTriggeredLabel(task.lastTriggeredAt)}</span>
-      </div>
-
-      <div className={css.kwRow}>
-        {keywords.shown.map((keyword) => (
-          <span key={keyword} className={css.kwChip} title={keyword}>{keyword}</span>
-        ))}
-        {keywords.hidden > 0 && <span className={css.kwMore}>+{String(keywords.hidden)}</span>}
-        <span className={css.kwMore}>{photoLimitLabel(task.photoLimit)}</span>
-        {/* 触发方式摘要（2026-10-21）：按厂商描述符生成（八爪鱼 RPA · FlowId / Webhook <host>）。
-            未知厂商（已下线）显示「触发方式不可用（厂商已下线）」。 */}
-        <span className={css.triggerSummary} title={summaryTitle} data-trigger-method={task.triggerMethod}>
-          {summary}
+        <span className={css.kwRow}>
+          {keywords.shown.map((keyword) => (
+            <span key={keyword} className={css.kwChip} title={keyword}>{keyword}</span>
+          ))}
+          {keywords.hidden > 0 && <span className={css.kwMore}>+{String(keywords.hidden)}</span>}
+          <span className={css.kwMore}>{photoLimitLabel(task.photoLimit)}</span>
+          <span className={css.kwMore}>{textLimitLabel(task.textLimit)}</span>
+          <span className={css.triggerSummary} title={summaryTitle} data-trigger-method={task.triggerMethod}>
+            {summary}
+          </span>
+          {task.mentionMeOnly && <span className={css.kwMore}>仅匹配 @我</span>}
+          <span className={css.taskStat}>{triggerCountLabel(task.triggerCount)}</span>
+          <span className={css.taskStat}>{lastTriggeredLabel(task.lastTriggeredAt)}</span>
         </span>
-        {task.mentionMeOnly && <span className={css.kwMore}>仅匹配 @我</span>}
       </div>
-
-      {!batchMode && <div className={css.taskActions}>
-        <span className={css.taskActionGroup}>
-          <Button
-            size="sm"
-            variant="outline"
-            aria-expanded={editing}
-            aria-label={`编辑「${task.name}」`}
-            onClick={() => { actions.onToggleEdit(task.id) }}
-          >
-            编辑
-          </Button>
-          <TaskDeleteButton
-            taskName={task.name}
-            onDelete={() => actions.onDeleteTask(task.id)}
-            onNotice={actions.onNotice}
-          />
-        </span>
-        <span className={kitCss.textMeta}>{task.chatType === 'group' ? '群聊任务' : '单聊任务'}</span>
-      </div>}
     </div>
   )
 }
@@ -260,15 +257,14 @@ function TriggerRow({ record, batchMode, checked, onActivate, onToggleSelection 
           />
         )}
         <span className={css.triggerTime}>{triggerTimeText(record.triggeredAt)}</span>
-        <span className={css.triggerTaskName} title={record.taskName}>{record.taskName}</span>
+        <TriggerPeople record={record} />
         <Badge tone={callback.tone} title={callback.hint}>{callback.label}</Badge>
       </div>
-      <TriggerPeople record={record} />
       <div className={css.triggerFoot}>
-        <span className={css.triggerKw}>命中「{record.keyword}」</span>
+        <span className={css.triggerKw} title={record.taskName}>命中「{record.keyword}」</span>
         <span>{recordImageCountLabel(record.images.length)}</span>
+        <span className={css.triggerText} title={full === '' ? '（无文本）' : full}>{recordSummary(record.text)}</span>
       </div>
-      <div className={css.triggerText} title={full === '' ? '（无文本）' : full}>{recordSummary(record.text)}</div>
     </div>
   )
 }
@@ -404,14 +400,12 @@ export function TaskPane({
           <EmptyState
             icon="🗂️"
             title="还没有任务信息"
-            desc="在聊天会话 / 聊天信息里点「新建任务」创建：选会话与触发对象、填关键词；配好 Webhook 地址并标记「已完善」后，命中关键词的新消息会出现在右栏。"
           />
         )}
         {noMatch && (
           <EmptyState
             icon="🔍"
             title="没有匹配的任务"
-            desc="换个任务名、关键词、会话或对象再试；清空搜索框可看全部任务。"
           />
         )}
         {visibleTasks.map((task) => (
@@ -527,19 +521,16 @@ export function TriggerPane({
           <EmptyState
             icon="🔍"
             title="没有匹配的触发记录"
-            desc={`当前搜索「${search}」没有命中；可换个词或清除搜索。`}
           />
         ) : empty && (selectedTask !== null ? (
           <EmptyState
             icon="⚡"
             title="该任务还没有触发记录"
-            desc="任务标记「已完善」后，命中关键词的新消息会记录在这里（也可以点上方「立即检查」马上扫一次）。"
           />
         ) : (
           <EmptyState
             icon="⚡"
             title="还没有任何触发记录"
-            desc="创建任务并标记「已完善」后，命中关键词的新消息会出现在这里；点左栏的任务可以按任务筛选。"
           />
         ))}
         {records.map((record) => (

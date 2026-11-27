@@ -37,6 +37,7 @@ function makeHarness(options: {
   const events: Array<[string, unknown[]]> = []
   const stableTimers: Array<() => void> = []
   const log = { log: vi.fn(), warn: vi.fn(), error: vi.fn() }
+  const env = options.env ?? {}
   const applyConfig = vi.fn()
   const recordResolved = vi.fn()
   const restrictWechatState = vi.fn(() => ({ ok: true, failures: [] }))
@@ -65,7 +66,7 @@ function makeHarness(options: {
 
   const supervisor = createBackendSupervisor({
     isPackaged: options.isPackaged ?? false,
-    env: options.env ?? {},
+    env,
     utilityProcess: { fork },
     diagLog: { write: vi.fn() },
     resolveHangMethods: vi.fn(() => []),
@@ -105,6 +106,7 @@ function makeHarness(options: {
     events,
     log,
     applyConfig,
+    env,
     recordResolved,
     restrictWechatState,
     loadWechatSettings,
@@ -128,6 +130,7 @@ describe('backend-supervisor', () => {
 
     expect(result.ok).toBe(true)
     expect(h.applyConfig).toHaveBeenCalledTimes(1)
+    expect(h.applyConfig).toHaveBeenCalledWith(undefined, h.env)
     expect(h.fork).toHaveBeenCalledTimes(1)
     expect(h.recordResolved).toHaveBeenCalledWith({ root: 'D:\\data' })
     expect(h.handles[0]!.handle.call).toHaveBeenCalledWith('saveWechatConfig', [{

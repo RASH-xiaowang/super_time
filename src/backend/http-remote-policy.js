@@ -7,7 +7,7 @@
  * 而是**第 234 条出现时会静默获得远程访问权** —— 没人会记得回来改一份「禁止清单」，
  * 而症状是「手机上某个新功能突然能改了桌面端的配置」，这类问题不会被任何测试发现。
  *
- * 所以这里把 234 条**全部显式二分**：`REMOTE_SAFE_METHODS`（允许）与 `LOCAL_ONLY_METHODS`
+ * 所以这里把 230 条**全部显式二分**：`REMOTE_SAFE_METHODS`（允许）与 `LOCAL_ONLY_METHODS`
  * （拒绝，按族给出理由）。两份清单由 `http-remote-policy.spec.ts` 对着 gateway 源码里
  * 真实解析出的 `@Remote` 注册表校验三件事：
  *   ① 两者**不相交**（同一条方法不能既允许又拒绝）；
@@ -20,7 +20,7 @@
  * ## 例外：fullAccess 浏览器会话（2026-10-19）
  *
  * 当前有两个入口会签发带 `fullAccess` 标记的配对码：标题栏「打开网页」桌面交接，
- * 以及设置页「局域网访问（手机）」生成的扫码二维码。fullAccess 会话**不查这份白名单**，
+ * 以及设置页「局域网访问（手机）」生成的扫码二维码。fullAccess 会话可调用已注册的本地方法，但仍拒绝未知或已移除的方法；不受普通只读白名单限制，
  * 并与桌面端一样走 `/api/native/*` 原生能力代理；这是已记录的桌面同权设计，不是
  * “普通手机只能读”。只有长期 `api_token` 登录且未带 fullAccess 的会话受白名单约束。
  * 该标记只认服务端内存里的会话状态：伪造 URL 的 `mode=desktop`、旧 Cookie 都拿不到
@@ -71,8 +71,15 @@ const REMOTE_SAFE_BY_FAMILY = {
     'getMapGeoJson',
     'getAnnual', 'getAnnualReport', 'getAnnualReview', 'getGroupInsights',
     'getAssetInsights', 'getStorageStats',
+    // 2026-11-24：本地工具清单是纯读（各工具注册表 + 本机配置的就绪状态，不含凭据）。
+    'getLocalTools',
+    // 增删改工具只写本机注册表（`wechat_task_center.db`），不出网、不碰微信库；
+    // 与「设置」同族，放在这里而不是 B/D 族（那些是「写微信数据」或「出网」）。
+    'saveLocalTool', 'deleteLocalTool', 'setLocalToolEnabled',
+    // 回复工具的数据源 / 密钥配置：写本机 config.json / secrets.json，不出网。
+    'getLocalToolConfig', 'saveLocalToolConfig',
   ],
-  '通讯录': ['getContacts', 'searchMembers'],
+  '通讯录': ['getContacts', 'searchMembers', 'getPortraitVolumes'],
   '朋友圈': ['getMoments', 'getMomentsAuthors', 'getMomentsMonthly', 'getMomentsInsights'],
   '搜索': ['searchUnified', 'searchMessages', 'cancelSearch', 'getSearchIndexStatus'],
   '微信问答': [
@@ -83,6 +90,7 @@ const REMOTE_SAFE_BY_FAMILY = {
   ],
   '总结与任务': [
     'generateDailySummary', 'generatePeriodSummary', 'generateAnnualNarrative',
+    'analyzePortraitPersonality',
     'listSummaryTasks', 'saveSummaryTask', 'toggleSummaryTask', 'deleteSummaryTask',
     'runSummaryTask', 'listSummaryRecords', 'deleteSummaryRecord',
     'listTasks', 'addTask', 'setTaskStatus', 'deleteTask', 'extractTasks',
@@ -133,10 +141,6 @@ const REMOTE_SAFE_BY_FAMILY = {
  * 完整性由 spec 校验。列在这里的意义是：① 让「为什么这个方法手机上不能用」
  * 有一个写在代码里的答案；② 新增方法时强迫作者做一次显式选择。
  */
-// These eight methods require desktop IPC even for a fullAccess handoff session.
-const AGENT_DESKTOP_ONLY_METHODS = new Set(['getAgentDesk', 'saveAgentControl', 'writeAgentMemory', 'deleteAgentMemory',
-  'addAgentPromise', 'setAgentProposalStatus', 'sendAgentDraft', 'sendAgentProposal']);
-
 const LOCAL_ONLY_BY_FAMILY = {
   'A 凭据 / 密钥 / 配置（含模型 API Key 与本机账号探测）': [
     'getWechatConfig', 'getWechatConfigFull', 'saveWechatConfig', 'openConfig',
@@ -197,8 +201,6 @@ const LOCAL_ONLY_BY_FAMILY = {
     // 可能出网，成功后不可撤销；专用删除会整组销毁消息列表台账。二者都只允许
     // 桌面本机通道，手机/普通浏览器会话拒绝。
     'regenerateChatAiReplyRecord', 'deleteAiReplyReservations',
-    // AI 队友：记忆、提案和紧急停止都含个人内容，主动提案不允许远程触发。
-    ...AGENT_DESKTOP_ONLY_METHODS,
     // 该返回值包含可直接调用的入站地址令牌，只允许桌面端本机读取。
     'getMessageListWebhookInfo',
     // 健康检查会读取已保存的下游地址并发起 GET；输入只能是本机记录/规则 id。
@@ -301,13 +303,12 @@ const NATIVE_CAPABILITIES = Object.freeze({
   update: false,
 })
 
-/** fullAccess does not grant the desktop-only Agent capability. */
+/** Even a full-access handoff cannot call an unregistered/removed method. */
 function isHttpCallAllowed(method, fullAccess) {
-  return !AGENT_DESKTOP_ONLY_METHODS.has(method) && (fullAccess === true || isRemoteSafe(method))
+  return isRemoteSafe(method) || (fullAccess === true && LOCAL_ONLY_METHODS.has(method))
 }
 
 module.exports = {
-  AGENT_DESKTOP_ONLY_METHODS,
   isHttpCallAllowed,
   REMOTE_SAFE_BY_FAMILY,
   LOCAL_ONLY_BY_FAMILY,

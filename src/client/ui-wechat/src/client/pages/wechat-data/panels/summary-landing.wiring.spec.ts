@@ -43,15 +43,13 @@ const shell = readFileSync(join(ROOT, 'src', 'client', 'ui-wechat', 'src', 'clie
 // M21：设置面板已拆成多份 ⇒ 节定义读联合（断言未改）
 const settings = readSettingsSource()
 
-describe('总结工作台：空态把"怎么开始"说清楚', () => {
-  it('没有结果时渲染三步落地卡，而不是只留一张空卡', () => {
+describe('总结工作台：空态只留标题和生成', () => {
+  it('没有结果时渲染空态，不再铺三步说明', () => {
     expect(panel).toMatch(/!result && !loading && \(/)
-    expect(panel, '缺少三步组件').toContain('<SummaryEmpty')
-    expect(parts, '缺少三步说明').toContain('emptySteps')
-    // 三步都要在：选时间范围 / 生成总结 / 回看与复制
-    expect(parts).toContain('选时间范围')
-    expect(parts).toContain('生成总结')
-    expect(parts).toContain('回看与复制')
+    expect(panel).toContain('<SummaryEmpty')
+    expect(parts).toContain('还没有这一段的总结')
+    expect(parts).not.toContain('emptySteps')
+    expect(parts).not.toContain('选时间范围 →')
   })
 
   it('把"没配模型就生成不了"提前说出来，并给出模型状态', () => {
@@ -76,7 +74,7 @@ describe('总结工作台：空态把"怎么开始"说清楚', () => {
     //   · `seed`        —— 全局搜索命中带关键词跳转
     //   · `openKbFile`  —— 知识库引用点开跳「知识库 · 文件」分段
     //   · `kbFocus`     —— 跳过去之后要高亮的那个文件（含 nonce，便于同文件再点一次也能触发）
-    expect(shell).toMatch(/renderTab\(active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, \(\) => \{ setMomentAuthor\(null\) \}, openSettings, seed, openKbFile, kbFocus\)/)
+    expect(shell).toMatch(/renderTab\(active, navigate, openChat, chatTarget, onChatTargetHandled, openMoments, momentAuthor, \(\) => \{ setMomentAuthor\(null\) \}, openSettings, seed, openKbFile, kbFocus, openPortrait, portraitFocus\)/)
   })
 
   it('历史侧栏空态给一个出口（不是"还没有历史总结"就结束）', () => {

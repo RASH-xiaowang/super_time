@@ -30,17 +30,10 @@ function RevokedLanding({ loading, onRefresh, onOpenSettings }: {
   return (
     <div className={css.rvLand}>
       <div className={css.rvLandTitle}>暂无撤回消息记录</div>
-      <div className={css.rvLandDesc}>本页读的是本地归档：同步时先存一份原文，微信把消息改写成提示时原文仍在。为空通常是三种情况之一：</div>
-      <ul className={css.rvLandList}>
-        <li><b>本机确实没人撤回过</b> —— 那就没什么可看的</li>
-        <li><b>归档没赶上</b> —— 刚发出就撤回的消息，可能在归档前已被改写成提示</li>
-        <li><b>解密库还没同步</b> —— 去「设置 → 数据配置」重新解密后再回来刷新</li>
-      </ul>
       <div className={css.rvLandActions}>
         <button type="button" className={css.catBtn} data-active="true" onClick={onRefresh} disabled={loading}>刷新重读</button>
         <button type="button" className={css.catBtn} onClick={() => { onOpenSettings?.('detect') }}>去数据配置</button>
       </div>
-      <div className={kitCss.textMeta}>有数据时这里会按发送者/类型/时间列出每条撤回记录，可展开看原文，并给出「撤回最多」排行。</div>
     </div>
   )
 }
@@ -196,13 +189,10 @@ export function RevokedPanel({ onOpenSettings }: { onOpenSettings?: (section?: s
     <div className={css.panel}>
       <PanelHeader
         title="撤回"
-        desc="本地归档 · 只读"
         actions={(
           <button type="button" className={css.catBtn} onClick={refresh} disabled={loading}>{loading ? '读取中…' : '刷新'}</button>
         )}
       />
-      {/* 隐私口径降为一行灰字（NV-09）：不再是一块与全站多处重复的横幅。 */}
-      <div className={`${kitCss.textMeta} ${css.rvNoticeText}`}>数据仅来自本机解密副本，不联网、不上传。</div>
       {error && <div className={kitCss.error} role="alert">{error}</div>}
       {readError && <div className={kitCss.error} role="alert">{readError}</div>}
       {!error && !readError && loading && items.length === 0 && <ListSkeleton rows={8} />}

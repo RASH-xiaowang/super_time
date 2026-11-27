@@ -25,6 +25,7 @@ import { avatarColors, fmtBytes, fmtSessionTimeSec } from '../utils/format.ts'
 import { cacheBounded } from '../utils/misc.ts'
 import { isLegacyChatId, readableChatName } from '../utils/chat-identity.ts'
 import { withEnterprise } from './enterprise-identity.ts'
+import { LoadingState } from '../ui/kit.tsx'
 import css from './global-search.module.css'
 
 export interface GlobalSearchResultsState {
@@ -321,17 +322,7 @@ export function GlobalSearchResults({
       )}
 
       {loading && total === 0 && (
-        <div className={css.skeletonList} aria-hidden="true">
-          {[0, 1, 2].map(i => (
-            <div key={i} className={css.skeletonRow}>
-              <span className={css.skeletonAvatar} />
-              <span className={css.skeletonBody}>
-                <span className={css.skeletonLine} />
-                <span className={css.skeletonLine} data-short="" />
-              </span>
-            </div>
-          ))}
-        </div>
+        <LoadingState variant="compact" label="正在搜索聊天、联系人、朋友圈和文件…" />
       )}
 
       {empty && (

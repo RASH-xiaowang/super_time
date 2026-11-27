@@ -60,6 +60,13 @@ import type {
   ImageDataUrlResult,
   KeysInfoResult,
   LedgerSnapshot,
+  LocalToolConfig,
+  LocalToolConfigInput,
+  LocalToolConfigSaveResult,
+  LocalToolInput,
+  LocalToolMutationResult,
+  LocalToolSaveResult,
+  LocalToolsSnapshot,
   MediaAssetsSnapshot,
   MemberSearchSnapshot,
   MessagesSnapshot,
@@ -141,7 +148,7 @@ import type {
   NotesSnapshot,
 } from './types.ts'
 import { KB_LIST_CACHE_KEY, kbCacheKey } from './kb-scope-keys.ts'
-import { KnowledgeSnapshotRead, remote, unwrap } from './api-core.ts'
+import { KnowledgeSnapshotRead, remote, unwrap, type PortraitPersonalityResult, type PortraitVolume } from './api-core.ts'
 import { isLegacyChatId } from './utils/chat-identity.ts'
 
 // ── sessions / contacts / messages (Remote) ──
@@ -192,6 +199,48 @@ export async function apiGetContacts(options?: { limit?: number; offset?: number
  */
 export async function apiGetContact360(username: string): Promise<Contact360Snapshot> {
   return unwrap(await remote().getContact360({ username }))
+}
+
+/**
+ * 批量读取好友的聊天、图片和朋友圈条数。
+ * @param usernames - 目录里的好友 id。
+ * @returns 每人三项计数。
+ */
+export async function apiGetPortraitVolumes(usernames: readonly string[]): Promise<PortraitVolume[]> {
+  return unwrap(await remote().getPortraitVolumes({ usernames }))
+}
+
+const portraitMemory = new Map<string, PortraitPersonalityResult>()
+
+/** 这次打开里已经读到的性格。切回同一位好友时不用再等后端。 */
+export function peekPortraitPersonality(username: string): PortraitPersonalityResult | undefined {
+  return portraitMemory.get(username)
+}
+
+function rememberPortrait(username: string, result: PortraitPersonalityResult): void {
+  if (result.ok && result.text.trim() !== '') portraitMemory.set(username, result)
+}
+
+/**
+ * 只读本机存档。没有存档时 `error` 为 `miss`，不会开始生成。
+ * @param username - 好友的微信 id。
+ */
+export async function apiReadPortraitPersonality(username: string): Promise<PortraitPersonalityResult> {
+  const remembered = portraitMemory.get(username)
+  if (remembered !== undefined) return remembered
+  const result = unwrap(await remote().analyzePortraitPersonality({ username, cacheOnly: true }))
+  rememberPortrait(username, result)
+  return result
+}
+
+/**
+ * 重新分析并覆盖本机存档。
+ * @param username - 好友的微信 id。
+ */
+export async function apiAnalyzePortraitPersonality(username: string): Promise<PortraitPersonalityResult> {
+  const result = unwrap(await remote().analyzePortraitPersonality({ username, refresh: true }))
+  rememberPortrait(username, result)
+  return result
 }
 /**
  * Fetch messages for a talker.
@@ -319,21 +368,22 @@ export async function apiGetFavorites(options?: { limit?: number; offset?: numbe
  * @returns AssetInsightsSnapshot.
  */
 export async function apiGetAssetInsights(): Promise<AssetInsightsSnapshot> {
-  return unwrap(await remote().getAssetInsights())
+  return cachedGet('asset-insights:x', async () => unwrap(await remote().getAssetInsights()))
 }
 /**
  * Fetch official account content assets.
  * @returns OfficialAssetsSnapshot.
  */
 export async function apiGetOfficialAssets(): Promise<OfficialAssetsSnapshot> {
-  return unwrap(await remote().getOfficialAssets())
+  // 切走会卸载面板。再切回来先画上一份快照，同时在途请求合并，避免连点把统计打满。
+  return cachedGet('official-assets:x', async () => unwrap(await remote().getOfficialAssets()))
 }
 /**
  * Fetch media assets inventory.
  * @returns MediaAssetsSnapshot.
  */
 export async function apiGetMediaAssets(): Promise<MediaAssetsSnapshot> {
-  return unwrap(await remote().getMediaAssets())
+  return cachedGet('media-assets:x', async () => unwrap(await remote().getMediaAssets()))
 }
 /**
  * Fetch the files list.
@@ -361,7 +411,7 @@ export async function apiGetRegionMap(): Promise<RegionMapSnapshot> {
  * @param options - Query options: kind, limit, offset, q.
  * @returns RecordsSnapshot.
  */
-export async function apiGetRecords(options: { kind: string; limit?: number; offset?: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc' }): Promise<RecordsSnapshot> {
+export async function apiGetRecords(options: { kind: string; limit?: number; offset?: number; q?: string; from?: number; to?: number; direction?: 'asc' | 'desc'; sort?: 'time' | 'amount' }): Promise<RecordsSnapshot> {
   return cachedFetch('records:' + JSON.stringify(options), async () => unwrap(await remote().getRecords(options)))
 }
 /**
@@ -404,12 +454,66 @@ export async function apiGetRevoked(options?: { limit?: number; offset?: number;
  * @param options - Query options: limit/offset.
  * @returns EmoticonsSnapshot.
  */
-export async function apiGetEmoticons(options?: { limit?: number; offset?: number }): Promise<EmoticonsSnapshot> { return cachedGet('emoticons:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getEmoticons(options))) }
+export async function apiGetEmoticons(options?: { limit?: number; offset?: number; includeOthers?: boolean }): Promise<EmoticonsSnapshot> { return cachedGet('emoticons:' + JSON.stringify(options ?? {}), async () => unwrap(await remote().getEmoticons(options))) }
 /**
  * Fetch storage usage statistics.
  * @returns StorageSnapshot.
  */
 export async function apiGetStorageStats(): Promise<StorageSnapshot> { return cachedGet('storage:x', async () => unwrap(await remote().getStorageStats())) }
+/**
+ * 本机全部可用工具的清单（问答检索 / AI 回复 / 出网触发 / 本机能力）。
+ *
+ * 走 `cachedGet`：清单只在「新增/删除工具」或「回复工具的配置变了」时才会变，
+ * 打开面板立刻画上一份、后台复验即可；切换面板回来不必每次等一次 RPC。
+ * @returns LocalToolsSnapshot.
+ */
+export async function apiGetLocalTools(): Promise<LocalToolsSnapshot> { return cachedGet('local-tools:x', async () => unwrap(await remote().getLocalTools())) }
+
+/**
+ * 新建/更新一条自定义工具。
+ *
+ * 写成功后就地作废快照：`cachedGet` 会把旧清单先画一帧再复验，而这里用户刚点过「保存」，
+ * 看到旧的会以为没保存上。作废走 `snapshotDelete`（丢掉 + 通知订阅者回源）。
+ * @param input - 工具配置。
+ * @returns 保存结果（成功时带新卡片）。
+ */
+export async function apiSaveLocalTool(input: LocalToolInput): Promise<LocalToolSaveResult> {
+  const value = unwrap(await remote().saveLocalTool(input))
+  snapshotDelete('local-tools:x')
+  return value
+}
+
+/** 删除一条自定义工具（内置工具会被后端拒绝；界面不给这个入口）。 */
+export async function apiDeleteLocalTool(options: { name: string }): Promise<LocalToolMutationResult> {
+  const value = unwrap(await remote().deleteLocalTool(options))
+  snapshotDelete('local-tools:x')
+  return value
+}
+
+/** 启用/停用一个工具。 */
+export async function apiSetLocalToolEnabled(options: { name: string; enabled: boolean }): Promise<LocalToolMutationResult> {
+  const value = unwrap(await remote().setLocalToolEnabled(options))
+  snapshotDelete('local-tools:x')
+  return value
+}
+
+/**
+ * AI 回复工具（天气 / 网页搜索）的配置快照。
+ *
+ * 不走 `cachedGet`：它只有一个开关位面，且用户点「配置」时就是要看最新状态 ——
+ * 先画旧值再复验只会让「刚填完的 Key 还显示未保存」。
+ * @returns 配置快照（密钥只回是否已保存）。
+ */
+export async function apiGetLocalToolConfig(): Promise<LocalToolConfig> {
+  return unwrap(await remote().getLocalToolConfig())
+}
+
+/** 保存 AI 回复工具的配置；成功后让工具清单失效（卡片状态要跟着变）。 */
+export async function apiSaveLocalToolConfig(input: LocalToolConfigInput): Promise<LocalToolConfigSaveResult> {
+  const value = unwrap(await remote().saveLocalToolConfig(input))
+  snapshotDelete('local-tools:x')
+  return value
+}
 /**
  * Fetch annual statistics.
  * @returns AnnualSnapshot.

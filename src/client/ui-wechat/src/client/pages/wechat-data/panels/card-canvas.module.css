@@ -129,14 +129,3 @@
   .canvasCard { position: static; width: auto !important; transition: none; }
 }
 
-/* 骨架屏复用画布卡，但占位卡不该出现拖拽手柄。 */
-.skelHost { display: block; min-width: 0; }
-.skelHost .canvasHandle { display: none; }
-/* 占位块：宽度随卡片走，高度由 inline style 给（骨架里是固定 px）。 */
-.skelBlock {
-  display: block;
-  min-height: 0;
-  width: 100%;
-  border-radius: var(--nm-r-sm);
-  background: color-mix(in srgb, var(--nm-text-3) 12%, transparent);
-}

@@ -8,7 +8,10 @@ import { withDb } from './db-open.ts'
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RecordItem } from '../types.ts'
-import { contactMeta } from './meta.ts'
+import { contactMeta, shardCatalogDirs } from './meta.ts'
+import { parseMessageContent } from './parse.ts'
+import { parseCnyAmount } from './payment-money.ts'
+import { decodeCell } from './search-scaffold.ts'
 import { displayNameForUsername, resolveTalkerUsername } from './message-identity.ts'
 import { archiveRevokeCache, readArchivedRevoke } from './anti-revoke-archive.ts'
 import { archiveMessages, queryRevokedRetained } from './revoke-retain.ts'
@@ -84,6 +87,7 @@ function enrichRecords(
   decryptedDir: string,
   names: Map<string, string>,
   enterpriseNames: ReadonlyMap<string, string>,
+  selfUsername = '',
 ): void {
   const canonical = (v: unknown): string => {
     const raw = cellString(v).trim()
@@ -111,6 +115,7 @@ function enrichRecords(
       it['receiver_enterprise'] = ent(it['pay_receiver'])
       it['payer_display'] = dn(it['pay_payer'])
       it['payer_enterprise'] = ent(it['pay_payer'])
+      it['pay_flow'] = transferFlow(selfUsername, it['pay_payer'], it['pay_receiver'])
     }
     if (kind === 'redpackets') {
       it['session_display'] = dn(it['session_name'])
@@ -152,7 +157,7 @@ export function queryRecords(
   limit?: number,
   offset?: number,
   q?: string,
-  opts?: { from?: number; to?: number; direction?: 'asc' | 'desc' },
+  opts?: { from?: number; to?: number; direction?: 'asc' | 'desc'; sort?: 'time' | 'amount'; selfUsername?: string },
 ): { items: RecordItem[]; total: number; readError?: string } {
   if (limit !== undefined && (!Number.isInteger(limit) || limit < 0)) {
     throw new RangeError('limit 必须是非负整数')
@@ -177,6 +182,7 @@ export function queryRecords(
     const from = Math.max(0, opts?.from ?? 0)
     const to = Math.max(0, opts?.to ?? 0)
     const direction = opts?.direction === 'asc' ? 'asc' : 'desc'
+    const selfUsername = (opts?.selfUsername ?? '').trim()
     const esc = (v: string): string => v.replace(/'/g, "''")
     const meta = contactMeta(decryptedDir)
     const names = meta.names
@@ -272,7 +278,7 @@ export function queryRecords(
         } catch { /* not JSON */ }
         it['nickname'] = nickname
       }
-      enrichRecords(items, kind, decryptedDir, names, enterpriseNames)
+      enrichRecords(items, kind, decryptedDir, names, enterpriseNames, selfUsername)
       let total = 0
       try {
         total = (db.prepare('SELECT COUNT(*) AS n FROM wacontact w LEFT JOIN WeAppBizAttrSyncBufferTableV02 a ON a.user_name = w.user_name' + whereSql).get() as { n: number }).n
@@ -280,8 +286,17 @@ export function queryRecords(
       return { items, total }
     }
     const whereSql = combineWhere(s.where ?? '', s.timeCol ? timeSql(s.timeCol) : '')
+    if (opts?.sort === 'amount' && (kind === 'transfers' || kind === 'redpackets')) {
+      const total = countWhere(db, s.table, whereSql)
+      const all = queryTable(db, s.table, s.cols, s.order, Math.min(total, 5000), 0, whereSql, 'desc', s.tieBreak)
+      enrichRecords(all, kind, decryptedDir, names, enterpriseNames, selfUsername)
+      attachPaymentAmounts(decryptedDir, kind, all)
+      sortRecordsByAmount(all, direction)
+      return { items: all.slice(off, off + cap), total }
+    }
     const items = queryTable(db, s.table, s.cols, s.order, cap, off, whereSql, direction, s.tieBreak)
-    enrichRecords(items, kind, decryptedDir, names, enterpriseNames)
+    enrichRecords(items, kind, decryptedDir, names, enterpriseNames, selfUsername)
+    if (kind === 'transfers' || kind === 'redpackets') attachPaymentAmounts(decryptedDir, kind, items)
     return { items, total: countWhere(db, s.table, whereSql) }
   } catch (e) {
     return {
@@ -291,6 +306,115 @@ export function queryRecords(
     }
   } finally {
     db.close()
+  }
+}
+
+/** 把分（整数）格式成「¥12.34」。记录表没有金额列，这是展示给表格的唯一形态。 */
+function formatCents(cents: number): string {
+  const whole = Math.trunc(cents / 100)
+  const frac = String(Math.abs(cents % 100)).padStart(2, '0')
+  return '¥' + String(whole) + '.' + frac
+}
+
+/** 支付卡片 XML → 金额（分）。类型对不上或读不出人民币时返回 null，不把 0 当成「没有金额」。 */
+function paymentCents(content: string, kind: 'transfers' | 'redpackets'): number | null {
+  if (content === '') return null
+  const rich = parseMessageContent(49, content, false).rich
+  if (kind === 'transfers' && rich?.type === 'transfer') return parseCnyAmount(rich.title).cents
+  if (kind === 'redpackets' && rich?.type === 'redpacket') return parseCnyAmount(rich.amount).cents
+  return null
+}
+
+/**
+ * 按当前页的消息服务端 id，到消息分片里取支付卡片金额。
+ * 转账/红包表只有收付款人和状态，金额只写在 `wcpayinfo.feedesc`。
+ */
+function lookupPaymentCents(
+  decryptedDir: string,
+  kind: 'transfers' | 'redpackets',
+  serverIds: readonly string[],
+): Map<string, number> {
+  const out = new Map<string, number>()
+  const pending = [...new Set(serverIds.map(id => id.trim()).filter(id => id !== '' && id !== '0'))]
+  if (pending.length === 0) return out
+  const numeric: bigint[] = []
+  for (const id of pending) {
+    if (!/^\d+$/.test(id)) continue
+    try { numeric.push(BigInt(id)) } catch { /* 非数字走文本兜底 */ }
+  }
+  const remember = (sid: string, content: string): void => {
+    if (sid === '' || out.has(sid)) return
+    const cents = paymentCents(content, kind)
+    if (cents !== null) out.set(sid, cents)
+  }
+  const scan = (serverExpr: string, params: Array<string | bigint>): void => {
+    if (params.length === 0 || out.size >= pending.length) return
+    const placeholders = params.map(() => '?').join(',')
+    for (const shard of shardCatalogDirs(decryptedDir, ['message'])) {
+      try {
+        withDb(shard.file, (db) => {
+          for (const [table, meta] of shard.tables) {
+            if (!meta.cols.has('server_id') || !meta.cols.has('message_content')) continue
+            try {
+              const rows = db.prepare(
+                'SELECT CAST(' + serverExpr + ' AS TEXT) AS sid, message_content AS mc FROM "' + table + '" WHERE ' + serverExpr + ' IN (' + placeholders + ')',
+              ).all(...params) as Array<Record<string, unknown>>
+              for (const row of rows) remember(cellString(row['sid']).trim(), decodeCell(row['mc']))
+            } catch { /* 单表读不动不影响其余分片 */ }
+          }
+        })
+      } catch { /* 分片打不开：跳过 */ }
+      if (out.size >= pending.length) return
+    }
+  }
+  scan('server_id', numeric)
+  const leftover = pending.filter(id => !out.has(id))
+  scan('CAST(server_id AS TEXT)', leftover)
+  return out
+}
+
+/** 当前账号是付款方 = 流出，是收款方 = 转入。对不上时留空，不猜测。 */
+function transferFlow(self: string, payer: unknown, receiver: unknown): 'in' | 'out' | '' {
+  const me = self.trim()
+  if (me === '') return ''
+  const pay = cellString(payer).trim()
+  const recv = cellString(receiver).trim()
+  if (pay !== '' && pay === me) return 'out'
+  if (recv !== '' && recv === me) return 'in'
+  return ''
+}
+
+/** 按已写入的 `amount` 排序。读不出金额的行放在最后，不把空值当成 0。 */
+export function sortRecordsByAmount(items: RecordItem[], direction: 'asc' | 'desc'): void {
+  const sign = direction === 'asc' ? 1 : -1
+  const centsOf = (item: RecordItem): number | null => {
+    const raw = cellString(item['amount']).replace(/[¥￥,\s]/g, '')
+    if (raw === '') return null
+    const yuan = Number(raw)
+    return Number.isFinite(yuan) ? Math.round(yuan * 100) : null
+  }
+  items.sort((a, b) => {
+    const left = centsOf(a)
+    const right = centsOf(b)
+    if (left === null && right === null) return 0
+    if (left === null) return 1
+    if (right === null) return -1
+    return (left - right) * sign
+  })
+}
+
+/** 给当前页的转账/红包补上 `amount`（展示用，空串表示本地卡片没有可证明的金额）。 */
+function attachPaymentAmounts(decryptedDir: string, kind: 'transfers' | 'redpackets', items: RecordItem[]): void {
+  const ids: string[] = []
+  for (const it of items) {
+    ids.push(cellString(it['message_server_id']).trim(), cellString(it['second_message_server_id']).trim())
+  }
+  const byId = lookupPaymentCents(decryptedDir, kind, ids)
+  for (const it of items) {
+    const primary = cellString(it['message_server_id']).trim()
+    const secondary = cellString(it['second_message_server_id']).trim()
+    const cents = byId.get(primary) ?? byId.get(secondary)
+    it['amount'] = cents === undefined ? '' : formatCents(cents)
   }
 }
 

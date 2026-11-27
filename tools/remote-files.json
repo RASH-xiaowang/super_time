@@ -12,6 +12,7 @@
     "gateway-message-list.ts",
     "gateway-chat-ai-reply.ts",
     "gateway-taskcenter.ts",
+    "gateway-tools.ts",
     "gateway-db-health.ts",
     "gateway.ts"
   ],

@@ -393,6 +393,8 @@ export interface ImageDataUrlResult {
      * HTTP 远程访问忽略此字段，继续用 `url` 的 data URL。
      */
     file?: string;
+    /** 局域网取图地址。 */
+    lanUrl?: string;
     error?: string;
 }
 /** 一篇文章封面的批量结果（A1，2026-09-28 性能修复：把 N 个单张 RPC 收成 1 个）。 */
@@ -417,6 +419,7 @@ export interface EmoticonDataUrlsResult {
         md5: string;
         dataUrl?: string;
         format?: string;
+        file?: string;
         error?: string;
     }>;
 }

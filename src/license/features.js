@@ -35,7 +35,32 @@ const FEATURE_GROUPS = [
     label: '交付与维护',
     description: '导出、备份、隐私与数据维护能力。',
   },
+  {
+    id: 'apps',
+    label: '应用托管',
+    description: '由 Super Time 统一授权、部署与管理的本机应用（如 SuperLanguage）。',
+  },
 ]
+
+/**
+ * 被托管应用可用的能力位。
+ *
+ * 这些位写进许可证的 `apps.<appId>.caps`，再由 Super Time 经授权票据下发给实例，
+ * 实例在执行前逐条检查 —— 因此新增位必须同时改 `apps/superlanguage/src/license_gate.cpp`
+ * 的识别表，否则会落到「未知能力一律拒绝」。
+ */
+const APP_CAPABILITIES = [
+  { id: 'search', label: '会话搜索', description: '只做 Ctrl+F 定位会话，不输入正文。' },
+  { id: 'send', label: '文本发送', description: '向目标会话发送文本消息。' },
+  { id: 'attachments', label: '附件发送', description: '发送本机文件与附件资源。' },
+  { id: 'mention', label: '群成员 @', description: '在群聊里 @ 指定成员。' },
+]
+
+/** 托管默认能力：没写 caps 时按全部开放（席位与配额仍然生效）。 */
+const DEFAULT_APP_CAPABILITIES = APP_CAPABILITIES.map((item) => item.id)
+
+/** 托管默认每小时任务上限；写进工时只作兜底，实际由 Super Time 覆盖。 */
+const DEFAULT_APP_MAX_JOBS_PER_HOUR = 120
 
 /**
  * 所有可签发的功能位。
@@ -207,6 +232,13 @@ const FEATURE_CATALOG = [
     group: 'tools',
     description: '数据库体检、损坏修复、原图升级与自动下载。',
   },
+  {
+    id: 'apps-superlanguage',
+    label: '应用托管实例',
+    group: 'apps',
+    direct: true,
+    description: '允许 Super Time 授权、部署与管理 SuperLanguage 实例；实例数由席位数决定。',
+  },
 ]
 
 const KNOWN_FEATURES = FEATURE_CATALOG.map((feature) => feature.id)
@@ -216,7 +248,12 @@ const FEATURE_LABELS = Object.fromEntries(FEATURE_CATALOG.map((feature) => [feat
 /** 新目录中新增的细粒度功能；旧许可证的基础位仍按旧行为兼容。 */
 const GRANULAR_FEATURES = new Set(
   FEATURE_CATALOG
-    .filter((feature) => !['wechat-data', 'ai-ask', 'ai-summary', 'export', 'backup', 'privacy-audit', 'voice-transcribe'].includes(feature.id))
+    .filter((feature) => ![
+      'wechat-data', 'ai-ask', 'ai-summary', 'export', 'backup', 'privacy-audit', 'voice-transcribe',
+      // 2026-11-24：应用托管是**新增的付费能力**，不属于「新增数据模块」。
+      // 放进 GRANULAR_FEATURES 会让 featureSchemaVersion≠2 的旧证直接白拿 —— 必须排除。
+      'apps-superlanguage',
+    ].includes(feature.id))
     .map((feature) => feature.id),
 )
 
@@ -238,6 +275,9 @@ module.exports = {
   FEATURE_LABELS,
   GRANULAR_FEATURES,
   KNOWN_FEATURES,
+  APP_CAPABILITIES,
+  DEFAULT_APP_CAPABILITIES,
+  DEFAULT_APP_MAX_JOBS_PER_HOUR,
   featureLabel,
   isKnownFeature,
 }

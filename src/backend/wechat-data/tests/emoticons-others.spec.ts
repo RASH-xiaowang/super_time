@@ -7,11 +7,12 @@
  * @vitest-environment node
  */
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { afterEach, describe, expect, it } from 'vitest'
+import { invalidateWechatMeta } from '../src/query/meta.ts'
 import { queryEmoticons } from '../src/query/emoticons.ts'
 
 const scratch: string[] = []
@@ -54,12 +55,31 @@ function fixture(count: number): string {
 }
 
 describe('其他表情包完整返回', () => {
-  it('超过 500 个时不再截断，othersTotal 与列表长度一致', () => {
+  it('超过 500 个时不再截断，othersTotal 与列表长度一致', async () => {
     const root = fixture(620)
-    const snap = queryEmoticons(root, 200, 0)
+    const snap = await queryEmoticons(root, 200, 0)
     expect(snap.others).toHaveLength(620)
     expect(snap.othersTotal).toBe(620)
     expect(new Set(snap.others?.map(item => item.md5)).size).toBe(620)
     expect(snap.others?.every(item => item.cdnUrl !== undefined)).toBe(true)
+  })
+
+  it('明确不要其他表情时不扫消息库', async () => {
+    const root = fixture(3)
+    const snap = await queryEmoticons(root, 200, 0, undefined, false)
+    expect(snap.others).toBeUndefined()
+    expect(snap.othersTotal).toBeUndefined()
+  })
+
+  it('扫过一次后写入硬盘档案，消息库不在也能读回同一批', async () => {
+    const root = fixture(3)
+    const decoded = join(root, 'decoded')
+    const first = await queryEmoticons(root, 200, 0, undefined, true, decoded)
+    expect(first.others).toHaveLength(3)
+    expect(existsSync(join(root, 'emoticon-archive.db'))).toBe(true)
+    invalidateWechatMeta()
+    rmSync(join(root, 'message'), { recursive: true, force: true })
+    const second = await queryEmoticons(root, 200, 0, undefined, true, decoded)
+    expect(second.others?.map((item) => item.md5).sort()).toEqual(first.others?.map((item) => item.md5).sort())
   })
 })

@@ -1,3 +1,4 @@
+import { type SnsDownloadOptions } from './sns-cdn-download.ts';
 /** 取图结果：成功给 data URL，失败给可读原因（调用方据此回落本机解密或显示说明）。 */
 export interface SnsCdnImageResult {
     dataUrl?: string;
@@ -12,4 +13,4 @@ export interface SnsCdnImageResult {
  * @param fetchImpl - 取数实现（默认全局 `fetch`；测试注入用）。
  * @returns `{ dataUrl }` 或 `{ error }`。
  */
-export declare function fetchSnsCdnImage(rawUrl: string, token: string | undefined, seed: string | undefined, fetchImpl?: typeof fetch): Promise<SnsCdnImageResult>;
+export declare function fetchSnsCdnImage(rawUrl: string, token: string | undefined, seed: string | undefined, fetchImpl?: typeof fetch, downloadOptions?: SnsDownloadOptions): Promise<SnsCdnImageResult>;

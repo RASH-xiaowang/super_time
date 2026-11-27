@@ -179,6 +179,25 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
   const [busy, setBusy] = useState(false)
   const [zoom, setZoom] = useState<string | null>(null)
   const [sourceMode, setSourceMode] = useState(false)
+  const [sourceRecord, setSourceRecord] = useState(record)
+  useEffect(() => {
+    setSourceRecord(record)
+    if (record === null || record.images.length === 0) return undefined
+    let cancelled = false
+    void apiGetImageDataUrlsBatch(record.images.map((image) => ({
+      username: record.chatUsername,
+      localId: image.localId,
+    }))).then((rows) => {
+      if (cancelled) return
+      const urls = new Map(rows.map((row) => [row.localId, row.lanUrl]))
+      const images = record.images.map((image) => {
+        const url = urls.get(image.localId)
+        return typeof url === 'string' && url !== '' ? { ...image, url } : image
+      })
+      setSourceRecord({ ...record, images })
+    }).catch(() => { /* 源码仍展示记录里已有的字段 */ })
+    return () => { cancelled = true }
+  }, [record])
   const { notice, flash, hold } = useTransientNotice(4000)
 
   /** Esc 栈：记录弹窗在最下层；图片放大开着时由放大层（后 push）先响应。 */
@@ -240,7 +259,7 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
               variant="outline"
               aria-pressed={sourceMode}
               aria-label={sourceMode ? '切换到界面模式' : '切换到源码模式'}
-              title={sourceMode ? '返回可读的触发信息' : '显示编码后的完整触发记录 JSON'}
+              title={sourceMode ? '返回可读的触发信息' : '显示完整触发记录 JSON'}
               onClick={() => { setSourceMode(value => !value) }}
             >
               {sourceMode ? '界面模式' : '源码模式'}
@@ -261,9 +280,8 @@ export function TaskCenterRecordModal({ triggerId, record, onClose, onDispatch }
             <section className={css.modalSection} aria-label="触发记录源码">
               <div className={css.sourceBar}>
                 <span className={css.modalSectionLabel}>触发信息源码</span>
-                <span className={kitCss.textMeta}>完整 JSON · 中文与特殊字符已转换为 Unicode 转义</span>
               </div>
-              <pre className={css.sourceCode} data-trigger-source="">{triggerRecordSource(record)}</pre>
+              <pre className={css.sourceCode} data-trigger-source="">{triggerRecordSource(sourceRecord ?? record)}</pre>
             </section>
           ) : (
             <>

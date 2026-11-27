@@ -98,6 +98,8 @@ export interface ChatsViewProps {
    * 一件都加不进去；而这一项只有一个消费方（头部那枚返回按钮），也不是任何一袋弹窗的道具。
    */
   onBackToList?: () => void
+  /** 单聊跳到该联系人的朋友圈。袋外独立 prop，避免扩大状态袋。 */
+  onOpenMoments?: (username: string) => void
   /** 会话级 AI 回复开关（袋外独立 prop，避免扩大状态袋）。 */
   aiReply?: {
     visible: boolean
@@ -115,6 +117,8 @@ export interface ChatsViewProps {
     kbId: number
     /** 上下文时间窗（小时）；0 = 不限。 */
     contextWindowHours: number
+    safetyHandoff: string
+    safetyBlocked: string
     onToggle: () => void
     onScanNow: () => void
     onSavePersona: (input: {
@@ -124,6 +128,8 @@ export interface ChatsViewProps {
       kbEnabled: boolean
       kbId: number
       contextWindowHours: number
+      safetyHandoff: string
+      safetyBlocked: string
     }) => Promise<boolean>
   }
   /** 会话列表的 AI 回复徽标与筛选；与当前会话的 aiReply 开关分开。 */
@@ -675,7 +681,7 @@ function ChatsMessageStream(props: ChatsMessageStreamProps): React.JSX.Element {
   )
 }
 
-export function ChatsView({ state, batchExport, messageTools, messagePoster, notice, indexProgress, onCancelIndexBuild, onCancelMsgSearch, onBackToList, aiReply, aiReplyFilter, messageFileSave, messageVirtualization }: ChatsViewProps): React.JSX.Element {
+export function ChatsView({ state, batchExport, messageTools, messagePoster, notice, indexProgress, onCancelIndexBuild, onCancelMsgSearch, onBackToList, onOpenMoments, aiReply, aiReplyFilter, messageFileSave, messageVirtualization }: ChatsViewProps): React.JSX.Element {
   const { calendar, edited, exportDialog, groupInfo, aiEligible, aiFull, aiOpen, aiTarget, analysisPaneOpen, analysisTarget, batchMode, buildIndex, changeView, chatlogOpen, chatlogResolving, chatlogStack, clearAllDrafts, clearDraft, contactInfoOpen, curSession,
   dismissMsgMenu, error, exportBatch, exportMsg, filtered, groupInfoOpen, hasMore, indexBuilding, jumpToLatest, loadMore, loading, memberLimit, messages, messagesMatchSession, moreOpen, msgEndRef, msgError, msgHits, msgIndexed, msgItems, msgLoading, msgMenu, msgScrollRef, msgSearchError, msgSearchLoading, msgSearched, msgVirtualizer, newMsgCount, normalList, onSearchInput, openCalendar, openEdits, openGroupInfo, openNestedChatlog, openSession, openSessionAndLocate, pinnedCollapsed, pinnedList, pollStatus, profileMember, profilePos, reloadCurrent, renderMsgItem, renderSession, runMenuAction, search, searchMode, selected, sessBeforeHeight, sessCount, sessSentinel, sessStart, sessTopSentinel, sessionListRef, sessionSearching, sessionsLoadMoreRef, sessionsPager, setAiFull, setAiOpen, setAnalysisPaneOpen, setAnalysisTarget, setBatchMode, setChatlogStack, setContactInfoOpen, setMoreOpen, setMsgMenu, setSearch, setSearchMode, setSelected, setViewer, stats, togglePinned, typeStats, view, viewer } = state
   // 右栏只有一块面板（「回复助手」）：打开即同时包含分析（这条消息怎么理解）与
@@ -745,6 +751,7 @@ export function ChatsView({ state, batchExport, messageTools, messagePoster, not
                 clearAllDrafts={clearAllDrafts}
                 clearDraft={clearDraft}
                 aiReply={aiReply}
+                onOpenMoments={onOpenMoments}
               />
             </div>
             {messageFileSave.state.status !== 'idle' && (

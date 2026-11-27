@@ -183,13 +183,15 @@ export function saveMessageListRule(
   if (isFeatherResourceEndpoint(webhookUrl)) {
     return {
       ok: false,
-      error: 'Webhook 必须填写大肥鱼基础发送地址 /webhook/<token>，不能使用附件资源端点 /resources',
+      error: 'Webhook 必须填写基础发送地址 /webhook/<token>，不能使用附件资源端点 /resources',
     }
   }
   const chatName = textOf(input?.chatName, NAME_MAX)
   const targetName = textOf(input?.targetName, NAME_MAX)
   const greetingText = textOf(input?.greetingText, TEXT_MAX) || '你好'
   const note = textOf(input?.note, NOTE_MAX)
+  // 实例 id 是 UUID（36 字符）；脏值直接截断成空串，不让它污染 addr 同步逻辑。
+  const appInstanceId = textOf(input?.appInstanceId, 64)
   const capacityError = featherRuleCapacityError(webhookUrl, chatName, targetName, greetingText)
   if (capacityError !== undefined) return { ok: false, error: capacityError }
   const id = positiveId(input?.id)
@@ -202,12 +204,13 @@ export function saveMessageListRule(
       ensureMessageListSchema(db)
       let ruleId = id
       if (id > 0) {
-        const current = db.prepare(`SELECT enabled, account_key, chat_username
+        const current = db.prepare(`SELECT enabled, account_key, chat_username, managed_by
           FROM message_list_rules WHERE id = ?`)
           .get(id) as {
             enabled?: unknown
             account_key?: unknown
             chat_username?: unknown
+            managed_by?: unknown
           } | undefined
         if (current === undefined) return { ok: false, error: '规则不存在' }
         scopeAccount = textOf(current.account_key, USERNAME_MAX)
@@ -218,25 +221,42 @@ export function saveMessageListRule(
           '规则会话',
         ).username
         const enabled = input?.enabled === undefined ? numOf(current.enabled) === 1 : input.enabled !== false
+        // 内部「同步托管实例地址」会传 keepManagedBy：那条规则仍由系统维护，
+        // 清掉标记会让它下次不再跟随会话级默认地址。
+        const managedBy = input?.keepManagedBy === true
+          ? textOf(current.managed_by, 40)
+          : ''
         db.prepare(`UPDATE message_list_rules SET
           chat_name = ?, target_name = ?, webhook_url = ?, greeting_text = ?, note = ?,
-          enabled = ?, managed_by = '', updated_at = ?
-          WHERE id = ?`).run(chatName, targetName, webhookUrl, greetingText, note, enabled ? 1 : 0, now, id)
+          enabled = ?, managed_by = ?, app_instance_id = ?, updated_at = ?
+          WHERE id = ?`).run(
+          chatName,
+          targetName,
+          webhookUrl,
+          greetingText,
+          note,
+          enabled ? 1 : 0,
+          managedBy,
+          appInstanceId,
+          now,
+          id,
+        )
       } else {
         const enabled = input?.enabled !== false
         const info = db.prepare(`INSERT INTO message_list_rules
-          (chat_name, target_name, webhook_url, greeting_text, note, enabled, created_at, updated_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          chatName, targetName, webhookUrl, greetingText, note, enabled ? 1 : 0, now, now,
+          (chat_name, target_name, webhook_url, greeting_text, note, enabled, app_instance_id, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          chatName, targetName, webhookUrl, greetingText, note, enabled ? 1 : 0, appInstanceId, now, now,
         )
         ruleId = numOf(info.lastInsertRowid)
       }
       if (ruleId <= 0) return { ok: false, error: '规则保存后无法确定 id' }
+      let backfilled = 0
       if (input?.enabled !== false) {
         const hasScopedRule = scopeAccount !== '' || scopeChatUsername !== ''
         if (hasScopedRule && scopeAccount !== '' && scopeChatUsername !== '') {
           const sourceRefPrefix = 'ai-reply:' + scopeAccount + ':' + scopeChatUsername + ':'
-          db.prepare(`UPDATE message_list_records SET webhook_url = ?, updated_at = ?
+          const info = db.prepare(`UPDATE message_list_records SET webhook_url = ?, error = '', updated_at = ?
             WHERE source = 'ai_reply' AND status = 'pending' AND webhook_url = ''
               AND (trim(text) <> '' OR (images <> '[]' AND images <> ''))
               AND chat_name = ? AND target_name = ? AND chat_username = ?
@@ -250,15 +270,17 @@ export function saveMessageListRule(
               sourceRefPrefix,
               sourceRefPrefix,
             )
+          backfilled = Math.max(0, Number(info.changes))
         } else if (!hasScopedRule) {
-          db.prepare(`UPDATE message_list_records SET webhook_url = ?, updated_at = ?
+          const info = db.prepare(`UPDATE message_list_records SET webhook_url = ?, error = '', updated_at = ?
             WHERE status = 'pending' AND webhook_url = ''
               AND (trim(text) <> '' OR (images <> '[]' AND images <> ''))
               AND chat_name = ? AND target_name = ?`)
             .run(webhookUrl, now, chatName, targetName)
+          backfilled = Math.max(0, Number(info.changes))
         }
       }
-      return { ok: true, id: ruleId }
+      return { ok: true, id: ruleId, backfilled }
     })
   } catch (e) {
     const raw = errorText(e)
@@ -281,6 +303,13 @@ export interface EnsureExactMessageListRuleInput {
   greetingText?: string
   note?: string
   enabled?: boolean
+  /**
+   * 地址由哪个托管实例提供（`apps.superlanguage` 实例 id）。
+   *
+   * 默认规则也要记住它：实例换端口后主进程靠这一列把地址同步过来，
+   * 否则「会话级默认 Webhook 指向实例」的规则一重启就指向死端口。
+   */
+  appInstanceId?: string
 }
 
 export type EnsureExactMessageListRuleResult =
@@ -360,12 +389,13 @@ export function ensureExactMessageListRule(
         let created = false
         let systemRuleUpdated = false
         let previousSystemWebhook = ''
+        const managedInstance = textOf(input?.appInstanceId, 64)
         if (row === undefined) {
           const now = Date.now()
           const info = db.prepare(`INSERT INTO message_list_rules
             (account_key, chat_username, chat_name, target_name, webhook_url,
-              greeting_text, note, enabled, managed_by, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ai_reply_default', ?, ?)`).run(
+              greeting_text, note, enabled, managed_by, app_instance_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'ai_reply_default', ?, ?, ?)`).run(
             accountKey,
             chatUsername,
             chatName,
@@ -374,6 +404,7 @@ export function ensureExactMessageListRule(
             greetingText,
             note,
             enabled ? 1 : 0,
+            managedInstance,
             now,
             now,
           )
@@ -388,10 +419,13 @@ export function ensureExactMessageListRule(
           && textOf(row['managed_by'], 40) === 'ai_reply_default'
         ) {
           previousSystemWebhook = httpUrl(row['webhook_url'])
-          if (previousSystemWebhook !== webhookUrl || numOf(row['enabled']) !== 1) {
+          const previousInstance = textOf(row['app_instance_id'], 64)
+          if (previousSystemWebhook !== webhookUrl
+            || numOf(row['enabled']) !== 1
+            || previousInstance !== managedInstance) {
             db.prepare(`UPDATE message_list_rules SET
-              webhook_url = ?, enabled = 1, updated_at = ?
-              WHERE id = ?`).run(webhookUrl, Date.now(), numOf(row['id']))
+              webhook_url = ?, enabled = 1, app_instance_id = ?, updated_at = ?
+              WHERE id = ?`).run(webhookUrl, managedInstance, Date.now(), numOf(row['id']))
             systemRuleUpdated = true
             row = db.prepare('SELECT * FROM message_list_rules WHERE id = ?').get(
               numOf(row['id']),
@@ -446,6 +480,47 @@ export function ensureExactMessageListRule(
     }
     return { ok: false, error: 'AI 回复规则自动绑定失败：' + raw }
   }
+}
+
+/**
+ * 任务创建/更新后，保证「会话名 + 触发对象」有一条消息列表规则。
+ *
+ * 已有精确规则不改。没有时新建：下游地址优先沿用同会话规则，其次全局规则；
+ * 都没有就先留空，用户再到规则里补地址。
+ */
+export function ensureTaskMessageListRule(
+  db: DatabaseSync,
+  input: { chatName: string; targetName: string },
+): void {
+  ensureMessageListSchema(db)
+  const chatName = textOf(input.chatName, NAME_MAX)
+  const targetName = textOf(input.targetName, NAME_MAX)
+  if (chatName === '' || targetName === '') return
+  const existing = db.prepare(`SELECT id FROM message_list_rules
+    WHERE account_key = '' AND chat_username = '' AND chat_name = ? AND target_name = ?
+    LIMIT 1`).get(chatName, targetName) as { id?: unknown } | undefined
+  if (existing !== undefined) return
+  const inherited = db.prepare(`SELECT webhook_url, app_instance_id FROM message_list_rules
+    WHERE enabled = 1 AND account_key = '' AND chat_username = ''
+      AND webhook_url <> ''
+      AND (
+        (chat_name = ? AND target_name = '')
+        OR (chat_name = '' AND target_name = '')
+      )
+    ORDER BY CASE WHEN chat_name = ? THEN 0 ELSE 1 END, updated_at DESC, id DESC
+    LIMIT 1`).get(chatName, chatName) as { webhook_url?: unknown; app_instance_id?: unknown } | undefined
+  const now = Date.now()
+  db.prepare(`INSERT INTO message_list_rules
+    (chat_name, target_name, webhook_url, greeting_text, note, enabled, app_instance_id, created_at, updated_at)
+    VALUES (?, ?, ?, '', ?, 1, ?, ?, ?)`).run(
+    chatName,
+    targetName,
+    textOf(inherited?.webhook_url, 2000),
+    '随任务创建',
+    textOf(inherited?.app_instance_id, 64),
+    now,
+    now,
+  )
 }
 
 /** 按 id 读取规则（桌面端探测已保存地址用）。 */

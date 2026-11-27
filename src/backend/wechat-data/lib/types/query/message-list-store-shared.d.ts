@@ -5,7 +5,7 @@ export declare const TEXT_MAX = 4000;
 export declare const NOTE_MAX = 500;
 export declare const WEBHOOK_MAX = 2048;
 /**
- * 大肥鱼发送程序的真实请求契约。
+ * 发送程序的真实请求契约。
  *
  * `api_server.cpp` 使用 `wchar_t target[128]` / `message[512]`，容量包含结尾
  * `\0`；UTF-8 body 上限为 8192 字节。这里按 Windows UTF-16 code unit 计数，

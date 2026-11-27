@@ -1,8 +1,7 @@
 /**
  * 聊天侧共用的客户画像抽屉。
  *
- * 单聊「聊天信息」与群成员资料卡都从这里打开同一个内容组件；调用方只提供身份和
- * 群内上下文，不把画像状态铺回 `Chats.tsx` / `ChatsView` 的状态带。
+ * 单聊「聊天信息」从这里打开同一个内容组件。群成员和企业微信联系人不做画像。
  */
 import { Drawer } from '../ui/kit.tsx'
 import { useCustomer360 } from './use-customer-360.ts'
@@ -17,7 +16,7 @@ export interface CustomerPortraitDialogProps {
   context?: CustomerProfileContext
 }
 
-/** 打开当前联系人或群成员的完整画像与标签。 */
+/** 打开当前好友的完整画像与标签。 */
 export function CustomerPortraitDialog({
   open, identity, onClose, context = {},
 }: CustomerPortraitDialogProps): React.JSX.Element {

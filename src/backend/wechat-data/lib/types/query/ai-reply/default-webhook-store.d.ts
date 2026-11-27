@@ -31,6 +31,8 @@ export interface ApplyChatAiReplyDefaultWebhookInput {
     targetName?: string;
     greetingText?: string;
     note?: string;
+    /** 地址来自哪个托管实例；透传给自动绑定的精确规则，便于实例换端口后同步。 */
+    appInstanceId?: string;
 }
 export type ApplyChatAiReplyDefaultWebhookResult = {
     ok: true;

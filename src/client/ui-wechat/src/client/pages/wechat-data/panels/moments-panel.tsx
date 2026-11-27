@@ -200,7 +200,7 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     count: momentRows.length,
     getScrollElement: () => scrollRef.current,
     estimateSize: (i) => (momentRows[i]?.kind === 'day' ? MOMENT_DAY_ROW_PX : MOMENT_CARD_PX),
-    overscan: 4,
+    overscan: 8,
     getItemKey: (i) => momentRowKey(momentRows[i]),
   })
   const momentWindowItems = momentVirtualizer.getVirtualItems()
@@ -215,8 +215,8 @@ export function MomentsPanel({ author, onClearAuthor }: { author?: string | null
     viewer,
     scrollRef,
     groups,
-    renderKey: momentRenderKey,
-    detailKey: detail?.m.tid ?? '',
+    renderKey: momentRenderKey, detailKey: detail?.m.tid ?? '',
+    rows: momentRows, windowEnd: momentWindowItems.length > 0 ? (momentWindowItems[momentWindowItems.length - 1]?.index ?? -1) : -1,
   })
 
   // 导出弹窗 + 手动重同步整个交给 moments-export.ts。

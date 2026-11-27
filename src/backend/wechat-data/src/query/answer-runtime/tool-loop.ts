@@ -305,6 +305,71 @@ async function executeTool(input: ExecuteInput): Promise<ExecuteOutcome> {
   return { result: final, trace, maxAttempts }
 }
 
+/** 同一工具、同一参数只跑一次；后到的调用等先到的结束再复用结果。 */
+async function takeCachedCall(
+  input: {
+    call: ToolCallBlock
+    traceIndex: number
+    round: number
+    loop: ToolLoopInput
+    cache: Map<string, CachedToolResult>
+    inflight?: Map<string, Promise<void>>
+  },
+  key: string,
+  cacheArgs: Record<string, unknown>,
+): Promise<{ outcome?: ExecuteOutcome; release: () => void }> {
+  const pending = input.inflight?.get(key)
+  if (pending) await pending
+  const cached = input.cache.get(key)
+  if (!cached) {
+    if (!input.inflight) return { release: () => {} }
+    let resolve: () => void = () => {}
+    const gate = new Promise<void>((done) => { resolve = done })
+    input.inflight.set(key, gate)
+    return {
+      release: () => {
+        input.inflight?.delete(key)
+        resolve()
+      },
+    }
+  }
+  const { call, loop } = input
+  const stageKey = `tool:${String(input.traceIndex)}:${call.name}`
+  const resultFields = resultTraceFields(cached.result)
+  const trace = createToolCallTrace({
+    index: input.traceIndex,
+    round: input.round,
+    callId: String(call.id),
+    name: call.name,
+    args: cacheArgs,
+    ok: cached.result.ok,
+    deduplicated: true,
+    hits: cached.result.hits.length,
+    facts: cached.result.facts?.length ?? 0,
+    ...(cached.result.ok ? {} : { errorClass: classifyFailure(cached.result).cls }),
+    ...(cached.result.errorCode ? { errorCode: cached.result.errorCode } : {}),
+    note: '复用相同工具与参数的本次结果',
+    ...(cached.result.ok ? {} : { errorMessage: cached.result.error }),
+    ...resultFields,
+  })
+  emitToolStage(loop.emitStage, {
+    key: stageKey,
+    label: call.name,
+    status: cached.result.ok ? 'done' : 'failed',
+    phase: cached.result.ok ? 'completed' : 'failed',
+    callId: String(call.id),
+    toolName: call.name,
+    argumentsSummary: trace.argumentsSummary,
+    attempt: 0,
+    maxAttempts: 1,
+    ...(trace.errorClass === undefined ? {} : { errorClass: trace.errorClass }),
+    hits: trace.hits,
+    facts: trace.facts,
+    detail: resultFields.resultSummary ?? '复用相同工具与参数的本次结果',
+  })
+  return { outcome: { result: cached.result, trace, maxAttempts: 1, cacheKey: key }, release: () => {} }
+}
+
 async function executeCall(input: {
   call: ToolCallBlock
   traceIndex: number
@@ -314,6 +379,7 @@ async function executeCall(input: {
   cacheOrder: CachedToolResult[]
   deadlineMs: number
   overLimit: boolean
+  inflight?: Map<string, Promise<void>>
 }): Promise<ExecuteOutcome> {
   const { call, loop } = input
   if (input.overLimit) {
@@ -462,44 +528,9 @@ async function executeCall(input: {
 
   const cacheArgs = scopeNormalizedArgs(call.name, repaired.args, loop)
   const key = toolCallCacheKey(call.name, cacheArgs)
-  const cached = input.cache.get(key)
-  if (cached) {
-    const stageKey = `tool:${String(input.traceIndex)}:${call.name}`
-    const resultFields = resultTraceFields(cached.result)
-    const trace = createToolCallTrace({
-      index: input.traceIndex,
-      round: input.round,
-      callId: String(call.id),
-      name: call.name,
-      args: cacheArgs,
-      ok: cached.result.ok,
-      deduplicated: true,
-      hits: cached.result.hits.length,
-      facts: cached.result.facts?.length ?? 0,
-      ...(cached.result.ok ? {} : { errorClass: classifyFailure(cached.result).cls }),
-      ...(cached.result.errorCode ? { errorCode: cached.result.errorCode } : {}),
-      note: '复用相同工具与参数的本次结果',
-      ...(cached.result.ok ? {} : { errorMessage: cached.result.error }),
-      ...resultFields,
-    })
-    emitToolStage(loop.emitStage, {
-      key: stageKey,
-      label: call.name,
-      status: cached.result.ok ? 'done' : 'failed',
-      phase: cached.result.ok ? 'completed' : 'failed',
-      callId: String(call.id),
-      toolName: call.name,
-      argumentsSummary: trace.argumentsSummary,
-      attempt: 0,
-      maxAttempts: 1,
-      ...(trace.errorClass === undefined ? {} : { errorClass: trace.errorClass }),
-      hits: trace.hits,
-      facts: trace.facts,
-      detail: resultFields.resultSummary ?? '复用相同工具与参数的本次结果',
-    })
-    return { result: cached.result, trace, maxAttempts: 1, cacheKey: key }
-  }
-
+  const slot = await takeCachedCall(input, key, cacheArgs)
+  if (slot.outcome) return slot.outcome
+  try {
   const stageKey = `tool:${String(input.traceIndex)}:${call.name}`
   const outcome = await executeTool({
     name: call.name,
@@ -549,6 +580,9 @@ async function executeCall(input: {
   }
   rememberResult(input.cache, input.cacheOrder, cachedEntry)
   return { ...outcome, cacheKey: key }
+  } finally {
+    slot.release()
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -747,6 +781,7 @@ async function runFallback(input: {
   round: number
   cache: Map<string, CachedToolResult>
   cacheOrder: CachedToolResult[]
+  inflight: Map<string, Promise<void>>
   deadlineMs: number
   /** 补查时跳过已经失败或零命中的“同工具 + 同规范化参数”。 */
   skipKeys?: ReadonlySet<string>
@@ -827,6 +862,7 @@ async function runFallback(input: {
       loop: input.loop,
       cache: input.cache,
       cacheOrder: input.cacheOrder,
+      inflight: input.inflight,
       deadlineMs: input.deadlineMs,
       overLimit: false,
     })
@@ -909,6 +945,7 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
   const messages = [...input.messages]
   const cache = new Map<string, CachedToolResult>()
   const cacheOrder: CachedToolResult[] = []
+  const inflight = new Map<string, Promise<void>>()
   const results: ToolResult[] = []
   const traces: ToolCallTrace[] = []
   const usages: ToolLoopResult['usages'] = []
@@ -1030,6 +1067,7 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
           round,
           cache,
           cacheOrder,
+          inflight,
           deadlineMs,
           ...(needsSupplement ? { skipKeys: noEvidenceKeys } : {}),
         })
@@ -1046,23 +1084,25 @@ export async function runToolLoop(input: ToolLoopInput): Promise<ToolLoopResult>
     }
 
     messages.push(assistantMessage(turn.blocks, source))
+    const outcomes = await Promise.all(calls.map((call, offset) => executeCall({
+      call,
+      traceIndex: traces.length + offset,
+      round,
+      loop: roundInput,
+      cache,
+      cacheOrder,
+      inflight,
+      deadlineMs,
+      overLimit: offset >= maxCalls,
+    })))
     let hadExecutableCall = false
     let hadFreshExecution = false
     let terminalEvidence = false
-    for (const [offset, call] of calls.entries()) {
-      const traceIndex = traces.length
-      const overLimit = offset >= maxCalls
-      const outcome = await executeCall({
-        call,
-        traceIndex,
-        round,
-        loop: roundInput,
-        cache,
-        cacheOrder,
-        deadlineMs,
-        overLimit,
-      })
+    for (const [offset, outcome] of outcomes.entries()) {
+      const call = calls[offset]
+      if (!call) continue
       traces.push(outcome.trace)
+      const overLimit = offset >= maxCalls
       if (!overLimit) {
         hadExecutableCall = true
         if (!outcome.trace.deduplicated) hadFreshExecution = true

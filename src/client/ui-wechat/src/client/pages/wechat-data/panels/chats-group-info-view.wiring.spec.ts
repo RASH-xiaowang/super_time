@@ -195,14 +195,19 @@ describe('微信对齐（D0–D2）：行语法、箭头纪律与六区骨架', 
     }
   })
 
-  it('底部动作位（D7 / 2026-10-19 重排）：群抽屉是滚动区外的固定 footer，单聊抽屉仍贴底', () => {
+  it('底部动作位（D7 / 2026-10-19 重排）：两个抽屉都是滚动区外的固定 footer', () => {
     // 群抽屉：导出槽是 `groupInfo` 的固定 footer，不参与滚动 —— 这才是用户要的「不挡住内容」。
     expect(SHELL_CSS, '群抽屉导出槽没固定为 footer').toMatch(/\.groupExport \{[^}]*flex:\s*0 0 auto/)
     expect(SHELL_CSS, '群抽屉导出槽又用 margin-top:auto 挤在滚动区里 ⇒ 内容一高就会压住资料行').not.toMatch(
       /\.groupExport \{[^}]*margin-top:\s*auto/,
     )
-    // 单聊抽屉的空间分配与群抽屉不同，仍是内容内贴底。
-    expect(CONTACT_CSS, '单聊抽屉导出槽没贴底').toMatch(/\.exportRow \{[^}]*margin-top:\s*auto/)
+    // 单聊抽屉原先靠 `margin-top: auto` 在滚动内容里贴底；共同的群一长，按钮就被列表压住了
+    // （2026-11-24 用户截图：新建任务/导出聊天记录夹在群列表中间）。现在与群抽屉同一口径：
+    // 固定 footer、不参与滚动。回归判据：不许再退回 margin-top:auto。
+    expect(CONTACT_CSS, '单聊抽屉导出槽又回到滚动内容里靠 margin-top:auto 贴底了').not.toMatch(
+      /\.exportRow \{[^}]*margin-top:\s*auto/,
+    )
+    expect(CONTACT_CSS, '单聊抽屉导出槽没固定为 footer').toMatch(/\.exportRow \{[^}]*flex:\s*0 0 auto/)
   })
 
   /**

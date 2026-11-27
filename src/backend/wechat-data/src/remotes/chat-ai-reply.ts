@@ -26,8 +26,6 @@ import { readChatAiReplyTrace, writeChatAiReplyTrace } from '../query/ai-reply/t
 import type { ChatAiReplyTraceReadResult } from '../query/ai-reply/trace-store.ts'
 import type { ChatAiReplyRegenerateResult } from '../query/ai-reply/runner-regenerate.ts'
 import { errorText, latestMessageCursor } from '../query/ai-reply/runner-recovery.ts'
-import { assessReplyOutbound, rememberReplySent } from '../query/agent/reply-gate.ts'
-import { runAgentTick } from '../query/agent/store.ts'
 import type { ChatAiReplyGenerateFn } from '../query/ai-reply/generator.ts'
 import type {
   ChatAiReplyDefaultWebhookMutationResult,
@@ -204,15 +202,11 @@ function createChatAiReplyScanDeps(
     ...(rc.transcribeVoices === undefined ? {} : { transcribeVoices: rc.transcribeVoices }),
     ...(rc.collectKbSnippets === undefined ? {} : { collectKbSnippets: rc.collectKbSnippets }),
     gate: rc.gate,
-    assessOutbound: (input) => assessReplyOutbound(dir(), input),
     holdReply: async (input) => {
       const held = holdAiReplyMessageListDraft(dir(), input.id, input.reason)
       return held.ok
         ? { ok: true }
         : { ok: false, ...(held.error === undefined ? {} : { error: held.error }) }
-    },
-    noteReplySent: (input) => {
-      rememberReplySent(dir(), input.accountKey, input.chatUsername)
     },
     reserveReply: async (input) => {
       const reserved = reserveAiReplyMessageListRecord(dir(), input)
@@ -410,7 +404,13 @@ function recordResultOf(
 function saveDefaultWebhookWithRule(
   rc: CreateChatAiReplyRemotesInputs,
   dir: string,
-  options: { chatUsername: string; chatName?: string; webhookUrl: string },
+  options: {
+    chatUsername: string
+    chatName?: string
+    webhookUrl: string
+    /** 地址来自哪个托管实例；空 = 手填。透传给自动绑定的规则。 */
+    appInstanceId?: string
+  },
 ): ChatAiReplyDefaultWebhookMutationResult {
   const saved = saveChatAiReplyDefaultWebhook(dir, {
     accountKey: rc.selfUsername(),
@@ -431,6 +431,7 @@ function saveDefaultWebhookWithRule(
     accountKey: rc.selfUsername(),
     chatUsername: options.chatUsername,
     ...(options.chatName === undefined ? {} : { chatName: options.chatName }),
+    ...(options.appInstanceId ? { appInstanceId: options.appInstanceId } : {}),
   })
   if (!applied.ok && applied.reason !== 'missing_webhook') {
     rc.op(
@@ -515,6 +516,7 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
       chatUsername: string
       chatName?: string
       webhookUrl: string
+      appInstanceId?: string
     }): ChatAiReplyDefaultWebhookMutationResult {
       return saveDefaultWebhookWithRule(rc, dir(), options)
     },
@@ -604,6 +606,8 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
       kbEnabled?: boolean
       kbId?: number
       contextWindowHours?: number
+      safetyHandoff?: string
+      safetyBlocked?: string
       expectedRevision?: number
     }): ChatAiReplyMutationResult {
       const state = saveChatAiReplyPersona(dir(), {
@@ -618,6 +622,8 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
         ...(options.contextWindowHours === undefined
           ? {}
           : { contextWindowHours: options.contextWindowHours }),
+        ...(options.safetyHandoff === undefined ? {} : { safetyHandoff: options.safetyHandoff }),
+        ...(options.safetyBlocked === undefined ? {} : { safetyBlocked: options.safetyBlocked }),
         ...(options.expectedRevision === undefined ? {} : { expectedRevision: options.expectedRevision }),
       })
       if (state.ok) rc.changed()
@@ -627,11 +633,6 @@ export function createChatAiReplyRemotes(rc: CreateChatAiReplyRemotesInputs) {
     },
 
     scanOnce(): Promise<ChatAiReplyScanResult> {
-      try {
-        runAgentTick(dir(), rc.selfUsername())
-      } catch (e) {
-        rc.op('task', 'agent_tick', 'fail', '', errorText(e))
-      }
       return runner.scan()
     },
 

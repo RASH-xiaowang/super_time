@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createBoundedCache } from './cache-budget.ts'
 import { decodeDatBytesAsync } from './media-image-async.ts'
 import { MD5_SEGMENT } from '../md5.ts'
@@ -85,6 +85,14 @@ interface SnsImageIndex {
   months: Map<string, MonthEntry>
 }
 const snsImageIndex = new Map<string, SnsImageIndex>()
+
+/** Account directory + decode-key generation; never expose raw keys in cache identifiers. */
+function snsDecodeScope(root: string, aesKey: string | undefined, xorKey: number): string {
+  const path = resolve(root)
+  return createHash('sha256').update(JSON.stringify([
+    process.platform === 'win32' ? path.toLowerCase() : path, aesKey ?? '', xorKey,
+  ])).digest('hex')
+}
 
 /**
  * 单次调用**最多解密多少个缓存文件**（2026-09-29 实测后加的硬上限）。
@@ -174,7 +182,7 @@ async function drainPending(entry: MonthEntry, aesKey: string | undefined, xorKe
     done += 1
     let md5 = ''
     try {
-      const dec = await decodeDatBytesAsync(new Uint8Array(await readFile(it.path)), aesKey ?? null, xorKey)
+      const dec = await decodeDatBytesAsync(snsInputView(await readFile(it.path)), aesKey ?? null, xorKey, { snsMemory: true })
       if (!('error' in dec)) md5 = md5Of(dec.bytes)
     } catch {
       // 单张失败只记签名：别每次调用都重试同一张坏文件。
@@ -198,8 +206,9 @@ async function snsResolveByIndex(
   budget = SNS_INDEX_BUDGET_FILES,
 ): Promise<{ file?: string; complete: boolean }> {
   const roots = snsMonthRoots(wechatBaseDir, 'Img', notes)
-  let idx = snsImageIndex.get(wechatBaseDir)
-  if (!idx) { idx = { months: new Map() }; snsImageIndex.set(wechatBaseDir, idx) }
+  const scope = snsDecodeScope(wechatBaseDir, aesKey, xorKey)
+  let idx = snsImageIndex.get(scope)
+  if (!idx) { idx = { months: new Map() }; snsImageIndex.set(scope, idx) }
   // 月份目录集合变化时，丢弃已不存在的月份缓存
   const live = new Set(roots.map((r) => r.month))
   for (const m of [...idx.months.keys()]) if (!live.has(m)) idx.months.delete(m)
@@ -246,7 +255,7 @@ async function snsResolveByIndex(
 }
 
 function md5Of(bytes: Uint8Array): string {
-  return createHash('md5').update(Buffer.from(bytes)).digest('hex')
+  return createHash('md5').update(bytes).digest('hex')
 }
 
 function walkFiles(dir: string, out: string[], depth: number, notes?: ScanNotes): void {
@@ -374,6 +383,7 @@ const SNS_MONTH_REFRESH_MIN_MS = 2_000
  */
 function refreshAttach (idx: AttachIndex, notes: ScanNotes): void {
   const seen = new Set<string>()
+  const pending = new Set(idx.pending.map((item) => item.path))
   for (const f of idx.entries) {
     const path = f.path
     // 名字就是 32 位哈希的：命名规则保证"名字 = 明文 md5"，对不上的一律不解密。
@@ -393,7 +403,7 @@ function refreshAttach (idx: AttachIndex, notes: ScanNotes): void {
     if (prev !== undefined && prev.mtimeMs === mtimeMs && prev.size === size) continue
     // 变了/新的：清掉旧结论，重新排队。
     idx.files.delete(path)
-    idx.pending.push({ path, mtimeMs, size })
+    if (!pending.has(path)) idx.pending.push({ path, mtimeMs, size })
   }
   // 目录里已经没有的清掉
   for (const p of [...idx.files.keys()]) if (!seen.has(p)) idx.files.delete(p)
@@ -408,7 +418,17 @@ function refreshAttach (idx: AttachIndex, notes: ScanNotes): void {
  * {@link ATTACH_BUDGET_MS}。
  * @returns 实际处理了几个。
  */
-async function drainAttach (idx: AttachIndex, aesKey: string | undefined, xorKey: number, budgetFiles: number, budgetMs: number): Promise<number> {
+const attachDrains = new WeakMap<AttachIndex, Promise<number>>()
+function drainAttach(idx: AttachIndex, aesKey: string | undefined, xorKey: number, budgetFiles: number, budgetMs: number): Promise<number> {
+  const pending = attachDrains.get(idx)
+  if (pending) return pending
+  const task = drainAttachWork(idx, aesKey, xorKey, budgetFiles, budgetMs).finally(() => {
+    if (attachDrains.get(idx) === task) attachDrains.delete(idx)
+  })
+  attachDrains.set(idx, task)
+  return task
+}
+async function drainAttachWork (idx: AttachIndex, aesKey: string | undefined, xorKey: number, budgetFiles: number, budgetMs: number): Promise<number> {
   let done = 0
   const startedAt = Date.now()
   while (idx.pending.length > 0 && done < budgetFiles) {
@@ -419,7 +439,7 @@ async function drainAttach (idx: AttachIndex, aesKey: string | undefined, xorKey
     done += 1
     let md5 = ''
     try {
-      const dec = await decodeDatBytesAsync(new Uint8Array(await readFile(it.path)), aesKey ?? null, xorKey)
+      const dec = await decodeDatBytesAsync(snsInputView(await readFile(it.path)), aesKey ?? null, xorKey, { snsMemory: true })
       if (!('error' in dec)) md5 = md5Of(dec.bytes)
     } catch {
       // 单张失败也记签名，别每次重试同一张坏文件。
@@ -483,6 +503,32 @@ export function prewarmBudgetMs(backlog: number): number {
   return PREWARM_MAX_MS
 }
 
+
+/** One root chooser and index owner for prewarming and foreground resolution. */
+function snsAttachContext(base: string, aesKey: string | undefined, xorKey: number, notes: ScanNotes): { idx: AttachIndex } | undefined {
+  const root = [resolve(base, 'msg', 'attach'), resolve(base, '..', 'msg', 'attach')]
+    .find((candidate) => existsSync(candidate))
+  if (!root) return undefined
+  const key = snsDecodeScope(root, aesKey, xorKey)
+  let idx = attachIndex.get(key)
+  if (!idx) {
+    idx = { files: new Map(), pending: [], entries: [], walkedAt: 0, drainedAt: 0 }
+    attachIndex.set(key, idx)
+  }
+  if (!attachDrains.has(idx) && (idx.walkedAt === 0 || Date.now() - idx.walkedAt >= ATTACH_WALK_INTERVAL_MS)) {
+    const all: string[] = []
+    walkFiles(root, all, 0, notes)
+    idx.entries = all.map((path) => {
+      const nameBase = (path.split(/[\\/]/).pop() ?? '').replace(/\.dat$/i, '').replace(/_(t|h|b|thumb.*)$/i, '')
+      const lower = path.toLowerCase()
+      return { path, nameBase, isHash: MD5_NAME_RE.test(nameBase),
+        isThumb: lower.includes('_t.') || lower.includes('_h.') || lower.includes('_b.') || lower.includes('_thumb') }
+    })
+    refreshAttach(idx, notes)
+  }
+  return { idx }
+}
+
 export async function pumpSnsDecodeCache (
   wechatBaseDir: string | undefined,
   aesKey: string | undefined,
@@ -498,35 +544,10 @@ export async function pumpSnsDecodeCache (
    * （也就是说"接上了但没干活"）。而不同微信版本的层级未必一致，所以这里列出候选、
    * **只认真正存在 `msg/attach` 的那个**；两个都不存在就照旧返回 false（等同未配置）。
    */
-  const attachRoot = [
-    join(wechatBaseDir, 'msg', 'attach'),
-    join(wechatBaseDir, '..', 'msg', 'attach'),
-  ].find((p) => existsSync(p))
-  if (attachRoot === undefined) return { advanced: false, steps: 0, backlog: 0 }
-  // 索引按**真实 attach 根**做键（否则同一个目录会因两个入参形成两份索引，预热效率减半）
-  const indexKey = attachRoot
-  let idx = attachIndex.get(indexKey)
-  if (!idx) {
-    idx = { files: new Map(), pending: [], entries: [], walkedAt: 0, drainedAt: 0 }
-    attachIndex.set(indexKey, idx)
-  }
-  const notes: string[] = []
-  // 与 resolveSnsImageDataUrl 同源：列目录走 30 秒闸门，分类只做一次
-  if (idx.entries.length === 0 || Date.now() - idx.walkedAt >= ATTACH_WALK_INTERVAL_MS) {
-    const all: string[] = []
-    walkFiles(attachRoot, all, 0, notes)
-    idx.entries = all.map((path) => {
-      const nameBase = (path.split(/[\\/]/).pop() ?? '').replace(/\.dat$/i, '').replace(/_(t|h|b|thumb.*)$/i, '')
-      const lower = path.toLowerCase()
-      return {
-        path,
-        nameBase,
-        isHash: MD5_NAME_RE.test(nameBase),
-        isThumb: lower.includes('_t.') || lower.includes('_h.') || lower.includes('_b.') || lower.includes('_thumb'),
-      }
-    })
-    refreshAttach(idx, notes)
-  }
+  const notes: ScanNotes = []
+  const context = snsAttachContext(wechatBaseDir, aesKey, xorKey, notes)
+  if (!context) return { advanced: false, steps: 0, backlog: 0 }
+  const { idx } = context
   /**
    * 单次调用内**按时间预算连续推进**（2026-09-29 提速）。
    *
@@ -562,15 +583,14 @@ export async function pumpSnsDecodeCache (
   return { advanced: steps > 0, steps, backlog: idx.pending.length }
 }
 
-export function snsAttachProgressForTest(wechatBaseDir: string): { decoded: number; pending: number; paths: number } | undefined {
+export function snsAttachProgressForTest(wechatBaseDir: string, aesKey?: string, xorKey = 0): { decoded: number; pending: number; paths: number } | undefined {
   /**
    * 索引键是**真实 attach 根**（见 `pumpSnsDecodeCache`：真机上它在账号目录，而不是 `config.db_dir`
-   * 指向的 `db_storage`）。所以这里三种键都试一遍，兼容调用方传任意一层目录 ——
+   * 指向的 `db_storage`）。所以这里与生产路径一致按两种目录候选和解码代次查找 ——
    * 否则收紧键以后统计会**永远查不到**（`sns-media.spec.ts` 用的是 `?? 0`，抓不到这种回归）。
    */
-  const idx = attachIndex.get(wechatBaseDir)
-    ?? attachIndex.get(join(wechatBaseDir, 'msg', 'attach'))
-    ?? attachIndex.get(join(wechatBaseDir, '..', 'msg', 'attach'))
+  const roots = [resolve(wechatBaseDir, 'msg', 'attach'), resolve(wechatBaseDir, '..', 'msg', 'attach')]
+  const idx = roots.map((root) => attachIndex.get(snsDecodeScope(root, aesKey, xorKey))).find(Boolean)
   if (!idx) return undefined
   let decoded = 0
   for (const v of idx.files.values()) if (v.md5 !== '') decoded += 1
@@ -589,14 +609,19 @@ export function snsAttachProgressForTest(wechatBaseDir: string): { decoded: numb
  */
 function dataUrlOf(dec: { bytes: Uint8Array; format: string }): string {
   const mime = dec.format === 'jpg' ? 'jpeg' : dec.format
-  return 'data:image/' + mime + ';base64,' + Buffer.from(dec.bytes).toString('base64')
+  return 'data:image/' + mime + ';base64,' + Buffer.from(dec.bytes.buffer, dec.bytes.byteOffset, dec.bytes.byteLength).toString('base64')
+}
+
+/** Preserve Uint8Array semantics without a second allocation of the just-read encrypted file. */
+function snsInputView(bytes: Buffer): Uint8Array {
+  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength)
 }
 
 /** Decode one cache file; returns data URL or null. */
 async function decodeCachedFile(f: string, aesKey: string | undefined, xorKey: number): Promise<string | null> {
   try {
     const bytes = await readFile(f)
-    const dec = await decodeDatBytesAsync(new Uint8Array(bytes), aesKey ?? null, xorKey)
+    const dec = await decodeDatBytesAsync(snsInputView(bytes), aesKey ?? null, xorKey, { snsMemory: true })
     if ('error' in dec) return null
     return dataUrlOf(dec)
   } catch {
@@ -637,7 +662,7 @@ export async function findSnsMediaDataUrlByIndex(
     // 先看解码缓存：命中过的早就解好了（`resolveSnsImageDataUrl` 写入的就是这里）。
     // 省掉一次重扫 —— 但**不能**因此跳过「索引里有没有」这个判断：缓存里有值就说明
     // 之前已经确认过本机有，直接复用即可。
-    const memo = md5UrlCache.get(key)
+    const memo = md5UrlCache.get(snsDecodeScope(wechatBaseDir, aesKey, xorKey) + ':' + key + '#o')
     if (typeof memo === 'string' && memo) return memo
     const notes: ScanNotes = []
     const idxRes = await snsResolveByIndex(wechatBaseDir, aesKey, xorKey, key, notes)
@@ -680,7 +705,7 @@ export async function resolveSnsImageDataUrl(
     : key
   // 两条档位必须**分开的缓存键**：否则一次 `allowThumb: true` 存进去的缩略图，
   // 会被后面的 `allowThumb: false` 当成原图读出来 —— 恰好是这次要修的那件事。
-  const cacheKey = baseCacheKey + (allowThumb ? '' : '#o')
+  const cacheKey = snsDecodeScope(wechatBaseDir ?? '', aesKey, xorKey) + ':' + baseCacheKey + (allowThumb ? '' : '#o')
   if (!baseCacheKey) return { error: '缺少图片标识' }
   const cached = md5UrlCache.get(cacheKey)
   if (cached) return { url: cached }
@@ -777,7 +802,7 @@ export async function resolveSnsImageDataUrl(
     for (const f of files) {
       try {
         const bytes = await readFile(f)
-        const dec = await decodeDatBytesAsync(new Uint8Array(bytes), aesKey ?? null, xorKey)
+        const dec = await decodeDatBytesAsync(snsInputView(bytes), aesKey ?? null, xorKey, { snsMemory: true })
         if ('error' in dec) continue
         if (key && md5Of(dec.bytes) !== key) continue
         const data = dataUrlOf(dec)
@@ -795,38 +820,18 @@ export async function resolveSnsImageDataUrl(
   // 但 attach 的命名规则就是 **`<md5>.dat`**（本机实测 50,259 个里全是这种形状，
   // 只有 `_t/_h/_b` 后缀差异）⇒ **名字对不上目标 md5 的文件，其明文 md5 不可能等于目标**，
   // 根本不必解密。于是先按文件名筛掉绝大多数，只解真正可能命中的那几个。
-  const attachRoot = join(wechatBaseDir, 'msg', 'attach')
-  if (!existsSync(attachRoot)) {
-    routes.push('本机没有 msg/attach 目录（这条兜底未尝试）')
-  }
-  if (existsSync(attachRoot)) {
-    let idx = attachIndex.get(wechatBaseDir)
-    if (!idx) {
-      idx = { files: new Map(), pending: [], entries: [], walkedAt: 0, drainedAt: 0 }
-      attachIndex.set(wechatBaseDir, idx)
-    }
-    // 列目录有 30 秒闸门（5 万条不值得每次列）；分类（去掉后缀、判哈希/缩略图）也只在这一步做一次。
-    if (idx.entries.length === 0 || Date.now() - idx.walkedAt >= ATTACH_WALK_INTERVAL_MS) {
-      const all: string[] = []
-      walkFiles(attachRoot, all, 0, notes)
-      idx.entries = all.map((path) => {
-        const nameBase = (path.split(/[\\/]/).pop() ?? '').replace(/\.dat$/i, '').replace(/_(t|h|b|thumb.*)$/i, '')
-        const lower = path.toLowerCase()
-        return {
-          path,
-          nameBase,
-          isHash: MD5_NAME_RE.test(nameBase),
-          isThumb: lower.includes('_t.') || lower.includes('_h.') || lower.includes('_b.') || lower.includes('_thumb'),
-        }
-      })
-      refreshAttach(idx, notes)
-    }
+  const context = snsAttachContext(wechatBaseDir, aesKey, xorKey, notes)
+  if (!context) routes.push('本机没有 msg/attach 目录（这条兜底未尝试）')
+  if (context) {
+    const { idx } = context
     mark('attach-walk')
     // 突发闸门：一屏里连续多个未命中只推进一次解密（见 ATTACH_DRAIN_MIN_INTERVAL_MS）
     if (Date.now() - idx.drainedAt >= ATTACH_DRAIN_MIN_INTERVAL_MS) {
       idx.drainedAt = Date.now()
       await drainAttach(idx, aesKey, xorKey, ATTACH_BUDGET_FILES, ATTACH_BUDGET_MS)
     }
+    const warming = attachDrains.get(idx)
+    if (warming) await warming
     mark('attach-drain')
     // 先找缩略图（_t/_h/_b，通常为 jpg，浏览器可直接显示）；HEVC/HEIC 大图回退到最后。
     //
@@ -835,6 +840,7 @@ export async function resolveSnsImageDataUrl(
     // 缩略图赢了 CDN 的原图，于是「高清」永远拿不到。
     let hevcFallback: { data: string } | null = null
     for (const f of idx.entries) {
+      if (!allowThumb && f.isThumb) continue
       const nameBase = f.nameBase
       // 前缀匹配必须带**长度门槛**：msg/attach 里有 504 个文件名短于 16 字符（实测有 2 个
       // 就叫 `0_t`），而 `key.startsWith('0')` 对任意以 0 开头的 md5 都成立 ——
@@ -852,7 +858,7 @@ export async function resolveSnsImageDataUrl(
       }
       try {
         const bytes = await readFile(f.path)
-        const dec = await decodeDatBytesAsync(new Uint8Array(bytes), aesKey ?? null, xorKey)
+        const dec = await decodeDatBytesAsync(snsInputView(bytes), aesKey ?? null, xorKey, { snsMemory: true })
         if ('error' in dec) continue
         if (md5Of(dec.bytes) !== key && !nameMatch) continue
         const data = dataUrlOf(dec)

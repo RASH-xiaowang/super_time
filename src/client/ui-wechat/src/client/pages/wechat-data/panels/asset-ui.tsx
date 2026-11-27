@@ -3,9 +3,9 @@
  * This is panel-local layout, not an addition to the shared `ui/kit`.
  */
 import * as React from 'react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { SearchInput, Segmented, Toolbar, clickableKey } from '../ui/kit.tsx'
-import { apiGetEmoticonDataUrl } from '../api.ts'
+import { withThumbWidth, wechatMediaUrl } from '../wechat-media.ts'
 import type { EmoticonItem } from '@deepseek-ai/dsh-wechat-data/types'
 import css from './list-panel.module.css'
 
@@ -68,7 +68,7 @@ function emoTypeLabel(t: number | undefined): string {
   return ''
 }
 
-export function EmoticonCell({ e, onCopy, onUnavailable, itemIndex }: {
+export function EmoticonCell({ e, onCopy, itemIndex }: {
   e: EmoticonItem
   onCopy: (md5: string) => void
   /**
@@ -82,31 +82,7 @@ export function EmoticonCell({ e, onCopy, onUnavailable, itemIndex }: {
   /** 渐进窗口的原始索引，用于回收头部时测量真实高度。 */
   itemIndex?: number
 }): React.JSX.Element {
-  const [src, setSrc] = useState<string | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setSrc(null)
-    setErr(null)
-    apiGetEmoticonDataUrl({ md5: e.md5.toLowerCase(), ...(e.cdnUrl ? { emojiUrl: e.cdnUrl } : {}) })
-      .then((r) => {
-        if (cancelled) return
-        if (r.url) setSrc(r.url)
-        else {
-          setErr(r.error ?? '表情不可用')
-          onUnavailable?.(e.md5)
-        }
-      })
-      .catch((ex: unknown) => {
-        if (cancelled) return
-        setErr((ex as Error).message)
-        onUnavailable?.(e.md5)
-      })
-    return () => { cancelled = true }
-    // `onUnavailable` 不进依赖：父组件用 `useCallback` 保证稳定，写进来反而会因引用变化重取。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [e.md5, e.cdnUrl])
+  const src = e.file ? withThumbWidth(wechatMediaUrl(e.file), 160) : null
 
   const title = `${e.caption || '自定义表情'}\nMD5：${e.md5}${emoTypeLabel(e.item_type) ? `\n类型：${emoTypeLabel(e.item_type)}` : ''}\n点击复制 MD5`
 
@@ -127,7 +103,7 @@ export function EmoticonCell({ e, onCopy, onUnavailable, itemIndex }: {
       {src ? (
         <img className={css.emoImg} src={src} alt={e.caption || '表情'} loading="lazy" decoding="async" />
       ) : (
-        <span className={css.emoPh} title={err ?? '表情加载中…'}>{err ? '🙁' : '😀'}</span>
+        <span className={css.emoPh} title="表情还在保存">…</span>
       )}
       {e.caption !== undefined && e.caption !== '' && (
         <span className={css.emoName}>{e.caption}</span>

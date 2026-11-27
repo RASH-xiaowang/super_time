@@ -52,6 +52,7 @@ import {
   nextSelectedTaskId,
   normalizeTriggerSearch,
   photoLimitLabel,
+  textLimitLabel,
   plainText,
   readyMissingFields,
   readyRequirementHint,
@@ -146,6 +147,11 @@ describe('时间与计数文案', () => {
     expect(recordImageCountLabel(0)).toBe('无图片')
     expect(recordImageCountLabel(2)).toBe('图片 2 张')
   })
+
+  it('文本条数文案（任务配置侧）', () => {
+    expect(textLimitLabel(0)).toBe('不带文本')
+    expect(textLimitLabel(4)).toBe('4 条文本')
+  })
 })
 
 describe('文本摘要与关键词折叠', () => {
@@ -168,7 +174,7 @@ describe('文本摘要与关键词折叠', () => {
 })
 
 describe('触发记录源码模式', () => {
-  it('输出完整合法 JSON，并把中文与 emoji 都转成 Unicode 转义', () => {
+  it('输出完整合法 JSON，中文与 emoji 保持原字符', () => {
     const record = makeRecord({
       taskName: '报价任务',
       text: '@你在干嘛呢？😀',
@@ -179,8 +185,10 @@ describe('触发记录源码模式', () => {
     })
     const source = triggerRecordSource(record)
 
-    expect(source).not.toMatch(/[^\x00-\x7F]/)
-    expect(source).toMatch(/\\u[0-9a-f]{4}/)
+    expect(source).toContain('报价任务')
+    expect(source).toContain('@你在干嘛呢？😀')
+    expect(source).toContain('张三')
+    expect(source).not.toContain('\\u62a5')
     expect(JSON.parse(source)).toEqual(record)
     expect(source).toContain('"images"')
     expect(source).toContain('"externalTaskId": "run-1"')
@@ -660,6 +668,16 @@ describe('编辑草稿：基础字段', () => {
     expect(validateTaskDraft({ ...base, photoLimit: 1.5 }, WEBHOOK).photoLimit).toContain('整数')
   })
 
+  it('文本条数校验：0–9 的整数，越界/小数被拦下', () => {
+    const base = makeDraft({ textLimit: 2 })
+    expect(validateTaskDraft(base, WEBHOOK)).toEqual({})
+    expect(validateTaskDraft({ ...base, textLimit: 0 }, WEBHOOK)).toEqual({})
+    expect(validateTaskDraft({ ...base, textLimit: 9 }, WEBHOOK)).toEqual({})
+    expect(validateTaskDraft({ ...base, textLimit: 10 }, WEBHOOK).textLimit).toContain('文本条数')
+    expect(validateTaskDraft({ ...base, textLimit: -1 }, WEBHOOK).textLimit).toContain('文本条数')
+    expect(validateTaskDraft({ ...base, textLimit: 1.5 }, WEBHOOK).textLimit).toContain('整数')
+  })
+
   it('保存入参带 id 与会话/目标字段，关键词/姓名 trim，照片数夹回 0–9', () => {
     const task = makeTask({ id: 7, chatUsername: 'wxid_chat', chatName: '群名', targetUsername: 'wxid_t', targetName: '对象' })
     const input = taskSaveInput(task, makeDraft({
@@ -682,6 +700,9 @@ describe('编辑草稿：基础字段', () => {
     expect(taskSaveInput(task, makeDraft({ photoLimit: 100 }), WEBHOOK).photoLimit).toBe(9)
     expect(taskSaveInput(task, makeDraft({ photoLimit: -3 }), WEBHOOK).photoLimit).toBe(0)
     expect(taskSaveInput(task, makeDraft({ photoLimit: 1.7 }), WEBHOOK).photoLimit).toBe(1)
+    expect(taskSaveInput(task, makeDraft({ textLimit: 4 }), WEBHOOK).textLimit).toBe(4)
+    expect(taskSaveInput(task, makeDraft({ textLimit: 100 }), WEBHOOK).textLimit).toBe(9)
+    expect(taskSaveInput(task, makeDraft({ textLimit: -2 }), WEBHOOK).textLimit).toBe(0)
   })
 
   it('草稿保留「仅匹配 @我」；单聊保存时强制归一为 false', () => {

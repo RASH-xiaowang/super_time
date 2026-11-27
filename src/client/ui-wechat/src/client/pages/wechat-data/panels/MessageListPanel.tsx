@@ -5,7 +5,7 @@
  * 文本、图片、时间、来源、状态、重发与备注；规则按「会话名 + 触发对象」匹配下游地址。
  * 写操作只允许桌面端，手机端保留只读 API，但不把该入口放进手机导航。
  */
-import { useState } from 'react'
+import { useCallback, useState } from 'react'
 import clsx from 'clsx'
 import { Button, PanelHeader, Segmented } from '../ui/kit.tsx'
 import { desktopAction, desktopActionProps } from '../ui/desktop-only.tsx'
@@ -15,7 +15,11 @@ import { MessageListWebhookCard } from './message-list-webhook-card.tsx'
 import { RecordFormDialog, RuleFormDialog } from './message-list-dialogs.tsx'
 import { useMessageListActions } from './use-message-list-actions.ts'
 import { useMessageListData } from './use-message-list-data.ts'
-import { findExactRuleForRecord, type MessageListView } from './message-list-view.ts'
+import {
+  findExactRuleForRecord,
+  recordHasMatchingRule,
+  type MessageListView,
+} from './message-list-view.ts'
 import type { MessageListRecord } from '@deepseek-ai/dsh-wechat-data/types'
 import css from './message-list.module.css'
 
@@ -31,6 +35,17 @@ export function MessageListPanel(): React.JSX.Element {
 
   const refreshing = data.loadingRecords || data.loadingRules
   const refresh = (): void => { void data.refreshAll() }
+  /**
+   * 规则表读取成功前，不能断言「这条 AI 记录没有投递地址」：规则可能刚配好，
+   * 而地址快照要等投递认领才写入。未知一律按「已有规则」处理，避免整段等待期
+   * 都显示成「待配置」。
+   */
+  const hasRuleFor = useCallback(
+    (record: MessageListRecord): boolean => (
+      !data.rulesResolved || recordHasMatchingRule(record, data.rules)
+    ),
+    [data.rules, data.rulesResolved],
+  )
   const configureRecordRule = (record: MessageListRecord): void => {
     setView('rules')
     actions.openRuleFormForRecord(record, findExactRuleForRecord(data.rules, record))
@@ -47,7 +62,6 @@ export function MessageListPanel(): React.JSX.Element {
     <section className={css.root}>
       <PanelHeader
         title="消息列表"
-        desc="任务首次触发、局域网 Webhook 与手动回复的统一投递台账"
         actions={(
           <div className={css.headActions}>
             <Button size="sm" variant="outline" onClick={refresh} disabled={refreshing}>
@@ -104,6 +118,7 @@ export function MessageListPanel(): React.JSX.Element {
           status={data.status}
           source={data.source}
           thumbs={data.thumbs}
+          hasRuleFor={hasRuleFor}
           canWrite={canWrite}
           hasMore={data.hasMore}
           loadingMore={data.loadingMore}

@@ -33,6 +33,7 @@ import type {
   TaskTriggerScanResult,
 } from '@deepseek-ai/dsh-wechat-data/types'
 import { fmtDateTimeSec } from '../utils/format.ts'
+import { TEXT_LIMIT_MAX, TEXT_LIMIT_MIN, clampTextLimit } from './task-center-limits.ts'
 import {
   defaultParamListValue,
   flattenConfigValues,
@@ -108,6 +109,9 @@ export function callbackStatusMeta(status: TaskTriggerCallbackStatus): TaskCente
  */
 export const PHOTO_LIMIT_MIN = 0
 export const PHOTO_LIMIT_MAX = 9
+
+// 文本条数的区间与文案在 `task-center-limits.ts`（M21 行数上限：主文件只留照片这一轴）。
+export { TEXT_LIMIT_MAX, TEXT_LIMIT_MIN, clampTextLimit, textLimitLabel } from './task-center-limits.ts'
 
 /**
  * 把输入框里的任意数字收进合法区间。
@@ -733,7 +737,10 @@ export interface TaskEditDraft {
   name: string
   keywords: string[]
   photoLimit: number
+  textLimit: number
   mentionMeOnly: boolean
+  greetingEnabled: boolean
+  greetingText: string
   /** 触发方式：内置 `webhook` 或某个厂商 id（见 `listRpaVendors`）。 */
   triggerMethod: TaskTriggerMethod
   /** 非敏感配置（已按描述符补默认值）。 */
@@ -759,7 +766,10 @@ export function draftFromTask(task: TaskInfo, descriptor: RpaVendorDescriptor | 
     name: task.name,
     keywords: [...task.keywords],
     photoLimit: task.photoLimit,
+    textLimit: task.textLimit,
     mentionMeOnly: task.mentionMeOnly,
+    greetingEnabled: task.greetingEnabled,
+    greetingText: task.greetingText,
     triggerMethod: task.triggerMethod,
     config: descriptor === null ? { ...source } : withVendorDefaults(descriptor, source),
     secretInputs: {},
@@ -771,6 +781,8 @@ export interface TaskDraftErrors {
   name?: string
   keywords?: string
   photoLimit?: string
+  textLimit?: string
+  greetingText?: string
   /** 触发方式本身不可用（厂商已下线 / 目录读取失败）。 */
   triggerMethod?: string
   /** 厂商字段 key → 行内错误。 */
@@ -782,6 +794,8 @@ export function hasDraftErrors(errors: TaskDraftErrors): boolean {
   return errors.name !== undefined
     || errors.keywords !== undefined
     || errors.photoLimit !== undefined
+    || errors.textLimit !== undefined
+    || errors.greetingText !== undefined
     || errors.triggerMethod !== undefined
     || Object.keys(errors.fields ?? {}).length > 0
 }
@@ -804,6 +818,12 @@ export function validateTaskDraft(draft: TaskEditDraft, descriptor: RpaVendorDes
   if (keywords.length === 0) errors.keywords = '至少填写 1 个触发关键词'
   if (!Number.isInteger(draft.photoLimit) || draft.photoLimit < PHOTO_LIMIT_MIN || draft.photoLimit > PHOTO_LIMIT_MAX) {
     errors.photoLimit = `照片数量需为 ${String(PHOTO_LIMIT_MIN)}–${String(PHOTO_LIMIT_MAX)} 的整数（0 = 不带图片）`
+  }
+  if (draft.greetingEnabled && draft.greetingText.trim() === '') {
+    errors.greetingText = '开启后需要填写问候语'
+  }
+  if (!Number.isInteger(draft.textLimit) || draft.textLimit < TEXT_LIMIT_MIN || draft.textLimit > TEXT_LIMIT_MAX) {
+    errors.textLimit = `文本条数需为 ${String(TEXT_LIMIT_MIN)}–${String(TEXT_LIMIT_MAX)} 的整数（0 = 不带文本）`
   }
   if (descriptor === null) {
     errors.triggerMethod = '触发方式不可用（厂商已下线），请重新选择'
@@ -938,7 +958,10 @@ export function taskSaveInput(task: TaskInfo, draft: TaskEditDraft, descriptor: 
     targetName: task.targetName,
     keywords: draft.keywords.map((k) => k.trim()).filter((k) => k !== ''),
     photoLimit: clampPhotoLimit(draft.photoLimit),
+    textLimit: clampTextLimit(draft.textLimit),
     mentionMeOnly: task.chatType === 'group' && draft.mentionMeOnly,
+    greetingEnabled: draft.greetingEnabled,
+    greetingText: draft.greetingText.trim(),
     triggerMethod: draft.triggerMethod,
     triggerConfig: descriptor === null ? { ...draft.config } : normalizeVendorConfig(descriptor, draft.config),
   }

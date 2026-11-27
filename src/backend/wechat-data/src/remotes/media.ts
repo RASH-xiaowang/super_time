@@ -26,6 +26,15 @@ import { fetchRemoteImages } from '../query/remote-image.ts'
 import { yieldToLoop } from '../query/search-build.ts'
 import type { RemoteImageResult } from '../query/remote-image.ts'
 import { clearDecodedImageCache, fetchEmoticonRemote, resolveImageResourceHint, resolveImageResourceHintsBatch, type ImageResourceHint } from '../query/media-image.ts'
+import { getConfig } from '../config/wechat-config.ts'
+import { pickLanIPv4 } from '../net/lan-ipv4.ts'
+import {
+  RPA_MEDIA_DEFAULT_TTL_MS,
+  isSafeRpaMediaRel,
+  rpaMediaTokenKey,
+  rpaMediaUrl,
+  signRpaMediaToken,
+} from '../net/rpa-media.ts'
 import { decodeEmoticonDataUrlAsync, decodeImageDataUrlAsync, type DecodeImageOptions } from '../query/media-image-async.ts'
 import { createFavoriteMediaRemotes } from './media-favorites.ts'
 import { createVoiceVideoRemotes } from './media-voice.ts'
@@ -101,6 +110,8 @@ export interface ImageBatchItem {
   thumb?: boolean
   /** 相对 decoded_images 的落盘路径（与单张入口同义）；前端据此拼 wechat-media:// 省 base64。 */
   file?: string
+  /** 局域网取图地址。局域网访问开着且文件已落盘时才有。 */
+  lanUrl?: string
   error?: string
 }
 
@@ -221,8 +232,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
   // 网关本地的类型（delegation 签名也用它）—— 纯类型导入，无运行期环
   const rawWechatBase = rc.rawWechatBase
   return {
-    getEmoticons(options?: { limit?: number; offset?: number }): EmoticonsSnapshot {
-      return queryEmoticons(rc.dirs().decrypted, options?.limit, options?.offset, rawWechatBase(rc.dirs().decrypted) || undefined)
+    getEmoticons(options?: { limit?: number; offset?: number; includeOthers?: boolean }): Promise<EmoticonsSnapshot> {
+      return queryEmoticons(rc.dirs().decrypted, options?.limit, options?.offset, rawWechatBase(rc.dirs().decrypted) || undefined, options?.includeOthers, rc.dirs().decoded)
     },
 
     getFiles(options?: { limit?: number; offset?: number; category?: string; q?: string }): FilesSnapshot {
@@ -297,13 +308,8 @@ export function createMediaRemotes(rc: MediaRemoteCtx) {
      * @param options - `items` 为屏上待取的表情（自动去重、忽略空 md5）。
      * @returns 逐条结果，`md5` 回信；顺序 = 去重后的入参顺序。
      */
-    async getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }> }): Promise<EmoticonDataUrlsResult> {
-      return fetchEmoticonDataUrlsBatch(
-        rc.dirs().decrypted,
-        rc.dirs().decoded,
-        rawWechatBase(rc.dirs().decrypted) || undefined,
-        options?.items,
-      )
+    async getEmoticonDataUrls(options: { items: Array<{ md5: string; emojiUrl?: string }>; localOnly?: boolean }): Promise<EmoticonDataUrlsResult> {
+      return fetchEmoticonDataUrlsBatch(rc.dirs().decrypted, rc.dirs().decoded, rawWechatBase(rc.dirs().decrypted) || undefined, options?.items, options?.localOnly === true)
     },
 
     async getImageOriginal(options: { username?: string; localId?: number }): Promise<{ ok: boolean; format?: string; bytes?: number; note?: string; error?: string }> {
@@ -811,17 +817,64 @@ async function imagesBatchWithAutoUpgrade(
   const hintAt = new Map(validIndexes.map((index, at) => [index, hints[at]]))
   const md5s = hints.map(hint => hint.md5 ?? '')
   if (base) await rc.warmDecodedImages(decrypted, decoded, base, validItems, aesKey, xorKey ?? 0xff, md5s)
-  return {
-    items: await mapWithConcurrency(prepared, IMAGE_BATCH_CONCURRENCY, async (it, index) => {
-      if (it.error !== undefined || it.username === '') {
-        return { username: it.username, localId: it.localId, error: it.error ?? '缺少会话 username' }
-      }
-      const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false, {
-        hint: hintAt.get(index),
-        fileOnly,
-      })
-      return { username: it.username, localId: it.localId, ...r }
-    }),
+  const items = await mapWithConcurrency(prepared, IMAGE_BATCH_CONCURRENCY, async (it, index) => {
+    if (it.error !== undefined || it.username === '') {
+      return { username: it.username, localId: it.localId, error: it.error ?? '缺少会话 username' }
+    }
+    const r = await imageWithAutoUpgrade(rc, it.username, it.localId, base, aesKey, xorKey, false, {
+      hint: hintAt.get(index),
+      fileOnly,
+    })
+    return { username: it.username, localId: it.localId, ...r }
+  })
+  return { items: attachLanImageUrls(decrypted, items) }
+}
+
+/** 给已经落盘的图片补一条局域网地址。访问没开或路径不合规则保持原样。 */
+function attachLanImageUrls(decryptedDir: string, items: ImageBatchItem[]): ImageBatchItem[] {
+  const sign = lanImageSigner(decryptedDir)
+  if (sign === undefined) return items
+  return items.map((item) => {
+    if (item.localId <= 0 || typeof item.file !== 'string' || !isSafeRpaMediaRel(item.file)) return item
+    const lanUrl = sign(item.file, item.localId)
+    return lanUrl === '' ? item : { ...item, lanUrl }
+  })
+}
+
+/** 当前配置能签局域网图片地址时返回签名函数。 */
+function lanImageSigner(decryptedDir: string): ((rel: string, recordId: number) => string) | undefined {
+  const cfg = getConfig(decryptedDir)
+  const token = typeof cfg['api_token'] === 'string' ? cfg['api_token'] : ''
+  if (cfg['api_enabled'] !== true || token === '') return undefined
+  const configured = typeof cfg['rpa_media_base_url'] === 'string' ? cfg['rpa_media_base_url'].trim() : ''
+  const baseUrl = configured === '' ? defaultLanBaseUrl(cfg) : normalizeHttpBase(configured)
+  if (baseUrl === '') return undefined
+  const key = rpaMediaTokenKey(token)
+  const expiresAt = Date.now() + RPA_MEDIA_DEFAULT_TTL_MS
+  return (rel, recordId) => {
+    try {
+      return rpaMediaUrl(baseUrl, signRpaMediaToken(key, { recordId, rel, expiresAt }))
+    } catch {
+      return ''
+    }
+  }
+}
+
+function defaultLanBaseUrl(cfg: Record<string, unknown>): string {
+  const ip = pickLanIPv4()
+  if (ip === '') return ''
+  const rawPort = Number(cfg['api_port'])
+  const port = Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : 5032
+  return 'http://' + ip + ':' + String(port)
+}
+
+function normalizeHttpBase(raw: string): string {
+  try {
+    const url = new URL(raw)
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return ''
+    return url.origin
+  } catch {
+    return ''
   }
 }
 

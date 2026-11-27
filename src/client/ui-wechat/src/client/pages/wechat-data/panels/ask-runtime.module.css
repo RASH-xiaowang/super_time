@@ -300,12 +300,14 @@
 .resourceSection {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 8px;
+  width: 100%;
   min-width: 0;
-  padding: 2px 8px;
-  border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  background: color-mix(in srgb, var(--nm-bg-card) 65%, transparent);
+  padding: 8px 10px 10px;
+  border: 1px solid color-mix(in srgb, var(--nm-text-3) 35%, var(--nm-border));
+  border-left: 3px solid var(--nm-text-3);
+  border-radius: var(--nm-r-lg);
+  background: color-mix(in srgb, var(--nm-bg-hover) 70%, var(--nm-bg-card));
 }
 .resourceTitle {
   display: flex;
@@ -318,12 +320,12 @@
 .resourceCard {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
-  padding: 6px 8px;
+  padding: 8px 10px;
   border: 1px solid var(--nm-border);
-  border-radius: var(--nm-dense-r);
-  background: color-mix(in srgb, var(--nm-bg-card) 70%, transparent);
+  border-radius: var(--nm-r-md);
+  background: var(--nm-bg-card);
 }
 .resourceHead {
   display: flex;

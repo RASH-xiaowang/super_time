@@ -60,8 +60,7 @@ export function HookPanel({ onNavigate, embedded = false }: {
   return (
     <div className={embedded ? css.panelEmbedded : css.panel}>
       {/* 微信化：嵌进设置弹窗时不再画页头 —— 节名由左导航表达。 */}
-      {!embedded && <PanelHeader title="原图能力自检" desc="本地解码 · 无注入 / 无桥接" />}
-      {embedded && <div className={kitCss.textCaption}>本地解码 · 无注入 / 无桥接</div>}
+      {!embedded && <PanelHeader title="原图能力自检" />}
       <div className={css.scroll}>
         {/* 2026-09-30 精简：原来这里是「图片如何本地解码？」整段科普 + 三步流程图，
             用户要求砍掉科普类内容 —— 压成一行结论，链路细节留在 docs/ 与代码注释里。 */}

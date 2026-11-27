@@ -111,7 +111,7 @@ export interface TaskCenterActions {
   onSetStatus: (id: number, status: TaskInfoStatus) => Promise<TaskInfoMutationResult>
   /** 删除任务。 */
   onDeleteTask: (id: number) => Promise<TaskInfoMutationResult>
-  /** 批量删除任务配置（触发记录保留）。 */
+  /** 批量删除任务，并删除这些任务的触发记录。 */
   onDeleteTasks: (ids: number[]) => Promise<TaskBatchMutationResult>
   /** 批量删除触发记录（后端重算任务统计）。 */
   onDeleteTriggers: (ids: number[]) => Promise<TaskBatchMutationResult>
@@ -221,7 +221,7 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
     if (ids.length === 0 || exceedsBatchLimit(ids.length)) return
     const ok = await confirm({
       title: `删除所选 ${String(ids.length)} 个任务？`,
-      message: '任务配置会被删除，之后不再触发；已产生的触发记录会保留（它们是历史事实，仍可在右栏回看）。',
+      message: '任务和它的全部触发记录都会删除，之后不再触发，右栏里也看不到这些记录。',
       tone: 'danger',
       confirmText: '批量删除',
     })
@@ -266,7 +266,6 @@ export function TaskCenterView(props: TaskCenterViewProps): React.JSX.Element {
     <div className={css.root}>
       <PanelHeader
         title="任务信息"
-        desc="命中关键词后记录触发内容并投递（Webhook / 多家 RPA 厂商）；仅「已完善」的任务参与触发与投递"
         actions={(
           <>
             <Button

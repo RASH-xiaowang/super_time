@@ -802,6 +802,38 @@
   .spinner { animation-duration: 2s; }
 }
 
+/* 整页第一次打开：一块说明，不画灰色占位卡。 */
+.pageBoot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: min(360px, 48vh);
+  margin: 4px 0 16px;
+  padding: 40px 28px;
+  text-align: center;
+  border: 1px solid var(--nm-border);
+  border-radius: var(--nm-r-lg);
+  background: var(--nm-bg-card);
+}
+.pageBoot .spinner {
+  width: 22px;
+  height: 22px;
+  margin-bottom: 2px;
+}
+.pageBootTitle {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--nm-text-1);
+}
+.pageBootDetail {
+  max-width: 36em;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--nm-text-3);
+}
+
 /* ── 文字工具类 ─────────────────────────────────────────
  * 由第 35 轮的重复规则审计得出：**四组同语义的「次要文字」**被各面板各写一遍 ——
  *   color: var(--nm-text-2); font-size: 12px                  11 条规则 / 20 个类

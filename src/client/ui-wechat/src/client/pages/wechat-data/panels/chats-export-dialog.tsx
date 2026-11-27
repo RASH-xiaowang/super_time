@@ -61,7 +61,7 @@ export function ChatsExportDialog(props: ChatsExportDialogProps): React.JSX.Elem
   if (!exportOpen) return null
   const exporting = exportState.status === 'running'
   return (
-    <div className={cssshell.calOverlay} data-st-dialog="chats-export" onClick={(e) => { if (e.target === e.currentTarget) setExportOpen(false) }} role="dialog" aria-modal="true">
+    <div className={cssshell.calOverlay} data-edge="right" data-st-dialog="chats-export" onClick={(e) => { if (e.target === e.currentTarget) setExportOpen(false) }} role="dialog" aria-modal="true">
       <div className={csscards.exportDialog}>
         <div className={cssshell.calHeader}>
           <span className={cssshell.calTitle}>导出消息</span>

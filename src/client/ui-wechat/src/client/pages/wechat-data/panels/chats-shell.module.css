@@ -103,6 +103,41 @@
   background: rgba(0, 0, 0, 0.4);
 }
 .calOverlay > * { margin: auto; }
+/* 更多菜单里打开的内容面板：贴右、铺满高度，聊天区留在后面。 */
+.calOverlay[data-edge="right"] {
+  top: var(--st-titlebar-h, 0px);
+  justify-content: flex-end;
+  align-items: stretch;
+  padding: 0;
+}
+.calOverlay[data-edge="right"] > * {
+  margin: 0;
+  width: min(560px, 92vw);
+  max-width: 92vw;
+  height: 100%;
+  max-height: 100%;
+  border-radius: 0;
+  border-top: 0;
+  border-bottom: 0;
+  border-right: 0;
+  animation: chatDrawerIn 0.16s ease-out;
+}
+.drawerScrim {
+  position: fixed;
+  top: var(--st-titlebar-h, 0px);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 70;
+  border: 0;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+@keyframes chatDrawerIn {
+  from { transform: translateX(24px); }
+  to { transform: none; }
+}
 .calDialog {
   width: 420px;
   max-width: 92vw;
@@ -230,6 +265,24 @@
 .exportRangeRow { display: flex; align-items: center; gap: 8px; }
 .exportDirIcon { font-size: 16px; }
 .exportDirInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+/* ── 信息抽屉（单聊 / 群聊共用几何）────────────────────────────────
+ * 两个抽屉的根元素都带 `data-edge="drawer"`：贴右、铺满高度、盖在聊天区之上，
+ * 内容自己滚动。这两份几何**只写在这里一处** —— 各自的 module 里再写一份就会
+ * 出现「单聊 420px、群聊 300px」这种漂移，也把 `chats-cards.module.css`（已在
+ * M21 行数白名单里）白白推长。
+ * 用 `div[...]` 而不是裸属性选择器：特异性要高于两个 module 里的 `.groupInfo` /
+ * `.drawer`（它们都写了自己的 width），否则谁后加载谁赢。
+ */
+div[data-edge='drawer'] {
+  position: fixed;
+  top: var(--st-titlebar-h, 0px);
+  right: 0;
+  bottom: 0;
+  z-index: 80;
+  width: min(420px, 92vw);
+  box-shadow: var(--nm-shadow-popup);
+}
+
 .exportDirTitle { font-size: 12px; color: var(--nm-text-1); font-weight: 600; }
 /* 已编辑消息弹窗动作行（复用 .loadMore / .calDialog） */
 .calHeaderActions { display: inline-flex; align-items: center; gap: 4px; }

@@ -45,14 +45,9 @@ const canvas = readdirSync(HERE).filter((f) => /^graph-canvas(-[a-z]+)?\.ts$/.te
 const budget = readFileSync(join(HERE, 'graph-budget.ts'), 'utf8')
 
 describe('首字连边：图例 / 开关 / 依赖三处都在', () => {
-  it('图例里给这类线一个名字（蓝虚线 = 首字相同），且与「亲密度」措辞区分开', () => {
-    expect(panel).toContain('css.legendLineBlueDash')
-    expect(panel).toContain('蓝虚线 = 首字相同')
-    // 亲密度那行必须写明「实线」，否则两条蓝线在图例上无法区分
-    expect(panel).toContain('蓝实线 = 与我亲密度')
-    expect(css, '.legendLineBlueDash 没定义').toMatch(/\.legendLineBlueDash\s*\{/)
-    // 图例本身也画成虚线，否则「实线图例 + 虚线画布」对不上
-    expect(css).toMatch(/\.legendLineBlueDash\s*\{[^}]*repeating-linear-gradient/)
+  it('社交图谱不再把线型说明铺在画面上', () => {
+    expect(panel).not.toContain('蓝虚线 = 首字相同')
+    expect(panel).not.toContain('蓝实线 = 与我亲密度')
   })
 
   it('设置里有独立开关，且它是「结构参数」要进 useMemo 依赖', () => {
@@ -86,9 +81,6 @@ describe('首字连边：画布与建模接线', () => {
     expect(model).toMatch(/reply:\s*'social'/)
     expect(model).toMatch(/mention_user:\s*'social'/)
     expect(model).toContain("social: '社交互动'")
-    expect(panel).toContain('绿实线 = 好友 / 邀请 / 回复 / @提及等互动')
-    expect(panel).toContain('css.legendLineGreen')
-    expect(css).toMatch(/\.legendLineGreen\s*\{[^}]*var\(--nm-green\)/)
     expect(canvas).toMatch(/theme\.edgeSocial/)
     expect((canvas.match(/edgeSocial:/g) ?? []).length).toBeGreaterThanOrEqual(3)
   })

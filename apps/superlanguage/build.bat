@@ -167,6 +167,7 @@ echo [6/6] Compiling SuperLanguage.exe ...
 cl /nologo /std:c++17 /utf-8 /O2 /Oi /GL /MT /EHsc /GR- /W4 /permissive- ^
     /DUNICODE /D_UNICODE /Fobuild\ /Febuild\SuperLanguage.exe ^
     "src\main.cpp" "src\automation.cpp" "src\api_server.cpp" "src\queue_store.cpp" ^
+    "src\license_gate.cpp" ^
     "build\app.res" "build\sqlite3.obj" ^
     /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /LTCG /OPT:REF /OPT:ICF ^
     /DYNAMICBASE /NXCOMPAT /INCREMENTAL:NO

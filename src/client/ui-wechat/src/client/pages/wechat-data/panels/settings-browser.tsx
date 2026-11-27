@@ -43,7 +43,6 @@ export function SettingsBrowserPanel({ inDialog = false }: SettingsBrowserPanelP
               设置
             </>
           )}
-          desc="手机这一侧能看的只有数据边界；其余各节要在电脑上完成"
         />
       )}
       {/* 数据边界与出网是**只读**的出网清单 + 审计，走的是白名单里的接口，手机上照常能看。 */}

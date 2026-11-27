@@ -118,6 +118,8 @@ export async function apiSetChatAiReplyPersona(options: {
   kbId?: number
   /** 上下文时间窗（小时）；0 = 不限，上限 720。 */
   contextWindowHours?: number
+  safetyHandoff?: string
+  safetyBlocked?: string
   expectedRevision?: number
 }): Promise<ChatAiReplyMutationResult> {
   const result = unwrap(await remote().setChatAiReplyPersona(options))
@@ -189,7 +191,7 @@ export async function apiDeleteAiReplyReservations(
 }
 
 /**
- * 读取 AI 回复默认大肥鱼 Webhook。
+ * 读取 AI 回复默认 Webhook。
  *
  * 默认地址的完整 token 只留在本机后端；此处拿到的 endpoint 应为脱敏值。
  * 方法名先以可选能力读取，便于前后端滚动升级时给旧后端一条明确提示，而不是
@@ -268,6 +270,8 @@ export interface ChatAiReplyTraceView {
   error: string
   redacted: boolean
   stages: Array<{ name: string; at: number; detail?: string }>
+  /** 本轮实际发生的工具调用（后端留痕里的 `tools`）。 */
+  tools: Array<{ name: string; ok: boolean; code?: string; elapsedMs: number }>
   updatedAt: number
 }
 

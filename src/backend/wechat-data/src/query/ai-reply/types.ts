@@ -52,6 +52,10 @@ export interface ChatAiReplySetting {
    * 上限 720 小时（30 天），超出按上限夹紧。
    */
   contextWindowHours: number
+  /** 知识库没有依据时原样发送的转人工话术。 */
+  safetyHandoff: string
+  /** 额外禁说词，中文逗号分隔。空串表示只用固定红线。 */
+  safetyBlocked: string
   /** 防两条旧请求互相覆盖。 */
   revision: number
   updatedAt: number
@@ -65,7 +69,7 @@ export interface ChatAiReplyState extends ChatAiReplySetting {
   chatUsername: string
   chatName: string
   stage: ChatAiReplyStage
-  /** 是否已保存当前账号的默认大肥鱼 Webhook；旧调用方可忽略。 */
+  /** 是否已保存当前账号的默认 Webhook；旧调用方可忽略。 */
   defaultWebhookConfigured?: boolean
   /** 默认 Webhook 的脱敏展示值，不包含路径 token 或查询凭据。 */
   defaultWebhookEndpoint?: string
@@ -88,7 +92,7 @@ export interface ChatAiReplyState extends ChatAiReplySetting {
   error?: string
 }
 
-/** 默认大肥鱼 Webhook 的只读状态，供本机配置界面展示。 */
+/** 默认 Webhook 的只读状态，供本机配置界面展示。 */
 export interface ChatAiReplyDefaultWebhookState {
   configured: boolean
   /** 脱敏端点；未配置时为空串。 */
@@ -155,6 +159,8 @@ export interface ChatAiReplyScanResult {
  * 避免为了分段重复调用付费模型。
  */
 export interface ChatAiReplyGenerationResult {
+  toolCalls?: import('../reply-tools/types.ts').ReplyToolObservation[]
+  toolSources?: import('../reply-tools/types.ts').ReplyToolSource[]
   ok: boolean
   text: string
   error?: string
@@ -364,6 +370,7 @@ export interface ChatAiReplyScanDeps {  decryptedDir: () => string
   }) => Promise<{ snippets: string[]; note: string }>
   generate: (input: {
     system: string
+    publicText?: string
     prompt: string
     images?: ChatAiReplyContextImage[]
     accountKey: string
@@ -468,21 +475,8 @@ export interface ChatAiReplyScanDeps {  decryptedDir: () => string
    */
   writeTrace?: (patch: ChatAiReplyTracePatch) => void
   op: (action: string, ok: boolean, detail: string) => void
-  /**
-   * 发送前闸门。缺省时保持原行为：生成后直接投递。
-   * `preflight` 返回 `defer` 时本轮不调用模型；`postflight` 返回 `hold` 时正文留草稿。
-   */
-  assessOutbound?: (input: {
-    accountKey: string
-    chatUsername: string
-    group: boolean
-    kbEnabled: boolean
-    phase: 'preflight' | 'postflight'
-  }) => { action: 'proceed' | 'defer' | 'send' | 'hold'; reason: string }
-  /** 把已生成、尚未投递的记录收成草稿。只有 `assessOutbound` 决定 hold 时调用。 */
+  /** 群聊知识库生成结果必须留待人工确认；写入失败不得自动投递。 */
   holdReply?: (input: { id: number; reason: string }) => Promise<{ ok: boolean; error?: string }>
-  /** 投递成功后记一笔额度，供冷却和每小时上限使用。 */
-  noteReplySent?: (input: { accountKey: string; chatUsername: string }) => void
 }
 
 /** 一次自动回复的阶段名（详情抽屉按顺序展示）。 */
@@ -530,6 +524,22 @@ export interface ChatAiReplyTracePatch {
   /** 隐私闸改写了提示词（脱敏）时为 true。 */
   redacted?: boolean
   stage?: ChatAiReplyTraceStage
+  /** 本轮的工具调用（整体覆盖；调用方在生成完成时一次写全）。 */
+  tools?: ChatAiReplyTraceTool[]
+}
+
+/**
+ * 一次工具调用的事实（名称 / 成败 / 失败码 / 耗时）。
+ *
+ * 为什么单独一个结构而不是塞进 `stages.detail` 的一行文本：那一行是给人看的摘要，
+ * 界面上没法单独渲染成表；而「为什么天气查不到」恰恰要靠 `code` 才说得清。
+ */
+export interface ChatAiReplyTraceTool {
+  name: string
+  ok: boolean
+  /** 失败码（`weather_city_not_found` / `tool_network` / `tool_unavailable` …）。 */
+  code?: string
+  elapsedMs: number
 }
 
 /** 读取一条记录的过程留痕（详情抽屉用）。 */
@@ -551,5 +561,7 @@ export interface ChatAiReplyTrace {
   error: string
   redacted: boolean
   stages: ChatAiReplyTraceStage[]
+  /** 本轮实际发生的工具调用（按发生顺序；没有调用时为空数组）。 */
+  tools: ChatAiReplyTraceTool[]
   updatedAt: number
 }

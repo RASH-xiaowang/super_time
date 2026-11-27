@@ -163,7 +163,7 @@ export declare function syncContactDb(rawDbDir: string, decryptedDir: string, la
 /**
  * Sync any plain "dbName" under rawRoot/<sub> -> decryptedDir/<sub> with the
  * shared full/WAL + 0-frame-upgrade policy (realtime coverage for general /
- * sns / favorite / bizchat / chatbot).
+ * sns / favorite / bizchat / chatbot / hardlink).
  * @returns descriptions of what was synced (empty when nothing changed).
  */
 export declare function syncPlainDatabase(rawRoot: string, decryptedDir: string, sub: string, dbName: string, label: string, rawKeyHex: string, keyFormat: string, lastState: Map<string, ShardSig>): Promise<string[]>;

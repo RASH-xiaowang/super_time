@@ -42,6 +42,7 @@ export type ToolName =
   | 'get_message_context'
   | 'search_contacts'
   | 'get_contact_detail'
+  | 'get_social_summary'
   | 'search_moments'
   | 'search_favorites'
   | 'search_files'
@@ -125,8 +126,8 @@ export interface ToolContext {
   decryptedDir: string
   /** 当前知识库 id（不传 = 不检索知识库）。 */
   kbId?: number
-  /** 用户显式范围（硬过滤）。 */
-  scope?: { username?: string; from?: string; to?: string }
+  /** 用户显式范围（硬过滤）。`displayName` 只用于把群名/备注对上锁定的 username，不参与查询。 */
+  scope?: { username?: string; displayName?: string; from?: string; to?: string }
   /** 现在时刻（可注入，便于测试）。 */
   now?: Date
   /** 已知实体名（联系人显示名），用于实体识别。 */
@@ -241,6 +242,21 @@ export interface RetrievalTool {
   description: string
   /** 参数 schema（JSON Schema 对象，直接发给模型）。 */
   parameters: Record<string, unknown>
+  /**
+   * 用户自定义工具（2026-11-24）。
+   *
+   * 为什么需要这个标记：profile 的 `allowedTools` 是**代码里的白名单**，自定义工具名
+   * 不可能提前出现在里面。带这个标记的工具对每个 profile 都放行 —— 它已经是用户显式
+   * 创建并启用的，再套一层白名单只会让「新建后不能调用」。
+   */
+  custom?: boolean
+  /**
+   * 自定义工具的执行方式（`alias` = 封装内置工具，`answer` = 固定文本）。
+   *
+   * 为什么要带到执行层：`answer` 不读任何本机数据，所以在「禁用微信数据」的入口
+   * （无人值守自动回复）里仍然可以安全保留；`alias` 可能读到消息，必须跟着一起裁掉。
+   */
+  customKind?: 'alias' | 'answer'
   /**
    * 执行。
    *
